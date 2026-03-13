@@ -1,0 +1,43 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+
+# Conda
+condaenv.*.requirements.txt
+
+# Node
+node_modules/
+cli/dist/
+cli/python/
+packages/*/dist/
+packages/core/python/
+*.tsbuildinfo
+
+# Package output
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (too large for git)
+examples/climate/data/
+examples/
+
+# Scout local
+.scout/env/
+cli/.scout/

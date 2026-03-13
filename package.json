@@ -1,0 +1,16 @@
+{
+  "name": "scout-workspace",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build:core": "npm run build --workspace=packages/core",
+    "build:cli": "npm run build --workspace=packages/cli",
+    "build:gui": "npm run build --workspace=packages/gui",
+    "build:gui-app": "npm run build --workspace=packages/gui-app",
+    "build:scout": "npm run build --workspace=packages/scout",
+    "build": "npm run build:core && npm run build:cli && npm run build:gui && npm run build:gui-app && npm run build:scout",
+    "dev:cli": "npm run dev --workspace=packages/cli",
+    "dev:gui": "npm run dev --workspace=packages/gui",
+    "dev:gui-app": "npm run dev --workspace=packages/gui-app"
+  }
+}

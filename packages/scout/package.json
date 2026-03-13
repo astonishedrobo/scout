@@ -1,0 +1,31 @@
+{
+  "name": "scout",
+  "version": "0.1.0",
+  "description": "Scout — AI-powered data research agent (CLI + GUI)",
+  "type": "module",
+  "bin": {
+    "scout": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {
+    "scout-core": "0.1.0",
+    "scout-cli": "0.1.0",
+    "scout-gui": "0.1.0",
+    "scout-gui-app": "0.1.0",
+    "commander": "^12.1.0",
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

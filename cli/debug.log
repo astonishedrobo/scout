@@ -1,0 +1,71 @@
+[server] INFO:     Started server process [493727]
+INFO:     Waiting for application startup.
+[server] 2026-03-08 03:10:55,599 [scout.pdf_reader] INFO: PDF conversion complete (pdfplumber): 0 converted, 1 already cached.
+[server] 2026-03-08 03:10:55,641 [scout.retriever] INFO: Indexed sansad_combined.json: 297 records → 3805 chunks
+[server] 2026-03-08 03:10:55,771 [scout.retriever] INFO: BM25 index built with 4225 chunks
+[server] 2026-03-08 03:10:56,477 [scout.agent.session] INFO: Started persistent session (pid=493785, env=agents, cwd=/media/soumyajit/dd4625e0-d99e-4881-8b0d-21480b158e391/cdsa/climate-exploration/examples/climate/data)
+[server] 2026-03-08 03:10:56,477 [scout.skills] INFO: Loaded 1 skill(s)
+[server] 2026-03-08 03:10:56,552 [scout.server.app] INFO: Scout agent server started (config=/media/soumyajit/dd4625e0-d99e-4881-8b0d-21480b158e391/cdsa/climate-exploration/examples/climate/config.yaml)
+[server] INFO:     Application startup complete.
+[server] INFO:     Uvicorn running on http://127.0.0.1:43421 (Press CTRL+C to quit)
+[server] 2026-03-08 03:10:58,948 [scout.server.app] INFO: Chat request received: hi
+[server] [92m03:10:59 - LiteLLM:INFO[0m: utils.py:3898 - 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+2026-03-08 03:10:59,108 [LiteLLM] INFO: 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+[server] [92m03:10:59 - LiteLLM:INFO[0m: utils.py:1630 - Wrapper: Completed Call, calling success_handler
+2026-03-08 03:10:59,387 [LiteLLM] INFO: Wrapper: Completed Call, calling success_handler
+[sse] event: response 
+[useChat] event: type=response name=-
+[useChat] stream done: 0 steps, content=61 chars
+[server] 2026-03-08 03:10:59,390 [scout.server.app] INFO: SSE stream finished (1 events emitted)
+[server] 2026-03-08 03:11:06,757 [scout.server.app] INFO: Config updated: agent.model = groq/openai/gpt-oss-20b (scope=project)
+[server] 2026-03-08 03:11:23,037 [scout.server.app] INFO: Config updated: agent.model = groq/llama-3.1-8b-instant (scope=project)
+[server] 2026-03-08 03:11:24,657 [scout.server.app] INFO: Chat request received: hi
+[server] [92m03:11:24 - LiteLLM:INFO[0m: utils.py:3898 - 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+2026-03-08 03:11:24,663 [LiteLLM] INFO: 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+[server] [92m03:11:24 - LiteLLM:INFO[0m: utils.py:1630 - Wrapper: Completed Call, calling success_handler
+2026-03-08 03:11:24,940 [LiteLLM] INFO: Wrapper: Completed Call, calling success_handler
+[sse] event: response 
+[useChat] event: type=response name=-
+[useChat] stream done: 0 steps, content=59 chars
+[server] 2026-03-08 03:11:24,945 [scout.server.app] INFO: SSE stream finished (1 events emitted)
+[server] 2026-03-08 03:11:33,253 [scout.server.app] INFO: Chat request received: 1+2=?
+[server] [92m03:11:33 - LiteLLM:INFO[0m: utils.py:3898 - 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+2026-03-08 03:11:33,259 [LiteLLM] INFO: 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+[server] [92m03:11:33 - LiteLLM:INFO[0m: utils.py:1630 - Wrapper: Completed Call, calling success_handler
+2026-03-08 03:11:33,588 [LiteLLM] INFO: Wrapper: Completed Call, calling success_handler
+[sse] event: tool_call run_code
+[useChat] event: type=tool_call name=run_code
+[sse] event: tool_result run_code
+[useChat] event: type=tool_result name=run_code
+[server] [92m03:11:33 - LiteLLM:INFO[0m: utils.py:3898 - 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+2026-03-08 03:11:33,605 [LiteLLM] INFO: 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+[server] [92m03:11:33 - LiteLLM:INFO[0m: utils.py:1630 - Wrapper: Completed Call, calling success_handler
+2026-03-08 03:11:33,913 [LiteLLM] INFO: Wrapper: Completed Call, calling success_handler
+[sse] event: tool_call run_code
+[useChat] event: type=tool_call name=run_code
+[sse] event: tool_result run_code
+[useChat] event: type=tool_result name=run_code
+[server] [92m03:11:33 - LiteLLM:INFO[0m: utils.py:3898 - 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+2026-03-08 03:11:33,929 [LiteLLM] INFO: 
+LiteLLM completion() model= openai/gpt-oss-20b; provider = groq
+[server] [92m03:11:34 - LiteLLM:INFO[0m: utils.py:1630 - Wrapper: Completed Call, calling success_handler
+2026-03-08 03:11:34,196 [LiteLLM] INFO: Wrapper: Completed Call, calling success_handler
+[sse] event: response 
+[useChat] event: type=response name=-
+[useChat] stream done: 2 steps, content=9 chars
+[server] 2026-03-08 03:11:34,201 [scout.server.app] INFO: SSE stream finished (5 events emitted)
+[server] INFO:     Shutting down
+[server] INFO:     Waiting for application shutdown.
+[server] 2026-03-08 10:10:46,965 [scout.agent.session] INFO: Closed persistent session (pid=493785)
+[server] INFO:     Application shutdown complete.
+INFO:     Finished server process [493727]
+[?25h

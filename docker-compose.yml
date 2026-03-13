@@ -1,0 +1,34 @@
+services:
+  scout-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scout-server
+    restart: unless-stopped
+    ports:
+      - "4200:4200"
+    volumes:
+      # Persist user sessions and SQLite database
+      - scout-data:/root/.config/scout
+      # Mount external workspace where agent can view and create files
+      - ./workspace:/app/workspace
+      # Mount domain expert skills (read-only)
+      - ./skills:/app/workspace/.scout/skills:ro
+    environment:
+      # Provide API keys for the agent
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      
+      # Provide available models for each provider (comma-separated)
+      # - OPENAI_MODELS=openai/gpt-4o,openai/gpt-4o-mini
+      # - ANTHROPIC_MODELS=anthropic/claude-3-5-sonnet-20241022
+      # - GROQ_MODELS=groq/llama-3.1-8b-instant,groq/llama-3.3-70b-versatile
+      
+      # Set default LLM model
+      - AGENT_MODEL=${AGENT_MODEL:-}
+      # Required for JWT authentication security!
+      - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY:-my-super-secret-jwt-key}
+
+volumes:
+  scout-data:
