@@ -113,8 +113,8 @@ def _file_tree(data_dir: Path, indent: int = 0) -> str:
     prefix = "  " * indent
     try:
         entries = sorted(data_dir.iterdir())
-    except PermissionError:
-        return f"{prefix}(permission denied)"
+    except Exception:
+        return f"{prefix}(access denied)"
 
     for entry in entries:
         if entry.name.startswith(".") and entry.name != ".scout":
@@ -124,19 +124,29 @@ def _file_tree(data_dir: Path, indent: int = 0) -> str:
         if entry.is_dir():
             lines.append(f"{prefix}📁 {entry.name}/")
             # One level deeper
-            for child in sorted(entry.iterdir()):
-                if child.name.startswith("."):
-                    continue
-                size = ""
-                if child.is_file():
-                    mb = child.stat().st_size / (1024 * 1024)
-                    size = f"  ({mb:.1f} MB)" if mb >= 0.1 else ""
-                icon = "📁" if child.is_dir() else "  "
-                lines.append(f"{prefix}  {icon} {child.name}{size}")
+            try:
+                children = sorted(entry.iterdir())
+                for child in children:
+                    if child.name.startswith("."):
+                        continue
+                    size = ""
+                    if child.is_file():
+                        try:
+                            mb = child.stat().st_size / (1024 * 1024)
+                            size = f"  ({mb:.1f} MB)" if mb >= 0.1 else ""
+                        except Exception:
+                            pass
+                    icon = "📁" if child.is_dir() else "  "
+                    lines.append(f"{prefix}  {icon} {child.name}{size}")
+            except Exception:
+                lines.append(f"{prefix}  (access denied)")
         else:
             size = ""
-            mb = entry.stat().st_size / (1024 * 1024)
-            size = f"  ({mb:.1f} MB)" if mb >= 0.1 else ""
+            try:
+                mb = entry.stat().st_size / (1024 * 1024)
+                size = f"  ({mb:.1f} MB)" if mb >= 0.1 else ""
+            except Exception:
+                pass
             lines.append(f"{prefix}   {entry.name}{size}")
 
     return "\n".join(lines) or "(empty)"
@@ -188,6 +198,7 @@ def _json_preview(json_path: Path) -> str | None:
 def build_manifest(
     data_dir: str | Path,
     config: "AppConfig | None" = None,
+    max_files_per_type: int = 40,
 ) -> str:
     """Scan *data_dir* and produce a human-readable manifest string.
 
@@ -205,10 +216,10 @@ def build_manifest(
     json_descriptions: dict[str, str] = {}
     if config:
         for fname, src in config.csv_sources.items():
-            if src.description:
+            if hasattr(src, "description") and src.description:
                 csv_descriptions[fname] = src.description
         for fname, src in config.json_sources.items():
-            if src.description:
+            if hasattr(src, "description") and src.description:
                 json_descriptions[fname] = src.description
 
     # 1) File tree
@@ -217,39 +228,83 @@ def build_manifest(
     parts.append(_file_tree(root))
     parts.append("```\n")
 
+    # Helper to scan while ignoring heavy folders and limiting depth
+    # This is a MANUALLY IMPLEMENTED non-recursive walker to prevent OOM/CPU spikes
+    import fnmatch
+    def _safe_scan(pattern: str, max_depth: int = 3, max_total_scanned: int = 1000) -> list[Path]:
+        found = []
+        # queue: [(directory, current_depth)]
+        queue = [(root, 0)]
+        scanned_count = 0
+        
+        while queue and len(found) < max_files_per_type and scanned_count < max_total_scanned:
+            curr_dir, depth = queue.pop(0)
+            if depth > max_depth:
+                continue
+                
+            try:
+                # We use iterdir to avoid loading everything at once if possible
+                for p in curr_dir.iterdir():
+                    scanned_count += 1
+                    if scanned_count >= max_total_scanned:
+                        break
+                        
+                    # Basic ignoring of heavy folders
+                    if p.name.startswith(".") or p.name in {"node_modules", "venv", "__pycache__", "dist", "build"}:
+                        continue
+                    
+                    if p.is_dir():
+                        if depth < max_depth:
+                            queue.append((p, depth + 1))
+                    elif fnmatch.fnmatch(p.name, pattern):
+                        found.append(p)
+                        if len(found) >= max_files_per_type:
+                            break
+            except Exception:
+                # PermissionError or other OS issues
+                continue
+        return sorted(found)
+
     # 2) CSV column inventories
-    csv_files = sorted(root.rglob("*.csv"))
+    csv_files = _safe_scan("*.csv")
     if csv_files:
         parts.append("**CSV column inventories:**\n")
         for csv_path in csv_files:
-            rel = csv_path.relative_to(root)
-            cols = _csv_columns(csv_path)
-            if cols:
-                desc = csv_descriptions.get(csv_path.name, "")
-                desc_line = f"  _{desc}_\n" if desc else ""
-                parts.append(f"- `{rel}`\n{desc_line}{cols}\n")
+            try:
+                rel = csv_path.relative_to(root)
+                cols = _csv_columns(csv_path)
+                if cols:
+                    desc = csv_descriptions.get(csv_path.name, "")
+                    desc_line = f"  _{desc}_\n" if desc else ""
+                    parts.append(f"- `{rel}`\n{desc_line}{cols}\n")
+            except Exception:
+                continue
 
     # 3) JSON structure previews
-    json_files = sorted(root.rglob("*.json"))
+    json_files = _safe_scan("*.json")
     if json_files:
         parts.append("**JSON structure:**\n")
         for json_path in json_files:
-            rel = json_path.relative_to(root)
-            preview = _json_preview(json_path)
-            if preview:
-                desc = json_descriptions.get(json_path.name, "")
-                desc_line = f"  _{desc}_\n" if desc else ""
-                parts.append(f"- `{rel}`\n{desc_line}{preview}\n")
+            try:
+                rel = json_path.relative_to(root)
+                preview = _json_preview(json_path)
+                if preview:
+                    desc = json_descriptions.get(json_path.name, "")
+                    desc_line = f"  _{desc}_\n" if desc else ""
+                    parts.append(f"- `{rel}`\n{desc_line}{preview}\n")
+            except Exception:
+                continue
 
     # 4) Text / Markdown files (just list them)
-    text_files = sorted(
-        list(root.rglob("*.txt")) + list(root.rglob("*.md"))
-    )
+    text_files = sorted(_safe_scan("*.txt") + _safe_scan("*.md"))
     if text_files:
         parts.append("**Text / Markdown documents** (searchable via `search_documents`):\n")
         for tf in text_files:
-            rel = tf.relative_to(root)
-            parts.append(f"- `{rel}`")
+            try:
+                rel = tf.relative_to(root)
+                parts.append(f"- `{rel}`")
+            except Exception:
+                continue
         parts.append("")
 
     return "\n".join(parts)
@@ -264,23 +319,14 @@ def build_system_prompt(
     skills_text: str = "",
     disable_write_tools: bool = False,
 ) -> str:
-    """Return the system prompt with a pre-built data manifest injected.
-
-    Parameters
-    ----------
-    data_dir : str
-        Root directory containing the data files.
-    config : AppConfig | None
-        Application config (for source descriptions in the manifest).
-    skills_text : str
-        Domain-specific skills text to inject (from .scout/skills/ files).
-    """
+    """Return the system prompt with a pre-built data manifest injected."""
     manifest = build_manifest(data_dir, config=config)
     skills_section = ""
     if skills_text.strip():
         skills_section = f"\n## Domain Skills\n\n{skills_text}\n"
 
-    prompt = SYSTEM_PROMPT.format(manifest=manifest, skills_section=skills_section)
+    # Use .replace() instead of .format() to avoid KeyError/ValueError from {} in snippets
+    prompt = SYSTEM_PROMPT.replace("{manifest}", manifest).replace("{skills_section}", skills_section)
 
     if config and getattr(config.agent, "disable_write_tools", False):
         # 1. Update Core Description (remove "write")

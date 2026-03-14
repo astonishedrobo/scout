@@ -58,7 +58,7 @@ class PDFConverter:
 
     # ── Public API ───────────────────────────────────────────────────────
 
-    def convert_all(self) -> list[Path]:
+    def convert_all(self, max_conversions: int = 20) -> list[Path]:
         """Convert all new / stale PDFs and return paths of written files.
 
         Returns an empty list if ``pdf_dir`` does not exist or contains
@@ -80,6 +80,13 @@ class PDFConverter:
 
         written: list[Path] = []
         for pdf_path in pdf_files:
+            if len(written) >= max_conversions:
+                logger.warning(
+                    "PDF conversion limit reached (%d). Skipping remaining PDFs.",
+                    max_conversions
+                )
+                break
+
             out_path = self._text_dir / f"{pdf_path.stem}{self._ext}"
 
             if self._is_cache_fresh(pdf_path, out_path):
@@ -108,7 +115,7 @@ class PDFConverter:
             "PDF conversion complete (%s): %d converted, %d already cached.",
             self._parser,
             len(written),
-            len(pdf_files) - len(written),
+            len(pdf_files) - len(written) if len(pdf_files) > len(written) else 0,
         )
         return written
 

@@ -79,11 +79,32 @@ class BM25Retriever:
 
     # ── Indexing ────────────────────────────────────────────────────────
 
+    MAX_INDEX_BYTES = 100_000_000  # 100 MB total text limit
+    MAX_CHUNKS = 50_000           # Cap total chunks to prevent OOM
+
     def _index_files(self) -> None:
         """Read, chunk, and index local text/JSON/CSV files."""
         raw_texts: list[_Chunk] = []
+        total_bytes = 0
+        
         for root in self._candidate_roots():
-            raw_texts.extend(self._read_root(root))
+            for fpath in self._iter_supported_files(root):
+                if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
+                    logger.warning(
+                        "Indexing limit reached (%d MB / %d chunks). Skipping remaining files.",
+                        total_bytes // (1024 * 1024), len(raw_texts)
+                    )
+                    break
+                
+                new_chunks = self._read_file_safe(fpath, root)
+                for c in new_chunks:
+                    total_bytes += len(c.text)
+                    raw_texts.append(c)
+                    if len(raw_texts) >= self.MAX_CHUNKS:
+                        break
+            
+            if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
+                break
 
         if not raw_texts:
             logger.info("No text/JSON/CSV files found to index.")
@@ -103,7 +124,21 @@ class BM25Retriever:
 
         self._chunks = filtered_chunks
         self._bm25 = BM25Okapi(corpus)
-        logger.info("BM25 index built with %d chunks", len(self._chunks))
+        logger.info("BM25 index built with %d chunks (~%d MB)", len(self._chunks), total_bytes // (1024 * 1024))
+
+    def _read_file_safe(self, fpath: Path, root: Path) -> list[_Chunk]:
+        """Wrapper around specific file readers with suffix dispatch."""
+        suffix = fpath.suffix.lower()
+        try:
+            if suffix in {".txt", ".md"}:
+                return self._read_text_file(fpath, root)
+            elif suffix == ".json":
+                return self._read_json_file(fpath, root)
+            elif suffix == ".csv":
+                return self._read_csv_file(fpath, root)
+        except Exception as exc:
+            logger.debug("Failed to read %s for indexing: %s", fpath, exc)
+        return []
 
     def _candidate_roots(self) -> list[Path]:
         """Return deduplicated roots to scan for data files."""
