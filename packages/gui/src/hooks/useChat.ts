@@ -31,6 +31,7 @@ interface UseChatReturn {
   pendingApproval: ApprovalRequest | null;
   clearApproval: () => void;
   sendMessage: (text: string, attachments?: string[]) => Promise<void>;
+  stop: () => Promise<void>;
   retryAt: (assistantIndex: number) => Promise<void>;
   reset: () => Promise<void>;
 }
@@ -239,6 +240,20 @@ export function useChat({ baseUrl, sessionId, token, onUserMessage, onAssistantM
     [messages, baseUrl, sessionId, token, sendMessage],
   );
 
+  const stop = useCallback(async () => {
+    if (isLoading) {
+      abortRef.current?.abort();
+      await fetch(`${baseUrl}/chat/stop?session_id=${sessionId}`, { 
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      }).catch(() => {});
+      setIsLoading(false);
+      setStreamingSteps([]);
+      setStreamingText("");
+      setCurrentTool(undefined);
+    }
+  }, [baseUrl, sessionId, token, isLoading]);
+
   const reset = useCallback(async () => {
     abortRef.current?.abort();
     await fetch(`${baseUrl}/reset?session_id=${sessionId}`, { 
@@ -263,6 +278,7 @@ export function useChat({ baseUrl, sessionId, token, onUserMessage, onAssistantM
     pendingApproval,
     clearApproval,
     sendMessage,
+    stop,
     retryAt,
     reset,
   };

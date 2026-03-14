@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Send, Plus, AtSign, FileText, Command, ChevronDown } from "lucide-react";
+import { Send, Plus, AtSign, FileText, Command, ChevronDown, Square } from "lucide-react";
 
 /* ── Slash commands ─────────────────────────────────────────────── */
 
@@ -23,13 +23,15 @@ interface InputBarProps {
   onSubmit: (text: string) => void;
   onSlashCommand?: (command: string) => void;
   disabled: boolean;
+  isLoading?: boolean;
+  onStop?: () => void;
   models: string[];
   currentModel: string;
   onSelectModel: (model: string) => void;
   centered?: boolean;
 }
 
-export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, models, currentModel, onSelectModel, centered = false }: InputBarProps) {
+export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoading, onStop, models, currentModel, onSelectModel, centered = false }: InputBarProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -451,19 +453,29 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, models, 
               )}
             </div>
 
-            {/* Send button */}
-            <button
-              onClick={handleSubmit}
-              disabled={disabled || !hasText}
-              className={`p-1.5 rounded-lg transition-colors flex-shrink-0
-                ${hasText && !disabled
-                  ? "bg-scout-text-primary text-scout-bg hover:opacity-90"
-                  : "text-scout-text-secondary/30 cursor-not-allowed"
-                }`}
-              aria-label="Send message"
-            >
-              <Send size={16} />
-            </button>
+            {/* Send / Stop button */}
+            {isLoading ? (
+              <button
+                onClick={onStop}
+                className="p-1.5 rounded-lg transition-colors flex-shrink-0 bg-scout-text-primary text-scout-bg hover:opacity-90"
+                aria-label="Stop execution"
+              >
+                <Square size={16} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={disabled || !hasText}
+                className={`p-1.5 rounded-lg transition-colors flex-shrink-0
+                  ${hasText && !disabled
+                    ? "bg-scout-text-primary text-scout-bg hover:opacity-90"
+                    : "text-scout-text-secondary/30 cursor-not-allowed"
+                  }`}
+                aria-label="Send message"
+              >
+                <Send size={16} />
+              </button>
+            )}
           </div>
         </div>
       </div>

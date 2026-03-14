@@ -197,6 +197,7 @@ def create_app(
             self.edit_done_event: asyncio.Event | None = None
             self.declined_this_turn = False
             self.auto_approve = False
+            self.abort_event: asyncio.Event | None = None
 
     # ── State (created on startup) ───────────────────────────────────
     _state: dict[str, Any] = {
@@ -369,6 +370,7 @@ def create_app(
         s.approval_queue = asyncio.Queue()
         s.declined_this_turn = False
         s.auto_approve = False
+        s.abort_event = asyncio.Event()
 
         async def _generate():
             event_count = 0
@@ -394,8 +396,9 @@ def create_app(
                 while not done:
                     agent_get = asyncio.ensure_future(agent_events.get())
                     approval_get = asyncio.ensure_future(approval_q.get())
+                    abort_get = asyncio.ensure_future(s.abort_event.wait())
 
-                    pending = {agent_get, approval_get}
+                    pending = {agent_get, approval_get, abort_get}
                     finished, still_pending = await asyncio.wait(
                         pending, return_when=asyncio.FIRST_COMPLETED,
                     )
@@ -443,6 +446,14 @@ def create_app(
                             elif kind == "done":
                                 done = True
 
+                        elif task is abort_get:
+                            logger.info("Chat interrupted by user (session %s)", req.session_id)
+                            yield ServerSentEvent(
+                                data=json.dumps({"type": "error", "message": "Interrupted by user"}),
+                                event="error",
+                            )
+                            done = True
+
                         elif task is approval_get:
                             approval_event = result
                             event_count += 1
@@ -459,9 +470,19 @@ def create_app(
                 if stream_task and not stream_task.done():
                     stream_task.cancel()
                 s.approval_queue = None
+                s.abort_event = None
                 logger.info("SSE stream finished (%d events emitted)", event_count)
 
         return EventSourceResponse(_generate())
+
+    @app.post("/chat/stop")
+    async def stop_chat(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
+        """Interrupt an active agent execution."""
+        s = _get_session_state(session_id)
+        if s.abort_event:
+            s.abort_event.set()
+            return {"status": "ok", "message": "Interruption signaled"}
+        return {"status": "ok", "message": "No active task to stop"}
 
     @app.get("/test-sse")
     async def test_sse() -> EventSourceResponse:

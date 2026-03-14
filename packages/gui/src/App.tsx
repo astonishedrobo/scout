@@ -78,6 +78,7 @@ export function App() {
     pendingApproval,
     clearApproval,
     sendMessage,
+    stop,
     retryAt,
     reset,
   } = useChat({
@@ -301,6 +302,8 @@ export function App() {
                 onSubmit={handleSubmit}
                 onSlashCommand={handleSlashCommand}
                 disabled={false}
+                isLoading={isLoading}
+                onStop={stop}
                 models={models}
                 currentModel={currentModel}
                 onSelectModel={setModel}
@@ -325,6 +328,8 @@ export function App() {
               onSubmit={handleSubmit}
               onSlashCommand={handleSlashCommand}
               disabled={isLoading || !isReady}
+              isLoading={isLoading}
+              onStop={stop}
               models={models}
               currentModel={currentModel}
               onSelectModel={setModel}
