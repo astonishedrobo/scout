@@ -269,11 +269,31 @@ def build_graph(
                 output = f"[Tool error: {exc}]"
 
             # Check for file changes after execution
-            if trackers and approval_callback:
+            if trackers and (approval_callback or agent_config.disable_write_tools):
                 all_diffs: list[FileDiff] = []
                 for t in trackers:
                     all_diffs.extend(t.diff())
+                
                 if all_diffs:
+                    # STRICT ENFORCEMENT: If write tools are disabled, auto-revert 
+                    # immediately and return an error to the agent. This prevents 
+                    # the approval callback (and popup) from triggering.
+                    if agent_config.disable_write_tools:
+                        for t in trackers:
+                            t.revert()
+                        results.append(ToolMessage(
+                            content=(
+                                "[WRITE FAILED / ACCESS DENIED] Write operations are disabled in this "
+                                "environment. Your changes have been automatically reverted. "
+                                "Do NOT attempt to create or modify files. Use your tools strictly "
+                                "for data reading and analysis."
+                            ),
+                            name=tool_name,
+                            tool_call_id=tool_id,
+                        ))
+                        continue
+
+                    # Regular approval flow
                     action, feedback = await approval_callback(
                         tool_name, all_diffs, tool_args,
                     )

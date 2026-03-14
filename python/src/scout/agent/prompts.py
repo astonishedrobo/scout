@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
 You are **Scout**, a versatile coding and data assistant running inside \
-the user's terminal.  You can read, write, and execute code on the \
+the user's terminal.  You can read and execute code on the \
 user's machine.
 
 ## Core Principles
@@ -46,8 +46,8 @@ user's machine.
 ## Tools at Your Disposal
 
 - **`run_code`** — Execute Python in a persistent session. Variables \
-  and imports persist across calls. Use for computation, file \
-  manipulation, data analysis, or any coding task.
+  and imports persist across calls. Use for computation, \
+  data analysis, or any coding task.
 - **`write_file`** — Create or overwrite a file at a given path. \
   Preferred over run_code for writing text files since the user gets \
   a clear preview. All writes require user approval.
@@ -281,7 +281,19 @@ def build_system_prompt(
     prompt = SYSTEM_PROMPT.format(manifest=manifest, skills_section=skills_section)
 
     if config and getattr(config.agent, "disable_write_tools", False):
-        # Remove write_file from tools list
+        # 1. Update Core Description (remove "write")
+        prompt = prompt.replace(
+            "You can read, write, and execute code",
+            "You can read and execute code"
+        )
+        
+        # 2. Update run_code description (remove "file manipulation")
+        prompt = prompt.replace(
+            "Use for computation, file manipulation, data analysis",
+            "Use for computation, data analysis"
+        )
+
+        # 3. Remove write_file from tools list
         import re
         prompt = re.sub(
             r"- \*\*`write_file`\*\*.*?All writes require user approval\.\n",
@@ -289,12 +301,24 @@ def build_system_prompt(
             prompt,
             flags=re.DOTALL
         )
-        # Remove the File Writing section entirely
+        
+        # 4. Remove the File Writing section entirely
         prompt = re.sub(
             r"## File Writing.*?## Data Analysis Guidelines",
             "## Data Analysis Guidelines",
             prompt,
             flags=re.DOTALL
         )
+
+        # 5. Inject a strict READ-ONLY warning at the top
+        alert = (
+            "\n> [!IMPORTANT]\n"
+            "> **READ-ONLY MODE ENABLED**\n"
+            "> You cannot create, modify, or delete any files. All tools (including run_code) "
+            "are limited to reading and analysis only. Do NOT attempt to write files.\n\n"
+        )
+        # Insert after the first paragraph
+        if "## Core Principles" in prompt:
+            prompt = prompt.replace("## Core Principles", alert + "## Core Principles")
 
     return prompt
