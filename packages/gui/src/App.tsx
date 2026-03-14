@@ -31,7 +31,7 @@ export function App() {
     appendMessage,
     setCurrentSessionId,
     refreshSessions,
-  } = useSessions(baseUrl, isReady, token);
+  } = useSessions(baseUrl, isReady, token, isMultiUser);
 
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = currentSessionId;
@@ -39,10 +39,15 @@ export function App() {
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
-    const id = await createSession();
-    sessionRef.current = id;
-    window.location.hash = `/c/${id}`;
-    return id;
+    try {
+      const id = await createSession();
+      sessionRef.current = id;
+      window.location.hash = `/c/${id}`;
+      return id;
+    } catch (err) {
+      console.error("Failed to ensure session:", err);
+      throw err;
+    }
   }, [createSession]);
 
   const onUserMessage = useCallback(

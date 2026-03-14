@@ -221,7 +221,7 @@ export function useChat({ baseUrl, sessionId, token, onUserMessage, onAssistantM
       // Restore messages up to the retry point
       const remaining = messages.filter((_, i) => i !== assistantIndex);
       if (remaining.length > 0) {
-        await fetch(`${baseUrl}/restore`, {
+        await fetch(`${baseUrl}/restore?session_id=${sessionId}`, {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",

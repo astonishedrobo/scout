@@ -57,10 +57,6 @@ def is_path_denied(filepath: str | Path) -> bool:
     p = Path(filepath).resolve()
     abs_str = str(p)
 
-    # Allow everything inside the workspace even if /app is blocked
-    if abs_str.startswith("/app/workspace"):
-        return False
-
     name = p.name.lower()
 
     # Exact basename match
@@ -73,12 +69,16 @@ def is_path_denied(filepath: str | Path) -> bool:
             return True
 
     # Any ancestor directory is in the denied set
+    # This MUST come before the /app/workspace early return
     for part in p.parts:
         if part.lower() in DENIED_DIRECTORIES:
             return True
 
+    # Allow everything inside the workspace ONLY if not in a denied dir (checked above)
+    if abs_str.startswith("/app/workspace"):
+        return False
+
     # Absolute prefix match (home dir secrets)
-    abs_str = str(p)
     for prefix in DENIED_ABSOLUTE_PREFIXES:
         if abs_str.startswith(prefix):
             return True
@@ -102,7 +102,7 @@ def is_name_denied(filename: str) -> bool:
 # ── Code content scanning ────────────────────────────────────────────────
 
 _SENSITIVE_PATH_RE = re.compile(
-    r"""(?:open|read_text|read_bytes|Path)\s*\(\s*['"]([^'"]+)['"]""",
+    r"""(?:\bread_csv|\bread_json|\bread_sql|\bread_excel|\bload|\bopen|\bread_text|\bread_bytes|\bPath|\blistdir|\bwalk|\bglob)\s*\(\s*['"]([^'"]+)['"]""",
     re.IGNORECASE,
 )
 

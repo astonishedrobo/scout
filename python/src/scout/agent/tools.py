@@ -120,8 +120,9 @@ def make_tools(
         denied = scan_code_for_denied_paths(code)
         if denied:
             return (
-                f"[Access denied: code attempts to access protected file(s): "
-                f"{', '.join(denied)}. Rewrite without accessing sensitive files.]"
+                f"[Access denied: your code attempts to access protected/administrative files: "
+                f"{', '.join(denied)}. This path is blocked for security (contains .scout, .git, or system secrets). "
+                f"Please rewrite your analysis without accessing these internal files.]"
             )
         output, success = session.run(code)
         if not output:
@@ -213,7 +214,7 @@ def make_tools(
         for e in entries:
             if is_name_denied(e.name):
                 continue
-            if e.is_dir() and e.name.lower() in {".ssh", ".gnupg", ".aws", ".docker"}:
+            if e.is_dir() and e.name.lower() in {".ssh", ".gnupg", ".aws", ".docker", ".scout", ".git"}:
                 continue
             prefix = "📁 " if e.is_dir() else "   "
             lines.append(f"{prefix}{e.name}")

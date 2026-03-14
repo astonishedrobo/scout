@@ -117,7 +117,9 @@ def _file_tree(data_dir: Path, indent: int = 0) -> str:
         return f"{prefix}(permission denied)"
 
     for entry in entries:
-        if entry.name.startswith("."):
+        if entry.name.startswith(".") and entry.name != ".scout":
+            continue
+        if entry.name == ".scout":
             continue
         if entry.is_dir():
             lines.append(f"{prefix}📁 {entry.name}/")
