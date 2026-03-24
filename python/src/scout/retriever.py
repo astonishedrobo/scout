@@ -81,12 +81,15 @@ class BM25Retriever:
 
     MAX_INDEX_BYTES = 100_000_000  # 100 MB total text limit
     MAX_CHUNKS = 50_000           # Cap total chunks to prevent OOM
+    MAX_CHUNKS_PER_FILE = 5000    # Per-file cap for text/pdf files
+    MAX_CHUNKS_PER_CSV = 5000     # Per-file cap for CSV (1 chunk per row)
+    MAX_CHARS_PER_CSV_ROW = 800   # Truncate long CSV rows to avoid index bloat
 
     def _index_files(self) -> None:
-        """Read, chunk, and index local text/JSON/CSV files."""
+        """Read, chunk, and index local text/JSON/CSV/PDF files."""
         raw_texts: list[_Chunk] = []
         total_bytes = 0
-        
+
         for root in self._candidate_roots():
             for fpath in self._iter_supported_files(root):
                 if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
@@ -95,14 +98,22 @@ class BM25Retriever:
                         total_bytes // (1024 * 1024), len(raw_texts)
                     )
                     break
-                
+
                 new_chunks = self._read_file_safe(fpath, root)
+                # Per-file cap: prevents a single massive file from exhausting the index
+                suffix = fpath.suffix.lower()
+                per_file_cap = self.MAX_CHUNKS_PER_CSV if suffix == ".csv" else self.MAX_CHUNKS_PER_FILE
+                new_chunks = new_chunks[:per_file_cap]
+                added = 0
                 for c in new_chunks:
                     total_bytes += len(c.text)
                     raw_texts.append(c)
+                    added += 1
                     if len(raw_texts) >= self.MAX_CHUNKS:
                         break
-            
+                if added:
+                    logger.debug("Indexed %d chunks from %s", added, fpath.name)
+
             if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
                 break
 
@@ -136,6 +147,8 @@ class BM25Retriever:
                 return self._read_json_file(fpath, root)
             elif suffix == ".csv":
                 return self._read_csv_file(fpath, root)
+            elif suffix == ".pdf":
+                return self._read_pdf_file(fpath, root)
         except Exception as exc:
             logger.debug("Failed to read %s for indexing: %s", fpath, exc)
         return []
@@ -153,8 +166,15 @@ class BM25Retriever:
             base = p if p.is_dir() else p.parent
             roots.append(self._normalize_root(base))
 
+        # Always scan known workspace subdirectories (data/, pdfs/, docs/, reports/)
+        workspace = self._normalize_root(self._config._config_dir)
+        for subdir_name in ("pdfs", "docs", "reports", "data", "."):
+            candidate = workspace / subdir_name if subdir_name != "." else workspace
+            if candidate.is_dir():
+                roots.append(candidate)
+
         # Fallback to project cwd
-        roots.append(self._normalize_root(self._config._config_dir))
+        roots.append(workspace)
 
         # Deduplicate while preserving order
         seen: set[Path] = set()
@@ -186,11 +206,13 @@ class BM25Retriever:
                 chunks.extend(self._read_json_file(fpath, root))
             elif suffix == ".csv":
                 chunks.extend(self._read_csv_file(fpath, root))
+            elif suffix == ".pdf":
+                chunks.extend(self._read_pdf_file(fpath, root))
         return chunks
 
     def _iter_supported_files(self, root: Path):
         """Yield supported files while skipping heavy/system folders."""
-        supported_exts = {".txt", ".md", ".json", ".csv"}
+        supported_exts = {".txt", ".md", ".json", ".csv", ".pdf"}
         skip_dirs = {
             ".git", ".scout", "__pycache__", ".venv", "venv",
             "node_modules", ".mypy_cache", ".pytest_cache",
@@ -206,12 +228,17 @@ class BM25Retriever:
                 if entry.is_dir():
                     if entry.name in skip_dirs:
                         continue
+                    # Prevent deep recursion and symlink loops
+                    if entry.is_symlink():
+                        continue
+                    if len(current.parts) - len(root.parts) > 10:
+                        continue
                     stack.append(entry)
                     continue
                 if entry.suffix.lower() in supported_exts:
                     # Avoid huge files that hurt startup/search quality.
                     try:
-                        if entry.stat().st_size <= 5_000_000:
+                        if entry.stat().st_size <= 100_000_000:
                             yield entry
                     except Exception:
                         continue
@@ -248,7 +275,28 @@ class BM25Retriever:
         src_config = self._config.json_sources.get(fpath.name)
         if src_config and isinstance(data, list):
             chunks.extend(self._process_json_records(data, source_file, src_config))
-            return chunks
+        return chunks
+
+    def _read_pdf_file(self, fpath: Path, root: Path) -> list[_Chunk]:
+        """Read a PDF file and extract text for indexing."""
+        try:
+            import fitz
+        except ImportError:
+            logger.warning("pymupdf not installed, skipping PDF: %s", fpath)
+            return []
+
+        chunks: list[_Chunk] = []
+        try:
+            with fitz.open(fpath) as doc:
+                text_parts = []
+                for page in doc:
+                    text_parts.append(page.get_text())
+                full_text = "\n\n".join(text_parts)
+                if full_text.strip():
+                    chunks.extend(self._split_text(full_text, self._source_name(fpath, root)))
+        except Exception as exc:
+            logger.error("Error indexing PDF %s: %s", fpath, exc)
+        return chunks
 
         # Config-free JSON indexing: flatten records/objects to text.
         if isinstance(data, list):
@@ -274,7 +322,11 @@ class BM25Retriever:
         return chunks
 
     def _read_csv_file(self, fpath: Path, root: Path) -> list[_Chunk]:
-        """Read a CSV and index rows as textual records."""
+        """Read a CSV and index rows as textual records.
+
+        Strategy: one chunk per row, truncated to MAX_CHARS_PER_CSV_ROW.
+        This ensures all rows across a large file are represented.
+        """
         chunks: list[_Chunk] = []
         source_file = self._source_name(fpath, root)
         try:
@@ -294,15 +346,16 @@ class BM25Retriever:
                     row_text = " | ".join(parts)
                     if not row_text:
                         continue
-                    for split_text in self._splitter.split_text(row_text):
-                        chunks.append(
-                            _Chunk(
-                                source_file=source_file,
-                                text=split_text,
-                                source_type="csv",
-                                record_index=idx,
-                            )
+                    # One chunk per row, truncated — ensures full row coverage
+                    row_text = row_text[:self.MAX_CHARS_PER_CSV_ROW]
+                    chunks.append(
+                        _Chunk(
+                            source_file=source_file,
+                            text=row_text,
+                            source_type="csv",
+                            record_index=idx,
                         )
+                    )
         except Exception:
             return chunks
         return chunks

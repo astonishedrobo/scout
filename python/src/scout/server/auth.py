@@ -107,12 +107,12 @@ async def get_current_user_optional(request: Request):
         return None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
+        user_id = payload.get("sub")
         username: str = payload.get("username")
         if user_id is None:
             return None
         return User(id=int(user_id), username=username)
-    except jwt.PyJWTError:
+    except (jwt.PyJWTError, ValueError, TypeError):
         return None
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)):

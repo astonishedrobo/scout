@@ -11,6 +11,7 @@ paths through this module before proceeding.
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 import os
 import re
@@ -106,15 +107,31 @@ _SENSITIVE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-def scan_code_for_denied_paths(code: str) -> list[str]:
-    """Scan Python code for attempts to open sensitive files.
+def scan_code_for_denied_paths(code: str, base_dir: str | Path | None = None) -> list[str]:
+    """Scan Python code for string literals that resolve to denied paths."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
 
-    Returns list of denied paths found in the code.  This is best-effort
-    and won't catch every evasion, but blocks the obvious cases.
-    """
     denied = []
-    for match in _SENSITIVE_PATH_RE.finditer(code):
-        path_str = match.group(1)
-        if is_path_denied(path_str):
-            denied.append(path_str)
+    base = Path(base_dir).resolve() if base_dir else None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            val = node.value.strip()
+            if not val:
+                continue
+            
+            p = Path(val)
+            # Resolve relative paths against base_dir if provided
+            if not p.is_absolute() and base:
+                try:
+                    p = (base / p).resolve()
+                except Exception:
+                    continue
+            
+            if is_path_denied(p):
+                denied.append(val)
+    
     return denied

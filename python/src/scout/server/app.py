@@ -209,23 +209,24 @@ def create_app(
         "multi_user": multi_user,
     }
 
-    def _get_session_state(session_id: str) -> SessionState:
+    def _get_session_state(session_id: str, user_id: str | int = "default") -> SessionState:
         """Return the SessionState for a given ID, creating it if needed."""
-        if session_id not in _state["sessions"]:
+        key = (str(user_id), session_id)
+        if key not in _state["sessions"]:
             try:
                 agent = ScoutAgent(
                     config_path=_state["config_path"],
                     cwd=_state["cwd"],
                     approval_callback=_approval_callback,
-                    approval_callback_args=(session_id,),
+                    approval_callback_args=(session_id, user_id),
                     read_only=_state["multi_user"],
                 )
-                _state["sessions"][session_id] = SessionState(agent)
+                _state["sessions"][key] = SessionState(agent)
             except Exception as exc:
-                logger.exception("Failed to initialize agent for session %s", session_id)
+                logger.exception("Failed to initialize agent for session %s (user %s)", session_id, user_id)
                 raise HTTPException(status_code=500, detail=str(exc))
         
-        return _state["sessions"][session_id]
+        return _state["sessions"][key]
 
     # If multi_user is enabled, force safe mode: disable agent write tools
     # This prevents the agent from changing backend server files
@@ -240,7 +241,7 @@ def create_app(
         return user
 
     async def _approval_callback(
-        session_id: str, tool_name: str, diffs: list, args: dict,
+        session_id: str, user_id: str | int, tool_name: str, diffs: list, args: dict,
     ) -> tuple[str, str]:
         """Called by the graph's tool_node after execution detects file changes.
 
@@ -248,7 +249,8 @@ def create_app(
         (after first "no"), auto-approve (after "always"), and external
         editor (waits for CLI to finish editing before returning).
         """
-        s = _state["sessions"].get(session_id)
+        key = (str(user_id), session_id)
+        s = _state["sessions"].get(key)
         if not s:
             return ("no", "Session expired")
 
@@ -355,7 +357,8 @@ def create_app(
     @app.post("/chat")
     async def chat(req: ChatRequest, user: User | None = Depends(get_user_context)) -> EventSourceResponse:
         """Stream agent events as SSE."""
-        s = _get_session_state(req.session_id)
+        uid = user.id if user else "default"
+        s = _get_session_state(req.session_id, uid)
         agent = s.agent
 
         # Build enriched message with attachment metadata
@@ -499,18 +502,13 @@ def create_app(
             )
         return EventSourceResponse(_gen())
 
-    @app.post("/reset", status_code=204)
-    async def reset() -> None:
-        """Clear conversation history."""
-        agent: ScoutAgent | None = _state.get("agent")
-        if agent is None:
-            raise HTTPException(status_code=503, detail="Agent not initialized")
-        agent.reset()
+    # Removed duplicate /reset route
 
     @app.post("/restore")
     async def restore(req: RestoreRequest, session_id: str, user: User | None = Depends(get_user_context)) -> dict:
         """Restore agent conversation history from a persisted session."""
-        s = _get_session_state(session_id)
+        uid = user.id if user else "default"
+        s = _get_session_state(session_id, uid)
         agent = s.agent
 
         from langchain_core.messages import AIMessage, HumanMessage
@@ -644,7 +642,9 @@ def create_app(
     @app.post("/approval")
     async def approval(req: ApprovalResponse, session_id: str, user: User | None = Depends(get_user_context)) -> dict:
         """Respond to a pending write-approval request."""
-        s = _state["sessions"].get(session_id)
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
         if not s or s.approval_event is None:
             raise HTTPException(
                 status_code=409,
@@ -661,7 +661,9 @@ def create_app(
     @app.post("/edit-done")
     async def edit_done(req: EditDoneRequest, user: User | None = Depends(get_user_context)) -> dict:
         """Signal that the external editor has closed."""
-        s = _state["sessions"].get(req.session_id)
+        uid = user.id if user else "default"
+        key = (str(uid), req.session_id)
+        s = _state["sessions"].get(key)
         if not s or s.edit_done_event is None:
             raise HTTPException(
                 status_code=409,
@@ -673,7 +675,9 @@ def create_app(
     @app.post("/reset")
     async def reset_agent(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
         """Reset the agent's conversation history for a given session."""
-        s = _state["sessions"].get(session_id)
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
         if s:
             s.agent.reset()
             s.declined_this_turn = False

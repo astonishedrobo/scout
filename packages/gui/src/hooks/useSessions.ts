@@ -26,27 +26,34 @@ interface UseSessionsReturn {
   refreshSessions: () => Promise<void>;
 }
 
-export function useSessions(baseUrl: string, isReady: boolean, token: string | null, isMultiUser: boolean | undefined): UseSessionsReturn {
+export function useSessions(baseUrl: string, isReady: boolean, token: string | null, isMultiUser: boolean | undefined, onUnauthorized?: () => void): UseSessionsReturn {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval>>();
 
+  const handleResponse = useCallback((resp: Response) => {
+    if (resp.status === 401 && onUnauthorized) {
+      onUnauthorized();
+    }
+    return resp;
+  }, [onUnauthorized]);
+
   const refreshSessions = useCallback(async () => {
     if (!baseUrl || isMultiUser === false) return;
     try {
-      const resp = await fetch(`${baseUrl}/sessions`, {
+      const resp = handleResponse(await fetch(`${baseUrl}/sessions`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
+      }));
       if (resp.ok) {
         const data = await resp.json();
         setSessions(data.sessions ?? []);
       } else if (resp.status === 401) {
-        console.warn("Sessions fetch failed: Unauthorized");
+        console.warn("Sessions fetch failed: Unauthorized — clearing stale token");
       }
     } catch (err) {
       console.error("Failed to refresh sessions:", err);
     }
-  }, [baseUrl, token, isMultiUser]);
+  }, [baseUrl, token, isMultiUser, handleResponse]);
 
   useEffect(() => {
     if (isReady) {

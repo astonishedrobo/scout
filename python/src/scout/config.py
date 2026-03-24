@@ -64,7 +64,7 @@ class AgentConfig(BaseModel):
         False, 
         description="When true, the agent cannot write to files. Prevents hallucinations in read-only setups."
     )
-    temperature: float = 0.2
+    temperature: float = 1.0
     max_iterations: int = Field(
         15, description="Max tool-calling rounds per user turn."
     )

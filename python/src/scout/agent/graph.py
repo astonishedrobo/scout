@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal
 
 import litellm
+litellm.drop_params = True
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,

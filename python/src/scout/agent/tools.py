@@ -50,7 +50,7 @@ def make_tools(
             if is_name_denied(fpath.name) or is_path_denied(fpath):
                 continue
             try:
-                if fpath.stat().st_size > 2_000_000:  # 2 MB guard
+                if fpath.stat().st_size > 100_000_000:  # 100 MB guard
                     continue
                 text = fpath.read_text(errors="replace")
             except Exception:
@@ -99,8 +99,8 @@ def make_tools(
         This is your primary analysis tool.  Variables, imports, and
         DataFrames persist across calls, so import once and reuse.
 
-        **When NOT to use:** Reading a text/markdown file (use read_file).
-        Searching documents for qualitative info (use search_documents).
+        **When NOT to use:** Simple file operations (use read_file/write_file)
+        or document search (use search_documents).
 
         **Tips:**
         - Always `pd.read_csv(..., low_memory=False)` for CSVs.
@@ -117,14 +117,18 @@ def make_tools(
         description : str
             Brief description of what this code does (shown to the user).
         """
-        denied = scan_code_for_denied_paths(code)
+        denied = scan_code_for_denied_paths(code, base_dir=data_dir)
         if denied:
             return (
                 f"[Access denied: your code attempts to access protected/administrative files: "
                 f"{', '.join(denied)}. This path is blocked for security (contains .scout, .git, or system secrets). "
                 f"Please rewrite your analysis without accessing these internal files.]"
             )
-        output, success = session.run(code)
+        try:
+            output, success = session.run(code, timeout=15)
+        except Exception as exc:
+            return f"[Session error: {exc}]"
+        
         if not output:
             return (
                 "[Code ran successfully but produced no output. "

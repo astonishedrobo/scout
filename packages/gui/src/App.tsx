@@ -31,7 +31,7 @@ export function App() {
     appendMessage,
     setCurrentSessionId,
     refreshSessions,
-  } = useSessions(baseUrl, isReady, token, isMultiUser);
+  } = useSessions(baseUrl, isReady, token, isMultiUser, logout);
 
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = currentSessionId;
