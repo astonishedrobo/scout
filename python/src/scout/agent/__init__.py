@@ -222,7 +222,7 @@ class ScoutAgent:
         response_emitted = False
         last_ai_content = ""
         tool_steps: list[tuple[str, dict, str]] = []  # (name, args, output)
-        _pending_calls: dict[str, dict] = {}  # name -> args for pairing
+        _pending_calls: dict[str, dict] = {}  # tool_call_id -> args for pairing
 
         try:
             async for chunk in self._graph.astream(
@@ -236,7 +236,7 @@ class ScoutAgent:
                         if isinstance(msg, AIMessage):
                             if msg.tool_calls:
                                 for tc in msg.tool_calls:
-                                    _pending_calls[tc["name"]] = tc.get("args", {})
+                                    _pending_calls[tc["id"]] = tc.get("args", {})
                                     yield {
                                         "type": "tool_call",
                                         "name": tc["name"],
@@ -255,7 +255,7 @@ class ScoutAgent:
                         elif isinstance(msg, ToolMessage):
                             output = (msg.content or "")[:500]
                             name = msg.name or ""
-                            args = _pending_calls.pop(name, {})
+                            args = _pending_calls.pop(msg.tool_call_id, {})
                             tool_steps.append((name, args, output))
                             yield {
                                 "type": "tool_result",
@@ -265,6 +265,10 @@ class ScoutAgent:
 
         except ProviderRateLimitError:
             self._messages.pop()
+            raise
+        except Exception:
+            if not response_emitted and tool_steps:
+                yield {"type": "response", "content": _build_tool_summary(tool_steps)}
             raise
 
         if not response_emitted and new_messages:

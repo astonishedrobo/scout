@@ -174,9 +174,13 @@ def make_tools(
                     if f.is_file() and not is_name_denied(f.name)
                 )
                 listing = "\n  ".join(siblings[:30]) or "(empty)"
+                try:
+                    parent_label = parent.relative_to(data_dir)
+                except ValueError:
+                    parent_label = parent
                 return (
                     f"[File not found: {p.name}]\n"
-                    f"Files in {parent.relative_to(data_dir)}:\n  {listing}"
+                    f"Files in {parent_label}:\n  {listing}"
                 )
             return f"[File not found: {p}]"
         try:
@@ -334,8 +338,8 @@ def make_tools(
 
     # ── 7. read_pdf ────────────────────────────────────────────────
 
-    # Session-level cache: {abs_path -> extracted_text}
-    _pdf_cache: dict[str, str] = {}
+    # Session-level cache: {abs_path -> (extracted_text, total_pages)}
+    _pdf_cache: dict[str, tuple[str, int]] = {}
 
     @tool
     def read_pdf(
@@ -385,8 +389,7 @@ def make_tools(
 
         # Check session cache
         if abs_key in _pdf_cache:
-            full_text = _pdf_cache[abs_key]
-            total_pages = 0  # unknown from cache
+            full_text, total_pages = _pdf_cache[abs_key]
         else:
             try:
                 full_text, total_pages = extract_pdf_text(p, pages=pages)
@@ -406,9 +409,9 @@ def make_tools(
             except Exception as exc:
                 return f"[Error reading PDF: {exc}]"
 
-            # Cache for re-use within the session
+            # Cache full reads for re-use within the session
             if not pages:
-                _pdf_cache[abs_key] = full_text
+                _pdf_cache[abs_key] = (full_text, total_pages)
 
         if query:
             # BM25 search within the extracted text

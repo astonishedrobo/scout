@@ -384,7 +384,11 @@ def build_graph(
             messages = _compress_messages(
                 messages, model_name, keep_recent, llm,
             )
-            response = llm_with_tools.invoke(messages)
+            try:
+                response = llm_with_tools.invoke(messages)
+            except litellm.ContextWindowExceededError:
+                logger.warning("Context window exceeded even after compression — returning error message")
+                response = AIMessage(content="I've exceeded my context limit even after compressing the conversation. Please start a new session.")
         except litellm.BadRequestError as exc:
             # Model produced a malformed tool call or hallucinated a tool
             # name.  Covers:

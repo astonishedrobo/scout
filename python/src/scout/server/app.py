@@ -481,11 +481,14 @@ def create_app(
     @app.post("/chat/stop")
     async def stop_chat(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
         """Interrupt an active agent execution."""
-        s = _get_session_state(session_id)
-        if s.abort_event:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s and s.abort_event:
             s.abort_event.set()
             return {"status": "ok", "message": "Interruption signaled"}
         return {"status": "ok", "message": "No active task to stop"}
+
 
     @app.get("/test-sse")
     async def test_sse() -> EventSourceResponse:
@@ -787,6 +790,11 @@ def create_app(
         path = _session_file(cwd, session_id, uid)
         if path.exists():
             path.unlink()
+        # Clean up in-memory state and shut down the agent subprocess
+        key = (str(uid), session_id)
+        s = _state["sessions"].pop(key, None)
+        if s:
+            s.agent.close()
         return {"status": "ok"}
 
     # ── File listing endpoint (for @ autocomplete) ───────────────────

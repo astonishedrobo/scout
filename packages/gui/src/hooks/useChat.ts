@@ -118,8 +118,9 @@ export function useChat({ baseUrl, sessionId, token, onUserMessage, onAssistantM
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let streamDone = false;
 
-        while (true) {
+        while (!streamDone) {
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -137,6 +138,7 @@ export function useChat({ baseUrl, sessionId, token, onUserMessage, onAssistantM
 
               if (event.type === "error") {
                 setError(event.message ?? "Unknown server error");
+                streamDone = true;
                 break;
               }
 
