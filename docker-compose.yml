@@ -35,6 +35,11 @@ services:
       - "0.0.0.0"
       - --port
       - "7892"
+    environment:
+      # Org-level egress allowlist enforced by the proxy (defense-in-depth on
+      # top of per-session user approval). Matches host or any subdomain.
+      # Defaults cover Python (pip) and Node (npm) package registries.
+      - SCOUT_EGRESS_ALLOWED_DOMAINS=${SCOUT_EGRESS_ALLOWED_DOMAINS:-pypi.org,pythonhosted.org,files.pythonhosted.org,registry.npmjs.org}
     networks:
       - scout-internal
       - scout-egress
@@ -137,6 +142,9 @@ volumes:
 
 networks:
   scout-internal:
+    # Pin an explicit name (not project-prefixed) so the worker can launch
+    # per-session sandbox containers with `docker run --network scout-internal`.
+    name: scout-internal
     internal: true
   scout-egress:
     internal: false

@@ -84,6 +84,7 @@ class UnifiedExecCommandRequest:
     proxy_url: str | None = None
     allow_insecure_fallback: bool = False
     sandbox_python: str = ""
+    personal_write: bool = False
 
 
 @dataclass
@@ -150,9 +151,11 @@ class UnifiedExecManager:
         config: ExecutionConfig,
         *,
         on_chunk: OutputChunkCallback | None = None,
+        prefer_container: bool = False,
     ) -> None:
         self._config = config
         self._on_chunk = on_chunk
+        self._prefer_container = prefer_container
         self._probe = probe_sandbox_isolation()
         self._lock = threading.RLock()
         self._processes: dict[int, _ProcessEntry] = {}
@@ -311,15 +314,18 @@ class UnifiedExecManager:
         net_mgr: IsolatedNetworkManager | None = None
         effective_proxy = request.proxy_url
 
-        if request.policy.network.mode == "allow_domains" and request.proxy_url:
-            if not network_isolation_available():
-                raise RuntimeError("Network egress requires isolated network namespace")
-            net_mgr = IsolatedNetworkManager(request.proxy_url)
-            net = net_mgr.create()
-            effective_proxy = net.proxy_url
+        use_bwrap = bwrap_available() and self._probe.isolation and not self._prefer_container
 
         launch_cmd: list[str]
-        if bwrap_available() and self._probe.isolation:
+        if use_bwrap:
+            # bwrap shares the host network namespace; an isolated netns is what
+            # ENFORCES the domain allowlist, so it is required here.
+            if request.policy.network.mode == "allow_domains" and request.proxy_url:
+                if not network_isolation_available():
+                    raise RuntimeError("Network egress requires isolated network namespace")
+                net_mgr = IsolatedNetworkManager(request.proxy_url)
+                net = net_mgr.create()
+                effective_proxy = net.proxy_url
             bwrap_cmd = build_bwrap_command(
                 cmd,
                 cwd=request.cwd,
@@ -333,7 +339,9 @@ class UnifiedExecManager:
             )
             launch_cmd = wrap_command_in_netns(bwrap_cmd, net) if net else bwrap_cmd
         else:
-            docker_cmd = self._docker_launch_cmd(request, cmd, env, effective_proxy)
+            # Docker path: egress is enforced by `--network scout-internal` + the
+            # egress proxy (see _docker_launch_cmd / _network_args). No netns needed.
+            docker_cmd = self._docker_launch_cmd(request, cmd, env, request.proxy_url)
             if docker_cmd:
                 launch_cmd = docker_cmd
             elif request.allow_insecure_fallback:

@@ -445,7 +445,9 @@ class ContainerSandboxBackend:
         # Alive Python shells, one long-lived sandbox container per user:session.
         self._sessions: dict[str, ContainerPersistentSession] = {}
         self._sessions_lock = threading.Lock()
-        self._unified_exec = UnifiedExecManager(config)
+        # exec_command (e.g. `pip install`) must run inside a sandbox container
+        # with `--network scout-internal`, not via the bwrap+netns path.
+        self._unified_exec = UnifiedExecManager(config, prefer_container=True)
 
     async def exec_command(self, request: UnifiedExecCommandRequest) -> UnifiedExecResponse:
         return await run_in_executor(self._unified_exec.exec_command, request)

@@ -48,6 +48,7 @@ class ExecutePayload(BaseModel):
     grant_ids: list[str] = Field(default_factory=list)
     network_domains: list[str] = Field(default_factory=list)
     sandbox_python: str | None = None
+    personal_write: bool = False
 
 
 class SessionStartPayload(BaseModel):
@@ -83,6 +84,7 @@ class ExecCommandPayload(BaseModel):
     tool_call_id: str = ""
     network_domains: list[str] = Field(default_factory=list)
     sandbox_python: str | None = None
+    personal_write: bool = False
 
 
 class ExecStdinPayload(BaseModel):
@@ -164,6 +166,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         staging_dir: Path | None,
         persistent: bool,
         domains: list[str],
+        personal_write: bool = False,
     ):
         layout = derive_user_roots(user_id)
         personal = layout.personal_root
@@ -177,6 +180,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             staging_dir=staging_dir,
             scratch_dir=scratch if persistent else None,
             persistent=persistent,
+            personal_write=personal_write,
         )
 
     def _auth_request(
@@ -231,6 +235,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             staging_dir=staging_path / "work" if staging_path else None,
             persistent=payload.persistent,
             domains=payload.network_domains,
+            personal_write=payload.personal_write,
         )
         cache = layout.personal_root / ".scout-cache"
         sandbox_python = resolve_sandbox_python(payload.sandbox_python or worker_sandbox_python)
@@ -399,6 +404,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             staging_dir=staging_path / "work" if staging_path else None,
             persistent=False,
             domains=payload.network_domains,
+            personal_write=payload.personal_write,
         )
         mgr = _unified_mgr()
         if mgr is None:
@@ -411,7 +417,10 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                 user_id=payload.user_id,
                 session_id=payload.session_id,
                 command=payload.command,
-                cwd=Path(payload.cwd),
+                # Use the worker's own namespace root, not the server's
+                # /app/workspace/... path (which does not exist here or in the
+                # sandbox container). Mirrors the /execute handler.
+                cwd=layout.personal_root,
                 policy=policy,
                 staging_dir=staging_path,
                 work_dir=Path(payload.work_dir) if payload.work_dir else None,

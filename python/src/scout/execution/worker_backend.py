@@ -85,6 +85,7 @@ class WorkerExecutionBackend:
             "network_domains": domains,
             "grant_ids": [],
             "sandbox_python": request.sandbox_python or "",
+            "personal_write": request.personal_write,
         }
 
         try:
@@ -171,6 +172,7 @@ class WorkerExecutionBackend:
             "tool_call_id": request.tool_call_id,
             "network_domains": domains,
             "sandbox_python": request.sandbox_python or "",
+            "personal_write": request.personal_write,
         }
         if self._on_chunk:
             stream_task = asyncio.create_task(

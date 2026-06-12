@@ -167,6 +167,7 @@ class ExecutionOrchestrator:
             tool_call_id=tool_call_id or self._active_tool_call_id,
             proxy_url=self._proxy_url,
             allow_insecure_fallback=self._config.allow_insecure_local_fallback,
+            personal_write=self._personal_write,
             sandbox_python=self._sandbox_python,
         )
         resp = await self._backend.exec_command(req)
@@ -366,6 +367,7 @@ class ExecutionOrchestrator:
             staging_dir=staging.root,
             scratch_dir=scratch_dir,
             sandbox_python=self._sandbox_python,
+            personal_write=self._personal_write,
         )
 
     async def _request_capability(self, cap: CapabilityRequest) -> bool:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .runtime import prepare_user_package_dir
+
 ALLOWED_ENV_KEYS = frozenset({
     "PATH",
     "HOME",
@@ -54,6 +56,14 @@ def build_execution_env(
     env["NUMBA_CACHE_DIR"] = str(cache_dir / "numba")
     env["PIP_CACHE_DIR"] = str(cache_dir / "pip")
     env["NPM_CONFIG_CACHE"] = str(cache_dir / "npm")
+
+    # Persist pip installs to the mounted user cache and make them importable.
+    # Container-backend sessions only call build_execution_env (not
+    # enrich_execution_env), so without this run_python cannot import packages
+    # that exec_command's `pip install` placed in `.scout-cache/python-packages`.
+    pkg_dir = str(prepare_user_package_dir(cache_dir).resolve())
+    env["PYTHONPATH"] = pkg_dir
+    env["PIP_TARGET"] = pkg_dir
 
     for path in (
         env["MPLCONFIGDIR"],

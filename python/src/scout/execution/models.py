@@ -54,6 +54,7 @@ class ExecutionRequest:
     staging_dir: Path | None = None
     scratch_dir: Path | None = None
     sandbox_python: str = ""
+    personal_write: bool = False
 
 
 @dataclass
