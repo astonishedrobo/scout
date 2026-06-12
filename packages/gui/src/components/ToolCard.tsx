@@ -93,9 +93,7 @@ export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
               {step.status === "complete" && step.output && (
                 <div className="px-3 pb-2">
                   <pre className="text-xs text-scout-text-secondary bg-scout-bg/50 rounded p-2 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
-                    {step.output.length > 1000
-                      ? step.output.slice(0, 1000) + "\n... (truncated)"
-                      : step.output}
+                    {step.output}
                   </pre>
                 </div>
               )}

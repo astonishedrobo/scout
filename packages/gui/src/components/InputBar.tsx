@@ -106,18 +106,21 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
       setShowAt(true);
       setAtIndex(0);
 
-      const id = ++fetchIdRef.current;
-      fetch(`${baseUrl}/files?prefix=${encodeURIComponent(prefix)}&limit=20`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`${r.status}`);
-          return r.json();
-        })
-        .then((data) => {
-          if (fetchIdRef.current === id) setAtFiles(data.files ?? []);
-        })
-        .catch(() => {
-          if (fetchIdRef.current === id) setAtFiles([]);
-        });
+      const timer = setTimeout(() => {
+        const id = ++fetchIdRef.current;
+        fetch(`${baseUrl}/files?prefix=${encodeURIComponent(prefix)}&limit=20`)
+          .then((r) => {
+            if (!r.ok) throw new Error(`${r.status}`);
+            return r.json();
+          })
+          .then((data) => {
+            if (fetchIdRef.current === id) setAtFiles(data.files ?? []);
+          })
+          .catch(() => {
+            if (fetchIdRef.current === id) setAtFiles([]);
+          });
+      }, 200);
+      return () => clearTimeout(timer);
     } else {
       setShowAt(false);
       setAtFiles([]);
@@ -149,9 +152,18 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
     (filePath: string) => {
       const before = value.slice(0, atStartPos);
       const after = value.slice(atStartPos + 1 + atPrefix.length);
-      setValue(before + "@" + filePath + " " + after);
+      const newValue = before + "@" + filePath + " " + after;
+      const newPos = before.length + 1 + filePath.length + 1;
+      cursorPosRef.current = newPos;
+      setValue(newValue);
       setShowAt(false);
-      setTimeout(() => textareaRef.current?.focus(), 0);
+      setTimeout(() => {
+        const ta = textareaRef.current;
+        if (ta) {
+          ta.focus();
+          ta.setSelectionRange(newPos, newPos);
+        }
+      }, 0);
     },
     [value, atStartPos, atPrefix],
   );

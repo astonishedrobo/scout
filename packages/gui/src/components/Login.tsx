@@ -34,10 +34,10 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
     <div className="flex flex-col items-center justify-center min-h-screen bg-scout-bg p-4 flex-1">
       <div className="w-full max-w-sm p-8 space-y-8 bg-scout-surface border border-scout-border rounded-xl shadow-lg">
         <div className="text-center">
-          <h2 className="text-2xl font-bold tracking-tight text-scout-text">
+          <h2 className="text-2xl font-bold tracking-tight text-scout-text-primary">
             {isRegistering ? "Create an account" : "Welcome back"}
           </h2>
-          <p className="mt-2 text-sm text-scout-text-secondary">
+          <p className="mt-2 text-sm text-scout-text-primary-secondary">
             {isRegistering
               ? "Sign up to start exploring data"
               : "Sign in to your account"}
@@ -46,14 +46,14 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
 
         <form className="space-y-6" onSubmit={handleSubmit}>
           {error && (
-            <div className="p-3 text-sm text-scout-error bg-scout-error-muted rounded-lg border border-scout-error/20">
+            <div className="p-3 text-sm text-scout-text-primary bg-scout-error-muted rounded-lg border border-scout-error/20">
               {error}
             </div>
           )}
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-scout-text mb-1">
+              <label className="block text-sm font-medium text-scout-text-primary mb-1">
                 Username
               </label>
               <input
@@ -61,13 +61,13 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2 bg-scout-bg border border-scout-border rounded-lg text-scout-text placeholder-scout-text-secondary focus:outline-none focus:ring-2 focus:ring-scout-accent focus:border-transparent transition-colors"
+                className="w-full px-3 py-2 bg-scout-bg border border-scout-border rounded-lg text-scout-text-primary placeholder-scout-text-secondary focus:outline-none focus:ring-2 focus:ring-scout-accent focus:border-transparent transition-colors"
                 placeholder="Enter your username"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-scout-text mb-1">
+              <label className="block text-sm font-medium text-scout-text-primary mb-1">
                 Password
               </label>
               <input
@@ -75,7 +75,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 bg-scout-bg border border-scout-border rounded-lg text-scout-text placeholder-scout-text-secondary focus:outline-none focus:ring-2 focus:ring-scout-accent focus:border-transparent transition-colors"
+                className="w-full px-3 py-2 bg-scout-bg border border-scout-border rounded-lg text-scout-text-primary placeholder-scout-text-secondary focus:outline-none focus:ring-2 focus:ring-scout-accent focus:border-transparent transition-colors"
                 placeholder="••••••••"
               />
             </div>
@@ -102,7 +102,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
           </button>
         </form>
 
-        <p className="text-center text-sm text-scout-text-secondary">
+        <p className="text-center text-sm text-scout-text-primary-secondary">
           {isRegistering ? "Already have an account?" : "Don't have an account?"}{" "}
           <button
             type="button"

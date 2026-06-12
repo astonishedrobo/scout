@@ -23,7 +23,7 @@ export function ErrorBanner({ error }: ErrorBannerProps) {
                     border-b border-scout-error/20 flex items-start gap-2.5">
       <AlertOctagon size={16} className="text-scout-error flex-shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
-        <p className="text-scout-error text-sm leading-relaxed">{error}</p>
+        <p className="text-scout-text-primary text-sm leading-relaxed">{error}</p>
       </div>
       <button
         onClick={() => setDismissedError(error)}
