@@ -3,11 +3,9 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy workspace setup and source
 COPY package.json package-lock.json* ./
 COPY packages/ ./packages/
 
-# Install dependencies and build
 RUN npm install
 RUN npm run build:gui
 
@@ -16,31 +14,37 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
+    bubblewrap \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python requirements
-COPY python/pyproject.toml python/requirements.txt ./python/
-RUN cd python && pip install --no-cache-dir -r requirements.txt
+# Docker CLI only (no daemon) — the execution-worker uses it to launch
+# per-session sandbox containers via the constrained docker-socket-proxy.
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 
-# Install the scout python package
+COPY python/pyproject.toml python/requirements.txt ./python/
+RUN cd python && pip install --no-cache-dir -r requirements.txt pytest pytest-asyncio
+
 COPY python/ ./python/
 RUN cd python && pip install --no-cache-dir -e .
 
-# Copy built GUI from builder
 COPY --from=builder /app/packages/gui/dist ./gui-dist
 
-# Create necessary directories
-RUN mkdir -p /root/.config/scout/sessions /app/workspace
+# NOTE: do NOT bake /srv/scout-source into the image — the sandbox isolation
+# probe asserts that path is absent in a bare container of this image (it only
+# exists where compose bind-mounts the workspace, i.e. in the worker).
+RUN groupadd -r scout && useradd -r -g scout -u 1000 scout \
+    && mkdir -p /home/scout/.config/scout/sessions /app/workspace \
+    && chown -R scout:scout /home/scout /app/workspace
 
-# Expose the server port
+USER scout
+
 EXPOSE 4200
 
-# Environment variables
 ENV PYTHONUNBUFFERED=1
+ENV HOME=/home/scout
 
-# Entrypoint to run the scout server in multi-user mode with the GUI
-CMD ["python", "-m", "scout.server", "--cwd", "/app/workspace", "--host", "0.0.0.0", "--port", "4200", "--serve-gui", "/app/gui-dist", "--multi-user"]
+CMD ["python", "-m", "scout.server", "--cwd", "/app/workspace", "--host", "0.0.0.0", "--port", "4200", "--serve-gui", "/app/gui-dist/web", "--multi-user"]

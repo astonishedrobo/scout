@@ -15,9 +15,11 @@ import { SuggestionsDropdown } from "./SuggestionsDropdown.js";
 import { useFileCompletion } from "../hooks/useFileCompletion.js";
 import { useSlashCompletion } from "../hooks/useSlashCompletion.js";
 import { theme, separator } from "../theme.js";
+import type { ChatImage } from "../types.js";
 
 interface ChatInputProps {
-  onSubmit: (message: string) => void;
+  onSubmit: (message: string, chatImages?: ChatImage[]) => void;
+  onPasteImage?: () => Promise<ChatImage | null>;
   disabled: boolean;
   cwd?: string;
   /** Terminal width for responsive layout. */
@@ -29,8 +31,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   disabled,
   cwd,
   width,
+  onPasteImage,
 }) => {
   const [value, setValue] = useState("");
+  const [chatImages, setChatImages] = useState<ChatImage[]>([]);
 
   const fileSuggestions = useFileCompletion(value, cwd);
   const slashSuggestions = useSlashCompletion(value);
@@ -50,6 +54,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   useInput(
     (_input, key) => {
       if (disabled) return;
+      if (key.ctrl && _input === "v" && onPasteImage) {
+        void onPasteImage().then((image) => image && setChatImages((prev) => [...prev, image]));
+        return;
+      }
       if (!active) return;
 
       if (key.upArrow) { active.navigateUp(); return; }
@@ -73,7 +81,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const handleSubmit = useCallback(
     (text: string) => {
-      if (!text.trim()) return;
+      if (!text.trim() && chatImages.length === 0) return;
 
       // Accept suggestion on Enter when dropdown is visible
       if (active && active.suggestions.length > 0) {
@@ -89,13 +97,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
       }
 
-      onSubmit(text.trim());
+      onSubmit(text.trim(), chatImages);
       setValue("");
+      setChatImages([]);
     },
-    [onSubmit, active, fileSuggestions, slashSuggestions, value],
+    [onSubmit, active, fileSuggestions, slashSuggestions, value, chatImages],
   );
 
   const termWidth = width ?? (process.stdout.columns || 80);
+  const imageRefs = [...value.matchAll(/@([^\s]+\.(?:png|jpe?g|webp|gif))/gi)].map((m) => m[1]!);
 
   return (
     <Box flexDirection="column" width={termWidth}>
@@ -110,6 +120,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Thin separator line — full width */}
       <Text color={theme.border.default}>{separator(termWidth)}</Text>
+
+      {imageRefs.length > 0 && (
+        <Box flexDirection="column" paddingLeft={1} marginBottom={1}>
+          <Text color={theme.text.secondary} bold>Images</Text>
+          {imageRefs.map((path, index) => (
+            <Text key={`${path}-${index}`} color={theme.text.secondary}>
+              {"  "}[{index + 1}] {path}
+            </Text>
+          ))}
+        </Box>
+      )}
+      {chatImages.length > 0 && (
+        <Box flexDirection="column" paddingLeft={1} marginBottom={1}>
+          <Text color={theme.text.secondary} bold>Pasted images</Text>
+          {chatImages.map((image, index) => <Text key={image.id} color={theme.text.secondary}>  [{index + 1}] {image.name}</Text>)}
+        </Box>
+      )}
 
       {/* Input line */}
       <Box paddingLeft={1}>

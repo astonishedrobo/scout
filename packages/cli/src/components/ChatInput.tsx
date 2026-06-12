@@ -96,6 +96,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
 
   const termWidth = width ?? (process.stdout.columns || 80);
+  const imageRefs = [...value.matchAll(/@([^\s]+\.(?:png|jpe?g|webp|gif))/gi)].map((m) => m[1]!);
 
   return (
     <Box flexDirection="column" width={termWidth}>
@@ -110,6 +111,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Thin separator line — full width */}
       <Text color={theme.border.default}>{separator(termWidth)}</Text>
+
+      {imageRefs.length > 0 && (
+        <Box flexDirection="column" paddingLeft={1} marginBottom={1}>
+          <Text color={theme.text.secondary} bold>Images</Text>
+          {imageRefs.map((path, index) => (
+            <Text key={`${path}-${index}`} color={theme.text.secondary}>
+              {"  "}[{index + 1}] {path}
+            </Text>
+          ))}
+        </Box>
+      )}
 
       {/* Input line */}
       <Box paddingLeft={1}>

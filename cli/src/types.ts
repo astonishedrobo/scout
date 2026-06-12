@@ -49,12 +49,13 @@ export interface FileDiffEntry {
 }
 
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "approval_request";
+  type: "tool_call" | "tool_result" | "response" | "error" | "approval_request" | "session_title";
   name?: string;
   args?: Record<string, unknown>;
   output?: string;
   content?: string;
   message?: string;
+  title?: string;
   retry_after?: number | null;
   // Approval request fields
   approval_id?: string;
@@ -78,6 +79,9 @@ export interface ToolStep {
 export interface Attachment {
   path: string;
   name: string;
+}
+export interface ChatImage {
+  id: string; name: string; mime_type: string; width: number; height: number; size: number; url: string;
 }
 
 // ── Slash commands ───────────────────────────────────────────────

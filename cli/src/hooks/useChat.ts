@@ -11,8 +11,10 @@ import { parseFileRefs } from "../fileRef.js";
 import {
   appendUserMessage,
   appendAssistantMessage,
+  scheduleSessionTitleGeneration,
 } from "../sessionStore.js";
 import type { ChatEvent, ToolStep } from "../types.js";
+import type { ChatImage } from "../types.js";
 import type { Message } from "../components/MessageList.js";
 import type { ApprovalRequest } from "../components/ApprovalPrompt.js";
 
@@ -41,7 +43,7 @@ interface UseChatReturn {
   clearApproval: () => void;
   /** Send a message. Pass explicit `sessionOverride` when the session
    *  was just created in the same tick (avoids stale closure). */
-  sendMessage: (text: string, sessionOverride?: string) => Promise<void>;
+  sendMessage: (text: string, sessionOverride?: string, chatImages?: ChatImage[]) => Promise<void>;
   reset: () => Promise<void>;
 }
 
@@ -93,7 +95,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string, sessionOverride?: string) => {
+    async (text: string, sessionOverride?: string, chatImages: ChatImage[] = []) => {
       const effectiveSession = sessionOverride ?? sessionId;
 
       setError(null);
@@ -107,7 +109,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
 
       setMessages((prev) => [
         ...prev,
-        { role: "user", content: displayMessage },
+        { role: "user", content: displayMessage, chatImages },
       ]);
 
       // Persist user message
@@ -118,7 +120,11 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
             effectiveSession,
             displayMessage,
             attachments.length ? attachments.map((a) => a.path) : undefined,
+            chatImages,
           );
+          if (model) {
+            scheduleSessionTitleGeneration(cwd, effectiveSession, displayMessage, model);
+          }
         } catch { /* best-effort */ }
       }
 
@@ -131,8 +137,10 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
         let gotAnyEvent = false;
         for await (const event of streamChat({
           baseUrl,
+          sessionId: effectiveSession ?? "default",
           message: serverMessage,
           attachments: attachments.map((a) => a.path),
+          chatImageIds: chatImages.map((i) => i.id),
         })) {
           gotAnyEvent = true;
 
@@ -218,7 +226,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
   );
 
   const reset = useCallback(async () => {
-    await resetConversation(baseUrl);
+    if (sessionId) await resetConversation(baseUrl, sessionId);
     setMessages([]);
     setStreamingSteps([]);
     setCurrentTool(undefined);

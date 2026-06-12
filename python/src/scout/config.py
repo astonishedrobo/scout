@@ -52,6 +52,75 @@ class CSVSourceConfig(BaseModel):
     description: str = ""
 
 
+class MemoriesConfig(BaseModel):
+    """Codex-style memory pipeline settings."""
+
+    use_memories: bool = True
+    generate_memories: bool = True
+    max_summary_tokens: int = 4000
+    stage1_scan_limit: int = 32
+    stage1_concurrency: int = 4
+    stage1_idle_hours: float = 1.0
+    stage1_max_age_days: int = 30
+    phase2_top_n: int = 50
+    max_unused_days: int = 90
+
+
+class SkillsConfig(BaseModel):
+    """Skill loading settings."""
+
+    defer_loading: bool = True
+
+
+class PermissionsConfig(BaseModel):
+    """Runtime permission elevation settings."""
+
+    allow_request_permissions: bool = True
+
+
+class HooksConfig(BaseModel):
+    """Lifecycle hook settings."""
+
+    enabled: bool = True
+
+
+class ExecutionConfig(BaseModel):
+    """Execution sandbox settings."""
+
+    enabled: bool = True
+    backend: str = Field(
+        "auto",
+        description="local-sandbox | worker | container | disabled | auto",
+    )
+    isolation: str = Field(
+        default_factory=lambda: __import__("os").environ.get(
+            "SCOUT_EXECUTION_ISOLATION", "auto"
+        ),
+        description=(
+            "Worker-internal isolation mechanism: container | bwrap | auto. "
+            "'auto' prefers per-session sandbox containers when a container "
+            "engine is reachable, else falls back to bubblewrap."
+        ),
+    )
+    require_isolation: bool = True
+    network_default: str = Field("deny", description="deny | allow_domains")
+    timeout_seconds: int = 60
+    max_output_bytes: int = 100_000
+    max_memory_mb: int = 1024
+    max_processes: int = 64
+    persistent_python: bool = True
+    allow_insecure_local_fallback: bool = False
+    unified_shell: bool = True
+    default_yield_time_ms: int = 10_000
+    max_background_poll_ms: int = 300_000
+    max_unified_exec_processes: int = 64
+    worker_url: str = Field(
+        default_factory=lambda: __import__("os").environ.get(
+            "SCOUT_WORKER_URL", "http://127.0.0.1:7891"
+        ),
+    )
+
+
 class AgentConfig(BaseModel):
     """Settings for the agentic (conversational) mode."""
 
@@ -63,6 +132,10 @@ class AgentConfig(BaseModel):
     disable_write_tools: bool = Field(
         False, 
         description="When true, the agent cannot write to files. Prevents hallucinations in read-only setups."
+    )
+    permission_profile: str = Field(
+        "contributor",
+        description="Named permission preset: analyst, contributor, or admin.",
     )
     temperature: float = 1.0
     max_iterations: int = Field(
@@ -98,8 +171,8 @@ class AgentConfig(BaseModel):
         2,
         description=(
             "Number of retries when the LLM produces a malformed tool call "
-            "(BadRequestError). After exhausting retries, falls back to "
-            "text-only response."
+            "(BadRequestError). After exhausting retries, the original "
+            "request is retried without tools."
         ),
     )
 
@@ -200,6 +273,11 @@ class AppConfig(BaseModel):
     csv_sources: dict[str, CSVSourceConfig] = Field(default_factory=dict)
     json_sources: dict[str, JSONSourceConfig] = Field(default_factory=dict)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    memories: MemoriesConfig = Field(default_factory=MemoriesConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
     # Resolved absolute paths (populated after validation)

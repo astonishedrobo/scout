@@ -21,13 +21,21 @@ class BM25Retriever:
     """Index and search local project data using BM25.
 
     Indexing is autonomous: Scout discovers likely data roots from config
-    paths and the project cwd, then indexes ``.txt/.md/.json/.csv`` files.
+    paths and the project cwd, then indexes ``.txt/.md/.json/.csv/.pdf`` files.
     Optional ``json_sources`` entries still improve metadata/contexting but
     are no longer required for JSON files to be searchable.
+
+    Parameters
+    ----------
+    workspace_roots : list[Path] | None
+        When provided, scanning is restricted to exactly these directories
+        (in order), bypassing the config-derived root discovery. Used in
+        multi-user mode to scope each user to their personal + shared dirs.
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, workspace_roots: list[Path] | None = None) -> None:
         self._config = config
+        self._workspace_roots = workspace_roots
         self._chunks: list[_Chunk] = []
         self._bm25: BM25Okapi | None = None
 
@@ -155,6 +163,17 @@ class BM25Retriever:
 
     def _candidate_roots(self) -> list[Path]:
         """Return deduplicated roots to scan for data files."""
+        # When explicit roots are provided (multi-user mode), skip config discovery.
+        if self._workspace_roots is not None:
+            seen: set[Path] = set()
+            result: list[Path] = []
+            for r in self._workspace_roots:
+                r = Path(r).resolve()
+                if r not in seen and r.exists():
+                    seen.add(r)
+                    result.append(r)
+            return result
+
         roots: list[Path] = []
 
         # Config-derived roots (if present)
@@ -214,7 +233,7 @@ class BM25Retriever:
         """Yield supported files while skipping heavy/system folders."""
         supported_exts = {".txt", ".md", ".json", ".csv", ".pdf"}
         skip_dirs = {
-            ".git", ".scout", "__pycache__", ".venv", "venv",
+            ".git", ".scout", ".scout-cache", "__pycache__", ".venv", "venv",
             "node_modules", ".mypy_cache", ".pytest_cache",
         }
         stack = [root]
@@ -479,3 +498,39 @@ class _Chunk:
 def _tokenize(text: str) -> list[str]:
     """Lowercase regex tokenizer (punctuation-insensitive)."""
     return re.findall(r"[a-z0-9]+", text.lower())
+
+
+class RetrieverProxy:
+    """Shared BM25 retriever for one user, lazily rebuilt when dirty.
+
+    All sessions belonging to the same user reference the same proxy.
+    Mark it dirty after any file change; the next ``search()`` or explicit
+    ``rebuild_if_dirty()`` call will rebuild the inner index transparently.
+    """
+
+    def __init__(self, workspace_roots: list[Path], config: AppConfig) -> None:
+        self._workspace_roots = workspace_roots
+        self._config = config
+        self._inner: BM25Retriever | None = None
+        self.dirty = True  # starts dirty; built on first use
+
+    @property
+    def is_empty(self) -> bool:
+        return self._inner is None or self._inner.is_empty
+
+    def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+        if self._inner is None:
+            self._rebuild()
+        return self._inner.search(query, top_k)  # type: ignore[union-attr]
+
+    def mark_dirty(self) -> None:
+        self.dirty = True
+
+    def rebuild_if_dirty(self) -> None:
+        if self.dirty or self._inner is None:
+            self._rebuild()
+
+    def _rebuild(self) -> None:
+        logger.info("Building BM25 index for user (roots: %s)", self._workspace_roots)
+        self._inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+        self.dirty = False

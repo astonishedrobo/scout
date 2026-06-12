@@ -26,6 +26,11 @@ function summarize(step: ToolStep): string {
     return s;
   }
   if (name === "read_file") return String(args?.path ?? "");
+  if (name === "exec_command") return String(args?.cmd ?? "").substring(0, MAX);
+  if (name === "write_stdin") {
+    const sid = args?.session_id ?? "?";
+    return args?.chars ? `session ${sid}` : `poll session ${sid}`;
+  }
   if (name === "think") {
     const text = String(args?.reflection ?? "");
     return text.substring(0, 80) + (text.length > 80 ? "..." : "");
@@ -44,18 +49,17 @@ export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
   const isRunning = steps.some((s) => s.status === "executing");
 
   return (
-    <div className="mb-2">
-      {/* Collapsed summary */}
+    <div className="mb-3">
       <button
         onClick={() => setExpanded((p) => !p)}
-        className="flex items-center gap-2 text-xs text-scout-text-secondary hover:text-scout-text-primary transition-colors py-1"
+        className="flex items-center gap-2 text-xs text-scout-muted hover:text-scout-text transition-colors py-1"
       >
         <ChevronDown
           size={14}
           className={`transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`}
         />
         {isRunning && (
-          <Loader2 size={12} className="animate-spin text-scout-accent" />
+          <Loader2 size={12} className="animate-spin text-scout-text" />
         )}
         <span>
           {completedCount}/{steps.length} tool step
@@ -63,36 +67,27 @@ export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
         </span>
       </button>
 
-      {/* Expanded steps */}
       {expanded && (
-        <div className="mt-1 border border-scout-border rounded-lg overflow-hidden bg-scout-surface/50">
+        <div className="mt-2 rounded-xl bg-scout-panel border border-scout-hairline-faint overflow-hidden">
           {steps.map((step, i) => (
-            <div key={i} className="border-b border-scout-border/50 last:border-0">
-              {/* Step header */}
+            <div key={i} className={i > 0 ? "border-t border-scout-hairline-faint" : ""}>
               <div className="flex items-center gap-2 px-3 py-2">
                 {step.status === "executing" ? (
-                  <Loader2
-                    size={14}
-                    className="animate-spin text-scout-accent flex-shrink-0"
-                  />
+                  <Loader2 size={14} className="animate-spin text-scout-text shrink-0" />
                 ) : (
-                  <Check
-                    size={14}
-                    className="text-scout-success flex-shrink-0"
-                  />
+                  <Check size={14} className="text-scout-success shrink-0" />
                 )}
-                <span className="text-xs font-mono font-medium text-scout-cyan">
+                <span className="text-xs font-mono font-normal text-scout-cyan">
                   {step.name}
                 </span>
-                <span className="text-xs text-scout-text-secondary truncate">
+                <span className="text-xs text-scout-muted truncate">
                   {summarize(step)}
                 </span>
               </div>
 
-              {/* Step output */}
-              {step.status === "complete" && step.output && (
+              {step.output && (step.status === "complete" || step.status === "executing") && (
                 <div className="px-3 pb-2">
-                  <pre className="text-xs text-scout-text-secondary bg-scout-bg/50 rounded p-2 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
+                  <pre className="text-xs text-scout-muted bg-scout-canvas rounded-btn p-2 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
                     {step.output}
                   </pre>
                 </div>

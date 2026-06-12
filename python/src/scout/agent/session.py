@@ -101,6 +101,8 @@ class PersistentPythonSession:
         cwd: str | Path = ".",
         timeout: int = 30,
         python_path: str | None = None,
+        allowed_paths: list[str] | None = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self._conda_env = conda_env
         if python_path and Path(python_path).exists():
@@ -110,9 +112,16 @@ class PersistentPythonSession:
             self._python = _find_conda_python(conda_env)
         self._cwd = str(Path(cwd).resolve())
         self._timeout = timeout
+        self._cache_dir = str(Path(cache_dir or Path(self._cwd) / ".scout-cache").resolve())
+        Path(self._cache_dir).mkdir(parents=True, exist_ok=True)
+        self._read_paths = sorted({
+            str(Path(path).resolve()).rstrip("/") for path in (allowed_paths or [])
+        })
+        self._write_paths = sorted({self._cwd.rstrip("/"), self._cache_dir.rstrip("/")})
         self._proc: subprocess.Popen | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._start()
+        self._inject_path_guard()
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -131,6 +140,11 @@ class PersistentPythonSession:
         # Ensure UTF-8 output
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
+        env["MPLCONFIGDIR"] = str(Path(self._cache_dir) / "matplotlib")
+        env["XDG_CACHE_HOME"] = str(Path(self._cache_dir) / "xdg")
+        env["NUMBA_CACHE_DIR"] = str(Path(self._cache_dir) / "numba")
+        for path in (env["MPLCONFIGDIR"], env["XDG_CACHE_HOME"], env["NUMBA_CACHE_DIR"]):
+            Path(path).mkdir(parents=True, exist_ok=True)
 
         self._proc = subprocess.Popen(
             [self._python, "-u", _REPL_SCRIPT],
@@ -167,6 +181,45 @@ class PersistentPythonSession:
         logger.warning("Restarting persistent session …")
         self.close()
         self._start()
+        self._inject_path_guard()
+
+    def _inject_path_guard(self) -> None:
+        """Patch file opens with separate read and write permission roots."""
+        allowed_repr = repr(self._read_paths)
+        write_allowed_repr = repr(self._write_paths)
+        preamble = (
+            "import builtins as _b, os as _o, os.path as _op, sys as _s\n"
+            "_READ_ALLOWED = " + allowed_repr + " + [_op.realpath(p) for p in _s.path if p]\n"
+            "_WRITE_ALLOWED = " + write_allowed_repr + "\n"
+            "def _path_ok(p, allowed):\n"
+            "    import os.path as _op2\n"
+            "    r = _op.realpath(str(p))\n"
+            "    for a in allowed:\n"
+            "        try:\n"
+            "            _op2.relpath(r, a)\n"
+            "            if r == a or r.startswith(a + _op.sep):\n"
+            "                return True\n"
+            "        except ValueError:\n"
+            "            continue\n"
+            "    return False\n"
+            "_orig_open = _b.open\n"
+            "def _safe_open(f, m='r', *a, **k):\n"
+            "    allowed = _WRITE_ALLOWED if any(x in m for x in 'wax+') else _READ_ALLOWED\n"
+            "    if not _path_ok(f, allowed): raise PermissionError('Access denied: ' + str(f))\n"
+            "    return _orig_open(f, m, *a, **k)\n"
+            "_b.open = _safe_open\n"
+            "_orig_os_open = _o.open\n"
+            "def _safe_os_open(p, fl, *a, **k):\n"
+            "    write_flags = _o.O_WRONLY | _o.O_RDWR | _o.O_CREAT | _o.O_TRUNC | _o.O_APPEND\n"
+            "    allowed = _WRITE_ALLOWED if fl & write_flags else _READ_ALLOWED\n"
+            "    if not isinstance(p, int) and not _path_ok(p, allowed):\n"
+            "        raise PermissionError('Access denied: ' + str(p))\n"
+            "    return _orig_os_open(p, fl, *a, **k)\n"
+            "_o.open = _safe_os_open\n"
+        )
+        output, success = self.run(preamble)
+        if not success:
+            logger.warning("Path guard injection failed: %s", output)
 
     # ── code execution ──────────────────────────────────────────────────
 

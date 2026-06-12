@@ -1,15 +1,17 @@
 import { useState, useCallback, useEffect } from "react";
-import { X, Loader2, Check, RotateCcw, Pencil, Eye, Save } from "lucide-react";
+import { Loader2, Check, RotateCcw, Pencil, Eye, Save } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { CenterModal } from "./ui/CenterModal";
 
 interface InitWizardProps {
+  open: boolean;
   baseUrl: string;
   onClose: () => void;
 }
 
 type Step = "loading" | "env" | "generating" | "preview" | "editing" | "saving" | "done" | "error";
 
-export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
+export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
   const isDesktopMode =
     typeof navigator !== "undefined" &&
     navigator.userAgent.toLowerCase().includes("electron");
@@ -249,34 +251,24 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
   }, [content]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-scout-surface border border-scout-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-scout-border">
-          <h3 className="font-semibold text-scout-text-primary">
-            {skillExists && step !== "generating" ? "Workspace Skill" : "Initialize Workspace"}
-          </h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-scout-surface-hover text-scout-text-secondary"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+    <CenterModal
+      open={open}
+      onClose={onClose}
+      title={skillExists && step !== "generating" ? "Workspace Skill" : "Initialize Workspace"}
+      maxWidth="lg"
+    >
+        <div className="px-5 py-4">
           {isDesktopMode && (
-            <div className="mb-4 p-3 rounded-lg border border-scout-border bg-scout-bg/40">
-              <p className="text-xs text-scout-text-secondary mb-2">
+            <div className="mb-4 p-3 rounded-btn border border-scout-hairline bg-scout-canvas/40">
+              <p className="text-xs text-scout-muted mb-2">
                 Python runtime for this workspace
               </p>
               <div className="flex items-center gap-2">
                 <select
                   value={selectedDesktopEnv}
                   onChange={(e) => setSelectedDesktopEnv(e.target.value)}
-                  className="flex-1 bg-scout-bg border border-scout-border rounded-lg px-3 py-2
-                             text-sm text-scout-text-primary outline-none focus:border-scout-accent"
+                  className="flex-1 bg-scout-input-bg border border-scout-hairline rounded-btn px-3 py-2
+                             text-sm text-scout-text outline-none focus:border-scout-text"
                 >
                   {desktopEnvs.map((env) => (
                     <option key={`${env.type}:${env.value}`} value={`${env.type}:${env.value}`}>
@@ -286,27 +278,27 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
                 </select>
                 <button
                   onClick={() => applyDesktopEnv()}
-                  className="px-3 py-2 rounded-lg text-sm bg-scout-surface-hover text-scout-text-primary
+                  className="px-3 py-2 rounded-btn text-sm bg-scout-lift text-scout-text
                              hover:bg-scout-border transition-colors"
                 >
                   Apply
                 </button>
               </div>
-              <p className="text-[11px] text-scout-text-secondary mt-2">
+              <p className="text-[11px] text-scout-muted mt-2">
                 The selected runtime is auto-applied before Generate/Save.
               </p>
               {desktopEnvStatus && (
-                <p className="text-xs text-scout-text-secondary mt-2">{desktopEnvStatus}</p>
+                <p className="text-xs text-scout-muted mt-2">{desktopEnvStatus}</p>
               )}
             </div>
           )}
 
           {step === "env" && (
             <div className="flex flex-col items-center justify-center py-10">
-              <p className="text-scout-text-primary text-sm font-medium mb-1">
+              <p className="text-scout-text text-sm font-medium mb-1">
                 Select a Python environment first
               </p>
-              <p className="text-scout-text-secondary text-xs text-center max-w-md">
+              <p className="text-scout-muted text-xs text-center max-w-md">
                 This matches CLI behavior: choose runtime before generating workspace skills.
               </p>
             </div>
@@ -314,8 +306,8 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
 
           {(step === "loading" || step === "generating") && (
             <div className="flex flex-col items-center justify-center py-12">
-              <Loader2 size={32} className="animate-spin text-scout-accent mb-3" />
-              <p className="text-scout-text-secondary text-sm">
+              <Loader2 size={32} className="animate-spin text-scout-text mb-3" />
+              <p className="text-scout-muted text-sm">
                 {step === "loading"
                   ? "Checking workspace..."
                   : "Analyzing project structure and generating workspace skills..."}
@@ -325,21 +317,21 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
 
           {step === "saving" && (
             <div className="flex flex-col items-center justify-center py-12">
-              <Loader2 size={32} className="animate-spin text-scout-accent mb-3" />
-              <p className="text-scout-text-secondary text-sm">Saving...</p>
+              <Loader2 size={32} className="animate-spin text-scout-text mb-3" />
+              <p className="text-scout-muted text-sm">Saving...</p>
             </div>
           )}
 
           {step === "preview" && (
             <div className="prose-scout text-sm">
-              <p className="text-scout-text-secondary text-xs mb-3">
+              <p className="text-scout-muted text-xs mb-3">
                 {skillExists ? (
                   <>Saved at <code>.scout/skills/workspace.md</code></>
                 ) : (
                   <>Will be saved to <code>.scout/skills/workspace.md</code></>
                 )}
               </p>
-              <div className="border border-scout-border rounded-lg p-4 bg-scout-bg/50">
+              <div className="border border-scout-hairline rounded-btn p-4 bg-scout-canvas/50">
                 <MarkdownRenderer content={content} />
               </div>
             </div>
@@ -347,15 +339,15 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
 
           {step === "editing" && (
             <div>
-              <p className="text-scout-text-secondary text-xs mb-2">
+              <p className="text-scout-muted text-xs mb-2">
                 Edit the workspace skill:
               </p>
               <textarea
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
-                className="w-full h-80 bg-scout-bg border border-scout-border rounded-lg p-3
-                           text-sm text-scout-text-primary font-mono outline-none
-                           focus:border-scout-accent resize-none"
+                className="w-full h-80 bg-scout-input-bg border border-scout-hairline rounded-btn p-3
+                           text-sm text-scout-text font-mono outline-none
+                           focus:border-scout-text resize-none"
               />
             </div>
           )}
@@ -363,10 +355,10 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
           {step === "done" && (
             <div className="flex flex-col items-center justify-center py-12">
               <Check size={32} className="text-scout-success mb-3" />
-              <p className="text-scout-text-primary font-medium">
+              <p className="text-scout-text font-medium">
                 Workspace skill saved!
               </p>
-              <p className="text-scout-text-secondary text-sm mt-1">
+              <p className="text-scout-muted text-sm mt-1">
                 Saved to <code>.scout/skills/workspace.md</code>
               </p>
             </div>
@@ -379,26 +371,26 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
                   ? "Failed to save skill"
                   : "Failed to generate skill"}
               </p>
-              <p className="text-scout-text-secondary text-xs break-all">{error}</p>
+              <p className="text-scout-muted text-xs break-all">{error}</p>
             </div>
           )}
         </div>
 
         {/* Actions */}
-        <div className="px-5 py-4 border-t border-scout-border flex gap-2 justify-end">
+        <div className="px-5 py-4 border-t border-scout-hairline flex gap-2 justify-end">
           {step === "env" && (
             <>
               <button
                 onClick={startInitWithSystem}
-                className="px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 Skip (System Python)
               </button>
               <button
                 onClick={startInitWithCurrentEnv}
-                className="px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 Continue
               </button>
@@ -409,22 +401,22 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
             <>
               <button
                 onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <RotateCcw size={14} /> Regenerate
               </button>
               <button
                 onClick={startEditing}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <Pencil size={14} /> Edit
               </button>
               <button
                 onClick={() => save(content)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 <Check size={16} /> Approve & Save
               </button>
@@ -435,15 +427,15 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
             <>
               <button
                 onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <RotateCcw size={14} /> Regenerate
               </button>
               <button
                 onClick={startEditing}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 <Pencil size={14} /> Edit
               </button>
@@ -457,15 +449,15 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
                   setEditContent(content);
                   setStep("preview");
                 }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <Eye size={14} /> Preview
               </button>
               <button
                 onClick={() => save(editContent)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 <Save size={16} /> Save
               </button>
@@ -476,15 +468,15 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
             <div className="flex gap-2">
               <button
                 onClick={startEditing}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <Pencil size={14} /> Edit
               </button>
               <button
                 onClick={onClose}
-                className="px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 Close
               </button>
@@ -495,22 +487,21 @@ export function InitWizard({ baseUrl, onClose }: InitWizardProps) {
             <div className="flex gap-2">
               <button
                 onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm
-                           text-scout-text-secondary hover:bg-scout-surface-hover transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
+                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
               >
                 <RotateCcw size={14} /> Retry
               </button>
               <button
                 onClick={onClose}
-                className="px-4 py-2 rounded-lg text-sm font-medium
-                           bg-scout-accent text-white hover:bg-scout-accent-hover transition-colors"
+                className="px-4 py-2 rounded-pill text-sm font-semibold
+                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
               >
                 Close
               </button>
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </CenterModal>
   );
 }

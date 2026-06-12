@@ -20,6 +20,7 @@ import { ActivityLog } from "./ActivityLog.js";
 import { MarkdownText } from "./MarkdownText.js";
 import { theme } from "../theme.js";
 import type { ToolStep } from "../types.js";
+import type { ChatImage } from "../types.js";
 
 /* ── Types ───────────────────────────────────────────────────────── */
 
@@ -28,6 +29,7 @@ export interface Message {
   content: string;
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
+  chatImages?: ChatImage[];
 }
 
 interface MessageListProps {
@@ -71,7 +73,11 @@ export const MessageList: React.FC<MessageListProps> = ({
         <Box key={i} flexDirection="column" marginBottom={1}>
           {msg.role === "user" ? (
             /* ── User message ─────────────────────────── */
-            <Box paddingLeft={1}>
+            <Box paddingLeft={1} flexDirection="column">
+              {!!msg.chatImages?.length && msg.chatImages.map((image, imageIndex) => (
+                <Text key={image.id} color={theme.text.secondary}>  [{imageIndex + 1}] {image.name}</Text>
+              ))}
+              <Box>
               <Box width={PREFIX_WIDTH} flexShrink={0}>
                 <Text color={theme.text.accent}>{">"}</Text>
               </Box>
@@ -79,6 +85,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 <Text color={theme.text.user} wrap="wrap">
                   {msg.content}
                 </Text>
+              </Box>
               </Box>
             </Box>
           ) : (

@@ -1,34 +1,144 @@
 services:
+  # Constrained Docker API gateway. ONLY the execution-worker talks to it; the
+  # public scout-server never gets the Docker socket. Limits the worker to the
+  # container lifecycle calls it needs to launch per-session sandboxes.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: scout-docker-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - POST=1
+      - EXEC=1
+      - INFO=1
+      - VERSION=1
+      - NETWORKS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - scout-internal
+
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scout:latest
+    container_name: scout-egress-proxy
+    restart: unless-stopped
+    user: "1000:1000"
+    command:
+      - python
+      - -m
+      - scout.execution.network_proxy_service
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "7892"
+    networks:
+      - scout-internal
+      - scout-egress
+
+  execution-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scout:latest
+    container_name: scout-execution-worker
+    restart: unless-stopped
+    user: "1000:1000"
+    command:
+      - python
+      - -m
+      - scout.execution.worker_service
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "7891"
+    volumes:
+      - ./workspace/users:/srv/scout-source/users
+      - ./workspace/shared:/srv/scout-source/shared:ro
+    environment:
+      - SCOUT_WORKER_SECRET=${SCOUT_WORKER_SECRET:-scout-worker-dev-secret}
+      # Worker's own view of the workspace (used for change-detection + policy).
+      - SCOUT_WORKSPACE_USERS=/srv/scout-source/users
+      - SCOUT_WORKSPACE_SHARED=/srv/scout-source/shared
+      - SCOUT_EGRESS_PROXY_URL=http://egress-proxy:7892
+      # Per-session sandbox containers ("Docker becomes the sandbox").
+      - SCOUT_EXECUTION_ISOLATION=container
+      - SCOUT_SANDBOX_IMAGE=scout:latest
+      - SCOUT_SANDBOX_NETWORK=scout-internal
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+      # Host-side bind sources for sandbox containers (Docker resolves mount
+      # sources on the HOST, not inside this container). Override SCOUT_HOST_ROOT
+      # with the absolute host path to this repo if ${PWD} is not your repo root.
+      - SCOUT_WORKSPACE_USERS_HOST=${SCOUT_HOST_ROOT:-${PWD}}/workspace/users
+      - SCOUT_WORKSPACE_SHARED_HOST=${SCOUT_HOST_ROOT:-${PWD}}/workspace/shared
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - egress-proxy
+      - docker-socket-proxy
+    networks:
+      - scout-internal
+
   scout-server:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: scout-server
     restart: unless-stopped
+    depends_on:
+      - execution-worker
+      - egress-proxy
     ports:
       - "4200:4200"
     volumes:
-      # Persist user sessions and SQLite database
-      - scout-data:/root/.config/scout
-      # Mount external workspace where agent can view and create files
+      - scout-data:/home/scout/.config/scout
       - ./workspace:/app/workspace
-      # Mount domain expert skills (read-only)
       - ./skills:/app/workspace/.scout/skills:ro
     environment:
-      # Provide API keys for the agent
+      # ── LLM providers ────────────────────────────────────────────────────────
+      # API keys for each provider. Set these in a .env file (see .env.example).
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      
-      # Provide available models for each provider (comma-separated)
-      # - OPENAI_MODELS=openai/gpt-4o,openai/gpt-4o-mini
-      # - ANTHROPIC_MODELS=anthropic/claude-3-5-sonnet-20241022
-      # - GROQ_MODELS=groq/llama-3.1-8b-instant,groq/llama-3.3-70b-versatile
-      
-      # Set default LLM model
-      - AGENT_MODEL=${AGENT_MODEL:-}
-      # Required for JWT authentication security!
-      - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY:-my-super-secret-jwt-key}
+
+      # Models exposed per provider (comma-separated LiteLLM strings).
+      # If unset, a built-in default list is used for each provider that has a key.
+      - GROQ_MODELS=${GROQ_MODELS:-groq/llama-3.1-8b-instant,groq/llama-3.3-70b-versatile,groq/openai/gpt-oss-20b}
+      - OPENAI_MODELS=${OPENAI_MODELS:-openai/gpt-5}
+      - ANTHROPIC_MODELS=${ANTHROPIC_MODELS:-}
+
+      # Default model the agent uses (must be one of the models listed above).
+      - AGENT_MODEL=${AGENT_MODEL:-groq/llama-3.3-70b-versatile}
+
+      # ── Security ─────────────────────────────────────────────────────────────
+      # Change SCOUT_SECRET_KEY to a long random string before deploying.
+      - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY:-my-super-secret-jwt-key-change-me}
+      - SCOUT_WORKER_SECRET=${SCOUT_WORKER_SECRET:-scout-worker-dev-secret}
+      - SCOUT_WORKER_URL=http://execution-worker:7891
+
+      # ── Admin accounts ───────────────────────────────────────────────────────
+      # Comma-separated usernames that are always admin, regardless of registration
+      # order. If unset, the first registered user becomes admin automatically.
+      - SCOUT_ADMIN_USERS=${SCOUT_ADMIN_USERS:-}
+    networks:
+      - scout-internal
+      - default
 
 volumes:
   scout-data:
+
+networks:
+  scout-internal:
+    internal: true
+  scout-egress:
+    internal: false
+  default:
+    driver: bridge

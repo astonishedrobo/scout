@@ -47,7 +47,11 @@ import {
   sendEditDone,
   reloadServerConfig,
   restoreServerSession,
+  ensureServerSession,
+  uploadChatImage,
 } from "./api.js";
+import { readClipboardImage } from "./clipboardImage.js";
+import type { ChatImage } from "./types.js";
 import { launchEditor, getPreferredEditorId } from "./editors.js";
 import {
   createSession,
@@ -228,7 +232,7 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
 
   // ── Slash command handler ─────────────────────────────────────
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (text: string, chatImages: ChatImage[] = []) => {
       if (text.startsWith("/")) {
         const parts = text.split(/\s+/);
         const cmd = parts[0]!.toLowerCase();
@@ -381,7 +385,8 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
           pruneOldSessions(cwd);
         } catch { /* best-effort */ }
       }
-      await sendMessage(text, sid ?? undefined);
+      if (sid && baseUrl) await ensureServerSession(baseUrl, sid, model);
+      await sendMessage(text, sid ?? undefined, chatImages);
     },
     [isReady, baseUrl, sendMessage, reset, exit, modelList, cwd, hasSkills, skillsDir, model, llmConfigured, sessionId],
   );
@@ -617,7 +622,8 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
             role: m.role,
             content: m.content,
           }));
-          await restoreServerSession(baseUrl, simple);
+          await ensureServerSession(baseUrl, session.sessionId, model);
+          await restoreServerSession(baseUrl, session.sessionId, restored);
         }
 
         console.log(
@@ -796,6 +802,18 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
       {/* ── Input (Composer) ─────────────────────────────── */}
       <ChatInput
         onSubmit={handleSubmit}
+        onPasteImage={async () => {
+          if (!baseUrl) return null;
+          let sid = sessionId;
+          if (!sid) {
+            sid = createSession(cwd, model);
+            setSessionId(sid);
+          }
+          await ensureServerSession(baseUrl, sid, model);
+          const image = await readClipboardImage();
+          if (!image) return null;
+          return uploadChatImage(baseUrl, sid, image.bytes, image.name, image.type);
+        }}
         disabled={isLoading || !isReady || modelPickerOpen || sessionPickerOpen || editorPickerOpen || envPickerOpen || initRunning || !!pendingApproval || !!pendingInitWrite}
         cwd={cwd}
         width={terminalWidth}

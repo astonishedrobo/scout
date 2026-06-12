@@ -22,6 +22,12 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message } from "./components/MessageList.js";
 import type { ToolStep } from "./types.js";
+import type { ChatImage } from "./types.js";
+import {
+  DEFAULT_SESSION_TITLE,
+  LEGACY_DEFAULT_TITLES,
+  generateSessionTitle,
+} from "./sessionTitle.js";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -49,6 +55,7 @@ interface UserLine {
   timestamp: string;
   content: string;
   attachments?: string[];
+  chat_images?: ChatImage[];
 }
 
 interface AssistantLine {
@@ -85,10 +92,30 @@ function jsonLine(obj: JournalLine): string {
   return JSON.stringify(obj) + "\n";
 }
 
-function titleFromContent(content: string): string {
-  const cleaned = content.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= 60) return cleaned;
-  return cleaned.slice(0, 57) + "…";
+function readHeader(file: string): HeaderLine | null {
+  try {
+    const raw = readFileSync(file, "utf-8");
+    const first = raw.split("\n")[0];
+    if (!first) return null;
+    const header = JSON.parse(first) as HeaderLine;
+    return header.type === "header" ? header : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSessionTitle(cwd: string, sessionId: string, title: string): void {
+  const file = sessionFile(cwd, sessionId);
+  const raw = readFileSync(file, "utf-8");
+  const lines = raw.split("\n");
+  try {
+    const header = JSON.parse(lines[0]) as HeaderLine;
+    header.title = title;
+    lines[0] = JSON.stringify(header);
+    writeFileSync(file, lines.join("\n"), { mode: 0o600 });
+  } catch {
+    // Best-effort
+  }
 }
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -106,7 +133,7 @@ export function createSession(cwd: string, model?: string): string {
     sessionId: id,
     projectDir: resolve(cwd),
     createdAt: new Date().toISOString(),
-    title: "New session",
+    title: DEFAULT_SESSION_TITLE,
     model,
   };
   writeFileSync(sessionFile(cwd, id), jsonLine(header), { mode: 0o600 });
@@ -121,15 +148,33 @@ export function appendUserMessage(
   sessionId: string,
   content: string,
   attachments?: string[],
+  chatImages?: ChatImage[],
 ): void {
   const line: UserLine = {
     type: "user",
     timestamp: new Date().toISOString(),
     content,
     ...(attachments?.length ? { attachments } : {}),
+    ...(chatImages?.length ? { chat_images: chatImages } : {}),
   };
   appendFileSync(sessionFile(cwd, sessionId), jsonLine(line));
-  updateTitle(cwd, sessionId, content);
+}
+
+export function scheduleSessionTitleGeneration(
+  cwd: string,
+  sessionId: string,
+  message: string,
+  model: string,
+): void {
+  void (async () => {
+    const header = readHeader(sessionFile(cwd, sessionId));
+    if (!header || !LEGACY_DEFAULT_TITLES.has(header.title)) return;
+    const title = await generateSessionTitle(message, model);
+    if (LEGACY_DEFAULT_TITLES.has(title)) return;
+    const latest = readHeader(sessionFile(cwd, sessionId));
+    if (!latest || !LEGACY_DEFAULT_TITLES.has(latest.title)) return;
+    setSessionTitle(cwd, sessionId, title);
+  })();
 }
 
 /**
@@ -177,7 +222,7 @@ export function loadSession(
       if (parsed.type === "header") {
         header = parsed;
       } else if (parsed.type === "user") {
-        messages.push({ role: "user", content: parsed.content });
+        messages.push({ role: "user", content: parsed.content, chatImages: parsed.chat_images });
         lastTimestamp = parsed.timestamp;
       } else if (parsed.type === "assistant") {
         messages.push({
@@ -286,25 +331,4 @@ export function pruneOldSessions(
   }
 }
 
-/* ── Internal ─────────────────────────────────────────────────────── */
-
-/**
- * Update the session title from the first user message.
- * Only updates if title is still the default "New session".
- */
-function updateTitle(cwd: string, sessionId: string, firstContent: string): void {
-  const file = sessionFile(cwd, sessionId);
-  const raw = readFileSync(file, "utf-8");
-  const lines = raw.split("\n");
-
-  try {
-    const header = JSON.parse(lines[0]) as HeaderLine;
-    if (header.title !== "New session") return;
-
-    header.title = titleFromContent(firstContent);
-    lines[0] = JSON.stringify(header);
-    writeFileSync(file, lines.join("\n"), { mode: 0o600 });
-  } catch {
-    // Best-effort — don't crash on title update failure
-  }
-}
+export { DEFAULT_SESSION_TITLE, LEGACY_DEFAULT_TITLES } from "./sessionTitle.js";

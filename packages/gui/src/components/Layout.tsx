@@ -6,6 +6,8 @@ interface LayoutProps {
   onToggleSidebar: () => void;
   sidebar: ReactNode;
   children: ReactNode;
+  headerActions?: ReactNode;
+  artifactPanel?: ReactNode;
 }
 
 export function Layout({
@@ -13,6 +15,8 @@ export function Layout({
   onToggleSidebar,
   sidebar,
   children,
+  headerActions,
+  artifactPanel,
 }: LayoutProps) {
   return (
     <div className="h-screen flex overflow-hidden bg-scout-bg">
@@ -47,10 +51,12 @@ export function Layout({
           >
             {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
           </button>
+          {headerActions && <div className="ml-auto flex items-center gap-1">{headerActions}</div>}
         </div>
 
         {children}
       </main>
+      {artifactPanel}
     </div>
   );
 }

@@ -8,12 +8,17 @@ import {
   Moon,
   AlertTriangle,
   MessageSquare,
+  Pencil,
   Trash2,
   ChevronUp,
+  Shield,
+  LogOut,
 } from "lucide-react";
 import { useState } from "react";
 import type { Theme } from "../hooks/useTheme";
 import type { SessionMeta } from "../hooks/useSessions";
+import { CenterModal } from "./ui/CenterModal";
+import { Button } from "./ui/Button";
 
 interface SidebarProps {
   onNewChat: () => void;
@@ -26,11 +31,14 @@ interface SidebarProps {
   sessions: SessionMeta[];
   currentSessionId: string | null;
   onResumeSession: (id: string) => void;
+  onRenameSession: (id: string, title: string) => Promise<void>;
   onDeleteSession: (id: string) => void;
   hasModels: boolean;
   onLogout?: () => void;
   username?: string;
   isMultiUser?: boolean;
+  isAdmin?: boolean;
+  onOpenAdmin?: () => void;
 }
 
 function timeAgo(iso: string): string {
@@ -56,57 +64,77 @@ export function Sidebar({
   sessions,
   currentSessionId,
   onResumeSession,
+  onRenameSession,
   onDeleteSession,
   hasModels,
   onLogout,
   username,
   isMultiUser,
+  isAdmin,
+  onOpenAdmin,
 }: SidebarProps) {
   const [bottomExpanded, setBottomExpanded] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<SessionMeta | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+
+  const saveTitle = async (session: SessionMeta) => {
+    const title = editingTitle.trim();
+    if (!title || title === session.title) {
+      setEditingId(null);
+      return;
+    }
+    try {
+      await onRenameSession(session.sessionId, title);
+      setEditingId(null);
+    } catch (err) {
+      console.error("Failed to rename session:", err);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (deleteTarget) {
+      onDeleteSession(deleteTarget.sessionId);
+      setDeleteTarget(null);
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full bg-scout-sidebar-bg">
-      {/* ── Top: Logo + New Chat ────────────────────────────── */}
-      <div className="px-3 pt-4 pb-2">
-        <div className="flex items-center justify-between mb-3 px-1">
-          <div className="flex items-center gap-2">
-            <Sparkles size={18} className="text-scout-accent" />
-            <span className="font-semibold text-scout-text-primary text-[15px]">Scout</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={onToggleTheme}
-              className="p-1.5 rounded-md hover:bg-scout-surface-hover text-scout-text-secondary transition-colors"
-              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            >
-              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-            </button>
-            <span
-              className={`w-2 h-2 rounded-full ${isConnected ? "bg-scout-success" : "bg-scout-error"}`}
-            />
-          </div>
+    <div className="flex flex-col h-full w-[260px] bg-transparent border-r border-scout-hairline overflow-hidden">
+      <div className="px-4 pb-3">
+        <div className="flex items-center justify-between h-12 mb-3">
+          <span className="font-semibold text-scout-text text-[15px]">Scout</span>
+          <button
+            onClick={onToggleTheme}
+            className="p-2 rounded-btn hover:bg-scout-lift text-scout-muted transition-colors"
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          >
+            {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
         </div>
 
-        <button
+        <Button
           onClick={onNewChat}
-          className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm
-                     text-scout-text-primary hover:bg-scout-sidebar-hover transition-colors"
+          accent="contrast"
+          variant="filled"
+          surface="panel"
+          fullWidth
+          size="default"
         >
-          <Plus size={16} className="text-scout-text-secondary" />
+          <Plus size={16} />
           New chat
-        </button>
+        </Button>
       </div>
 
-      {/* ── No LLM warning ──────────────────────────────────── */}
       {!hasModels && isConnected && !isMultiUser && (
-        <div className="mx-3 mb-2 p-2.5 rounded-lg bg-scout-warning-muted border border-scout-warning/20">
+        <div className="mx-4 mb-3 p-3 rounded-xl bg-scout-warning-muted">
           <div className="flex items-start gap-2">
-            <AlertTriangle size={14} className="text-scout-warning mt-0.5 flex-shrink-0" />
+            <AlertTriangle size={14} className="text-scout-warning mt-0.5 shrink-0" />
             <div>
-              <p className="text-xs font-medium text-scout-text-primary">No LLM configured</p>
-              <p className="text-xs text-scout-text-secondary mt-0.5">
+              <p className="text-xs font-medium text-scout-text">No LLM configured</p>
+              <p className="text-caption text-scout-muted mt-0.5">
                 Open{" "}
-                <button onClick={onOpenSettings} className="text-scout-accent hover:underline">
+                <button onClick={onOpenSettings} className="underline hover:text-scout-text">
                   Settings
                 </button>{" "}
                 to add an API key.
@@ -116,37 +144,83 @@ export function Sidebar({
         </div>
       )}
 
-      {/* ── Sessions list ───────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-3 pt-1">
+      <div className="flex-1 overflow-y-auto px-4 pt-1">
         {sessions.length > 0 && (
-          <p className="text-[11px] uppercase tracking-wider text-scout-text-secondary/70 px-2 py-1.5 font-medium">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted px-1 py-2">
             Recents
           </p>
         )}
         {sessions.length === 0 ? (
-          <p className="text-xs text-scout-text-secondary/60 px-2 py-6 text-center">
-            Your conversations will appear here
+          <p className="text-caption text-scout-muted leading-relaxed px-1 pt-2">
+            No conversations yet
           </p>
         ) : (
-          <div className="space-y-px">
+          <div className="space-y-1">
             {sessions.map((s) => (
               <div
                 key={s.sessionId}
-                className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors text-sm
+                className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-sm
                   ${s.sessionId === currentSessionId
-                    ? "bg-scout-sidebar-hover text-scout-text-primary"
-                    : "text-scout-text-secondary hover:bg-scout-sidebar-hover hover:text-scout-text-primary"
+                    ? "bg-scout-input-bg ring-1 ring-scout-hairline"
+                    : "bg-transparent hover:bg-scout-input-bg"
                   }`}
                 onClick={() => onResumeSession(s.sessionId)}
               >
-                <MessageSquare size={14} className="flex-shrink-0 opacity-50" />
-                <span className="flex-1 truncate">{s.title}</span>
+                <MessageSquare size={14} className="shrink-0 text-scout-muted" />
+                <div className="flex-1 min-w-0">
+                  {editingId === s.sessionId ? (
+                    <input
+                      autoFocus
+                      value={editingTitle}
+                      maxLength={80}
+                      aria-label="Conversation title"
+                      className="w-full rounded-md border border-scout-hairline bg-scout-bg px-1.5 py-0.5 text-[13px] font-medium text-scout-text outline-none focus:border-scout-muted"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      onBlur={() => void saveTitle(s)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === "Enter") void saveTitle(s);
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="block truncate text-[13px] font-medium text-scout-text">{s.title}</span>
+                  )}
+                  <span className="text-caption text-scout-muted">{timeAgo(s.updatedAt)}</span>
+                  {s.parentSessionId && (
+                    <button
+                      type="button"
+                      className="text-caption text-scout-muted hover:text-scout-text underline-offset-2 hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResumeSession(s.parentSessionId!);
+                      }}
+                    >
+                      ↳ fork of parent
+                    </button>
+                  )}
+                </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onDeleteSession(s.sessionId); }}
-                  className="opacity-0 group-hover:opacity-50 hover:!opacity-100 p-0.5 rounded transition-opacity"
-                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingId(s.sessionId);
+                    setEditingTitle(s.title);
+                  }}
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text"
+                  title="Edit title"
                 >
-                  <Trash2 size={12} />
+                  <Pencil size={13} />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget(s);
+                  }}
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error"
+                  title="Delete session"
+                >
+                  <Trash2 size={13} />
                 </button>
               </div>
             ))}
@@ -154,44 +228,102 @@ export function Sidebar({
         )}
       </div>
 
-      {/* ── Bottom bar (expandable like Claude) ─────────────── */}
-      <div className="border-t border-scout-border">
-        {/* Expanded section */}
+      <div className="border-t border-scout-hairline-faint">
         {bottomExpanded && (
           <div className="px-2 pt-2 pb-1 space-y-0.5">
-            {username && (
-              <div className="px-3 py-1 text-xs text-scout-text-secondary/60 uppercase font-bold tracking-wider">
-                {username}
-              </div>
-            )}
-            <BottomNavItem icon={<Settings size={15} />} label="Settings" onClick={() => { setBottomExpanded(false); onOpenSettings(); }} />
+            <BottomNavItem
+              icon={<Settings size={15} />}
+              label="Settings"
+              onClick={() => {
+                setBottomExpanded(false);
+                onOpenSettings();
+              }}
+            />
             {!isMultiUser && (
-              <BottomNavItem icon={<FolderOpen size={15} />} label="Init Workspace" onClick={() => { setBottomExpanded(false); onOpenInit(); }} />
+              <BottomNavItem
+                icon={<FolderOpen size={15} />}
+                label="Init Workspace"
+                onClick={() => {
+                  setBottomExpanded(false);
+                  onOpenInit();
+                }}
+              />
             )}
-            <BottomNavItem icon={<HelpCircle size={15} />} label="Get help" onClick={() => { setBottomExpanded(false); onOpenHelp(); }} />
+            {isAdmin && isMultiUser && (
+              <BottomNavItem
+                icon={<Shield size={15} />}
+                label="Admin"
+                onClick={() => {
+                  setBottomExpanded(false);
+                  onOpenAdmin?.();
+                }}
+              />
+            )}
+            <BottomNavItem
+              icon={<HelpCircle size={15} />}
+              label="Get help"
+              onClick={() => {
+                setBottomExpanded(false);
+                onOpenHelp();
+              }}
+            />
             {onLogout && (
-              <BottomNavItem icon={<Trash2 size={15} />} label="Logout" onClick={() => { setBottomExpanded(false); onLogout(); }} />
+              <BottomNavItem
+                icon={<LogOut size={15} />}
+                label="Logout"
+                onClick={() => {
+                  setBottomExpanded(false);
+                  onLogout();
+                }}
+              />
             )}
           </div>
         )}
 
-        {/* Clickable bottom bar */}
         <button
           onClick={() => setBottomExpanded((p) => !p)}
-          className="w-full flex items-center gap-2 px-4 py-3
-                     text-sm text-scout-text-secondary hover:text-scout-text-primary
-                     hover:bg-scout-sidebar-hover transition-colors"
+          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm text-scout-text hover:bg-scout-input-bg transition-colors"
+          title="Account & app menu"
         >
-          <div className="w-6 h-6 rounded-full bg-scout-accent/20 flex items-center justify-center flex-shrink-0">
-            <Sparkles size={12} className="text-scout-accent" />
+          <div className="w-7 h-7 rounded-pill bg-scout-input-bg flex items-center justify-center shrink-0">
+            {username ? (
+              <span className="text-caption font-semibold text-scout-text uppercase">
+                {username.charAt(0)}
+              </span>
+            ) : (
+              <Sparkles size={12} className="text-scout-muted" />
+            )}
           </div>
-          <span className="flex-1 text-left text-xs truncate">Scout</span>
+          <span className="flex-1 text-left text-sm font-medium truncate capitalize">
+            {username ?? "Account"}
+          </span>
           <ChevronUp
             size={14}
-            className={`transition-transform ${bottomExpanded ? "" : "rotate-180"}`}
+            className={`text-scout-muted transition-transform ${bottomExpanded ? "" : "rotate-180"}`}
           />
         </button>
       </div>
+
+      <CenterModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete conversation"
+        maxWidth="sm"
+      >
+        <div className="px-5 py-4 space-y-4">
+          <p className="text-sm text-scout-muted">
+            Delete &ldquo;{deleteTarget?.title}&rdquo;? This cannot be undone.
+          </p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" surface="panel" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="filled" surface="panel" accent="contrast" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </div>
+        </div>
+      </CenterModal>
     </div>
   );
 }
@@ -208,9 +340,7 @@ function BottomNavItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm
-                 text-scout-text-secondary hover:bg-scout-sidebar-hover
-                 hover:text-scout-text-primary transition-colors"
+      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-btn text-sm font-medium text-scout-text hover:bg-scout-lift transition-colors"
     >
       {icon}
       {label}

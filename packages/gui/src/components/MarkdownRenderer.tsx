@@ -1,10 +1,16 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Copy, Check } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useTheme } from "../hooks/useTheme";
+
+const mermaidCache = new Map<string, string>();
+let mermaidModule: Promise<typeof import("mermaid")> | null = null;
+function hashSource(source: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+  return (hash >>> 0).toString(16);
+}
 
 interface MarkdownRendererProps {
   content: string;
@@ -26,48 +32,91 @@ function CodeBlock({
   }, [children]);
 
   return (
-    <div className="relative group my-2 rounded-lg overflow-hidden border border-scout-border">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-scout-surface border-b border-scout-border">
-        <span className="text-xs text-scout-text-secondary font-mono">
-          {language || "text"}
-        </span>
+    <div className="scout-code-block relative group my-2 rounded-card overflow-hidden border border-scout-hairline">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-scout-panel border-b border-scout-hairline">
+        <span className="text-xs text-scout-muted font-mono">{language || "text"}</span>
         <button
           onClick={handleCopy}
-          className="text-scout-text-secondary hover:text-scout-text-primary transition-colors p-0.5"
+          className="text-scout-muted hover:text-scout-text transition-colors p-0.5"
         >
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
       </div>
-      <SyntaxHighlighter
-        language={language || "text"}
-        style={oneDark}
-        customStyle={{
-          margin: 0,
-          padding: "1rem",
-          background: "var(--scout-code-bg)",
-          fontSize: "0.8125rem",
-          lineHeight: "1.5",
-        }}
-      >
-        {children}
-      </SyntaxHighlighter>
+      <pre className="m-0 p-4 bg-scout-code-bg text-scout-text text-[0.8125rem] leading-normal font-mono overflow-x-auto">
+        <code>{children}</code>
+      </pre>
     </div>
   );
 }
 
+function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "dark" }) {
+  const [svg, setSvg] = useState(() => mermaidCache.get(source) ?? "");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    if (!mermaidModule) {
+      mermaidModule = import("mermaid").then((module) => {
+        module.default.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: theme === "dark" ? "dark" : "neutral",
+        });
+        return module;
+      });
+    }
+    mermaidModule
+      .then(({ default: mermaid }) => {
+        const cached = mermaidCache.get(source);
+        return cached ? { svg: cached } : mermaid.render(`mermaid-${hashSource(source)}`, source);
+      })
+      .then(({ svg }) => {
+        mermaidCache.set(source, svg);
+        if (active) setSvg(svg);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [source, theme]);
+  if (error) return <pre className="text-xs text-scout-error whitespace-pre-wrap">{error}</pre>;
+  return (
+    <div
+      className="my-3 overflow-x-auto rounded-card border border-scout-hairline bg-scout-panel p-3"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+  const { theme } = useTheme();
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw]}
       components={{
-        code({ className, children, ...props }) {
-          const match = /language-(\w+)/.exec(className || "");
+        // Fenced blocks are <pre><code>…</code></pre>; CodeBlock already renders its own
+        // container, so unwrap the outer <pre> to avoid a duplicate empty box.
+        pre({ children }) {
+          return <>{children}</>;
+        },
+        code({ className, children, node: _node, ...props }) {
           const code = String(children).replace(/\n$/, "");
+          // Nested ``` inside a displayed file fence (e.g. ```mermaid) closes the outer
+          // fence early and leaves a trailing empty ``` artifact — skip it.
+          if (!code.trim()) return null;
 
-          if (match) {
-            return <CodeBlock language={match[1]} children={code} />;
+          const match = /language-(\w+)/.exec(className || "");
+          const language = match?.[1];
+
+          if (language === "mermaid") {
+            return <MermaidDiagram source={code} theme={theme} />;
+          }
+
+          // Fenced block: language tag, or multiline body (inline code stays a <code> pill).
+          if (language || code.includes("\n")) {
+            return <CodeBlock language={language || "text"}>{code}</CodeBlock>;
           }
 
           return (

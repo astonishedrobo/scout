@@ -12,6 +12,7 @@ import {
   parseFileRefs,
   appendUserMessage,
   appendAssistantMessage,
+  scheduleSessionTitleGeneration,
 } from "scout-core";
 import type { ChatEvent, ToolStep, Message } from "scout-core";
 import type { ApprovalRequest } from "../components/ApprovalPrompt.js";
@@ -119,6 +120,9 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
             displayMessage,
             attachments.length ? attachments.map((a) => a.path) : undefined,
           );
+          if (model) {
+            scheduleSessionTitleGeneration(cwd, effectiveSession, displayMessage, model);
+          }
         } catch { /* best-effort */ }
       }
 

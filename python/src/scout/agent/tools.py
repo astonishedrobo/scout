@@ -13,9 +13,10 @@ from typing import TYPE_CHECKING
 
 from langchain_core.tools import tool
 
-from .file_guard import is_path_denied, is_name_denied, scan_code_for_denied_paths
+from .file_guard import is_path_denied, is_name_denied, scan_code_for_denied_paths, WorkspaceGuard
 
 if TYPE_CHECKING:
+    from ..execution.service import ExecutionService
     from ..retriever import BM25Retriever
     from .session import PersistentPythonSession
 
@@ -24,18 +25,33 @@ if TYPE_CHECKING:
 
 
 def make_tools(
-    session: "PersistentPythonSession",
     retriever: "BM25Retriever",
     data_dir: str | Path,
     disable_write_tools: bool = False,
+    guard: "WorkspaceGuard | None" = None,
+    execution_service: "ExecutionService | None" = None,
+    session: "PersistentPythonSession | None" = None,
+    allowed_tools: frozenset[str] | None = None,
+    *,
+    personal_dir: str | Path | None = None,
+    server_mode: bool = False,
+    user_id: str = "default",
+    use_memories: bool = True,
+    allow_request_permissions: bool = True,
+    request_permissions_fn=None,
 ) -> list:
-    """Create tool functions, binding *session* and *retriever* via closures."""
+    """Create tool functions, binding resources via closures."""
 
     data_dir = str(Path(data_dir).resolve())
     _fallback_exts = {".txt", ".md", ".json", ".csv"}
 
+    def _read_denied(p: Path) -> bool:
+        return guard.is_read_denied(p) if guard else is_path_denied(p)
+
+    def _write_denied(p: Path) -> bool:
+        return guard.is_write_denied(p) if guard else is_path_denied(p)
+
     def _fallback_search_documents(query: str, top_k: int) -> str:
-        """Config-free local text search across common data file types."""
         root = Path(data_dir)
         q = query.strip().lower()
         if not q:
@@ -47,10 +63,12 @@ def make_tools(
                 continue
             if fpath.suffix.lower() not in _fallback_exts:
                 continue
-            if is_name_denied(fpath.name) or is_path_denied(fpath):
+            if is_name_denied(fpath.name) or _read_denied(fpath):
+                continue
+            if ".scout-executions" in fpath.parts or ".scout-cache" in fpath.parts:
                 continue
             try:
-                if fpath.stat().st_size > 100_000_000:  # 100 MB guard
+                if fpath.stat().st_size > 100_000_000:
                     continue
                 text = fpath.read_text(errors="replace")
             except Exception:
@@ -88,83 +106,111 @@ def make_tools(
         ]
         return "\n\n---\n\n".join(parts)
 
-    # ── 1. run_code ──────────────────────────────────────────────────
+    # ── Execution tools ──────────────────────────────────────────────
 
     @tool
-    def run_code(code: str, description: str = "") -> str:
-        """Execute Python code in a persistent session.
+    async def run_python(code: str, description: str = "") -> str:
+        """Execute Python code in a persistent sandboxed session.
 
-        **When to use:** Any data analysis — loading CSVs, filtering
-        DataFrames, computing statistics/z-scores, data transformations.
-        This is your primary analysis tool.  Variables, imports, and
-        DataFrames persist across calls, so import once and reuse.
-
-        **When NOT to use:** Simple file operations (use read_file/write_file)
-        or document search (use search_documents).
-
-        **Tips:**
-        - Always `pd.read_csv(..., low_memory=False)` for CSVs.
-        - Never `print(df)` — use `.head()`, `.shape`, `.describe()`, `.T`.
-        - Do not generate plots (`matplotlib` / `seaborn`); plot images are
-          not returned as tool output in this pipeline.
-        - Batch related operations in one call.
-        - For shell: `import subprocess; subprocess.run(...)`.
-
-        Parameters
-        ----------
-        code : str
-            Python code to execute.
-        description : str
-            Brief description of what this code does (shown to the user).
+        Variables, imports, and DataFrames persist across calls.
+        Use for data analysis, computation, and coding tasks.
+        For saving files use write_file or write_binary_artifact instead.
         """
-        denied = scan_code_for_denied_paths(code, base_dir=data_dir)
+        if execution_service:
+            result = await execution_service.run_python(code, description)
+            return result.text
+        return _legacy_run_code(code)
+
+    @tool
+    async def run_code(code: str, description: str = "") -> str:
+        """Backwards-compatible alias for run_python."""
+        return await run_python.ainvoke({"code": code, "description": description})
+
+    @tool
+    async def exec_command(
+        cmd: str,
+        workdir: str = "",
+        yield_time_ms: int = 10_000,
+        description: str = "",
+    ) -> str:
+        """Run a command in a PTY, returning output or a session ID for ongoing interaction.
+
+        Short commands finish within yield_time_ms and return exit code.
+        Long-running commands return a session ID — poll with write_stdin(session_id, "").
+        File writes are staged for approval. Network access requires approval.
+        """
+        if not execution_service or not execution_service.enabled:
+            return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
+        result = await execution_service.exec_command(
+            cmd,
+            workdir=workdir,
+            yield_time_ms=yield_time_ms,
+            description=description,
+        )
+        return result.text
+
+    @tool
+    async def write_stdin(
+        session_id: int,
+        chars: str = "",
+        yield_time_ms: int = 10_000,
+    ) -> str:
+        """Write characters to an existing unified exec session and return recent output.
+
+        Use empty chars to poll a running process. Session ID comes from exec_command.
+        """
+        if not execution_service or not execution_service.enabled:
+            return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
+        result = await execution_service.write_stdin(
+            session_id,
+            chars,
+            yield_time_ms=yield_time_ms,
+        )
+        return result.text
+
+    @tool
+    async def run_shell(command: str, description: str = "") -> str:
+        """Legacy one-shot shell (used when unified_shell is disabled)."""
+        if not execution_service or not execution_service.enabled:
+            return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
+        result = await execution_service.run_shell(command, description)
+        return result.text
+
+    @tool
+    async def run_node(code: str, description: str = "") -> str:
+        """Execute JavaScript/Node.js code in an isolated sandbox."""
+        if not execution_service or not execution_service.enabled:
+            return "[SANDBOX UNAVAILABLE] Node execution requires an active execution sandbox."
+        result = await execution_service.run_node(code, description)
+        return result.text
+
+    def _legacy_run_code(code: str) -> str:
+        if session is None:
+            return "[SANDBOX UNAVAILABLE] Code execution is disabled."
+        path_checker = guard.is_read_denied if guard else None
+        denied = scan_code_for_denied_paths(code, base_dir=data_dir, path_checker=path_checker)
         if denied:
             return (
-                f"[Access denied: your code attempts to access protected/administrative files: "
-                f"{', '.join(denied)}. This path is blocked for security (contains .scout, .git, or system secrets). "
-                f"Please rewrite your analysis without accessing these internal files.]"
+                f"[Access denied: your code attempts to access protected files: "
+                f"{', '.join(denied)}]"
             )
         try:
             output, success = session.run(code, timeout=15)
         except Exception as exc:
             return f"[Session error: {exc}]"
-        
         if not output:
-            return (
-                "[Code ran successfully but produced no output. "
-                "If you expected a result, rerun with explicit print(...).]"
-            )
+            return "[Code ran successfully but produced no output. Use explicit print(...).]"
         return output
 
     # ── 2. read_file ─────────────────────────────────────────────────
 
     @tool
     def read_file(path: str, max_lines: int = 200) -> str:
-        """Read a file and return its first *max_lines* lines as text.
-
-        **When to use:** Peeking at text/markdown documents, checking
-        the first few lines of a CSV or JSON to understand structure,
-        reading configuration files.
-
-        **When NOT to use:** Heavy data analysis on CSVs (use run_code
-        with pandas instead — it's faster and supports filtering).
-
-        **Note:** If the file is not found, this tool lists all files
-        in the parent directory so you can find the correct filename.
-
-        Parameters
-        ----------
-        path : str
-            Absolute or relative path (relative paths resolved from the
-            data directory).  Use filenames from the manifest or from
-            list_files output.
-        max_lines : int
-            Maximum number of lines to return (default 200).
-        """
+        """Read a file and return its first *max_lines* lines as text."""
         p = Path(path)
         if not p.is_absolute():
             p = Path(data_dir) / p
-        if is_path_denied(p):
+        if _read_denied(p):
             return f"[Access denied: {p.name} is a protected file]"
         if not p.exists():
             parent = p.parent
@@ -172,6 +218,7 @@ def make_tools(
                 siblings = sorted(
                     f.name for f in parent.iterdir()
                     if f.is_file() and not is_name_denied(f.name)
+                    and ".scout-executions" not in f.parts
                 )
                 listing = "\n  ".join(siblings[:30]) or "(empty)"
                 try:
@@ -192,27 +239,13 @@ def make_tools(
         except Exception as exc:
             return f"[Error reading {p}: {exc}]"
 
-    # ── 3. list_files ──────────────────────────────────────────────────
-
     @tool
     def list_files(directory: str = ".") -> str:
-        """List files and sub-directories in a directory.
-
-        **When to use:** Exploring a sub-directory not fully described
-        in the manifest, or checking for newly added files.
-
-        **When NOT to use:** You already know the filenames from the
-        system manifest — go directly to read_file or run_code.
-
-        Parameters
-        ----------
-        directory : str
-            Path relative to the data directory (default: root data dir).
-        """
+        """List files and sub-directories in a directory."""
         p = Path(directory)
         if not p.is_absolute():
             p = Path(data_dir) / p
-        if is_path_denied(p):
+        if _read_denied(p):
             return f"[Access denied: {p.name} is a protected directory]"
         if not p.is_dir():
             return f"[Not a directory: {p}]"
@@ -221,6 +254,8 @@ def make_tools(
         shown = 0
         for e in entries:
             if is_name_denied(e.name):
+                continue
+            if e.name in {".scout-cache", ".scout-executions"}:
                 continue
             if e.is_dir() and e.name.lower() in {".ssh", ".gnupg", ".aws", ".docker", ".scout", ".git"}:
                 continue
@@ -231,35 +266,12 @@ def make_tools(
                 break
         result = "\n".join(lines) or "(empty)"
         if len(entries) > shown:
-            result += f"\n… (more entries)"
+            result += "\n… (more entries)"
         return result
-
-    # ── 4. search_documents ─────────────────────────────────────────
 
     @tool
     def search_documents(query: str, top_k: int = 5) -> str:
-        """Search text, PDF, and JSON documents using keyword matching.
-
-        **When to use:** Finding qualitative / contextual information
-        about an entity, region, or topic from narrative sources
-        (reports, records, notes, and other documents).
-
-        **When NOT to use:** Looking up numeric data from CSVs (use
-        run_code with pandas instead).
-
-        **Tips:**
-        - Try multiple queries with different angles: zone name,
-          parent district, specific topic (e.g. "flood", "drought").
-        - A single search often misses context — 2-3 queries with
-          varied keywords gives much better coverage.
-
-        Parameters
-        ----------
-        query : str
-            Search query (e.g. "Nagaon district flood vulnerability").
-        top_k : int
-            Number of chunks to return (default 5).
-        """
+        """Search text, PDF, and JSON documents using keyword matching."""
         chunks = retriever.search(query, top_k=top_k)
         if not chunks:
             return _fallback_search_documents(query, top_k=top_k)
@@ -278,67 +290,16 @@ def make_tools(
 
         return "\n\n---\n\n".join(parts)
 
-    # ── 5. think ─────────────────────────────────────────────────────
-
     @tool
     def think(reflection: str) -> str:
-        """Pause to reason through your analysis strategy before acting.
-
-        **When to use:** Planning a multi-step investigation, deciding
-        which data sources to consult, reasoning about what a filename
-        might contain, or synthesising findings before writing a report.
-
-        Use this BEFORE diving into code — a 2-sentence plan saves
-        wasted tool calls.
-
-        Parameters
-        ----------
-        reflection : str
-            Your private reasoning / plan (not shown to the user).
-        """
+        """Pause to reason through your analysis strategy before acting."""
         return "[Thought recorded — continue with your plan.]"
-
-    # ── 6. ask_human ───────────────────────────────────────────────
 
     @tool
     def ask_human(question: str) -> str:
-        """Ask the user a clarifying question before proceeding.
-
-        **When to use (rarely):**
-        - You are blocked by a missing decision the user must make.
-        - Multiple valid interpretations exist and choosing one could
-          materially change the answer.
-        - A required input/constraint is absent and cannot be derived
-          from available data or prior conversation.
-
-        **When NOT to use (most of the time):**
-        - You can make a reasonable assumption and proceed — prefer
-          action over asking.
-        - The query is clear enough to start exploring data.
-        - You're just unsure about the *answer* — that's what tools
-          are for; explore the data instead of asking.
-
-        **Question quality:**
-        - Ask one focused question at a time.
-        - Explain briefly why the choice matters.
-        - If useful, offer 2-4 concrete options.
-
-        **Examples (illustrative, not exhaustive):**
-        - "I found multiple entities with this name. Which one should I use?"
-        - "Should I compare by region, time period, or category?"
-
-        Parameters
-        ----------
-        question : str
-            The clarifying question to ask the user.
-        """
-        # Body is never executed — agent_node intercepts this tool call
-        # and converts it to a plain text response.
+        """Ask the user a clarifying question before proceeding."""
         return question
 
-    # ── 7. read_pdf ────────────────────────────────────────────────
-
-    # Session-level cache: {abs_path -> (extracted_text, total_pages)}
     _pdf_cache: dict[str, tuple[str, int]] = {}
 
     @tool
@@ -348,46 +309,18 @@ def make_tools(
         pages: str = "",
         max_chars: int = 3000,
     ) -> str:
-        """Extract and search PDF content (in-memory, nothing saved to disk).
-
-        **When to use:** Exploring PDF documents attached via @ or found
-        in the data directory.  Especially important for long PDFs where
-        loading the full text would overflow context.
-
-        **Strategy for long PDFs:**
-        1. First call without query -> get overview + page count + first
-           ~3000 chars.
-        2. Then call with query -> get relevant passages only (BM25
-           search within the PDF).
-
-        **When NOT to use:** The PDF has already been converted to text
-        and indexed (check the manifest for .md/.txt files).
-
-        Parameters
-        ----------
-        path : str
-            Path to the PDF file (absolute or relative to data dir).
-        query : str
-            If provided, searches the PDF text for relevant passages
-            using BM25 and returns the top matches.
-        pages : str
-            Page range (e.g. "1-5", "3,7,12").  1-indexed.  Returns
-            text from those pages only.
-        max_chars : int
-            Maximum characters to return (default 3000).
-        """
+        """Extract and search PDF content (in-memory, nothing saved to disk)."""
         from ..pdf_reader import extract_pdf_text, search_pdf_text
 
         p = Path(path)
         if not p.is_absolute():
             p = Path(data_dir) / p
 
-        if is_path_denied(p):
+        if _read_denied(p):
             return f"[Access denied: {p.name} is a protected file]"
 
         abs_key = str(p.resolve())
 
-        # Check session cache
         if abs_key in _pdf_cache:
             full_text, total_pages = _pdf_cache[abs_key]
         else:
@@ -409,12 +342,10 @@ def make_tools(
             except Exception as exc:
                 return f"[Error reading PDF: {exc}]"
 
-            # Cache full reads for re-use within the session
             if not pages:
                 _pdf_cache[abs_key] = (full_text, total_pages)
 
         if query:
-            # BM25 search within the extracted text
             chunks = search_pdf_text(full_text, query, top_k=5)
             if not chunks:
                 return f"(no passages matching '{query}' in {p.name})"
@@ -422,7 +353,6 @@ def make_tools(
             result = f"Search results for '{query}' in {p.name}:\n\n" + "\n\n---\n\n".join(parts)
             return result[:max_chars]
 
-        # Overview mode: metadata + beginning of text
         word_count = len(full_text.split())
         header = (
             f"**{p.name}**\n"
@@ -433,37 +363,89 @@ def make_tools(
             body += "\n\n… [truncated — use `query` parameter for targeted search]"
         return header + body
 
-    # ── 8. write_file ──────────────────────────────────────────────
+    @tool
+    def apply_patch(patch: str, description: str = "") -> str:
+        """Apply a unified diff patch to one or more files. Requires user approval."""
+        return "Patch application is handled by the approval layer."
 
     @tool
     def write_file(path: str, content: str, description: str = "") -> str:
-        """Write text content to a file.  Requires user approval.
-
-        **When to use:** Saving analysis results, generating reports,
-        exporting processed data as text/CSV/JSON/Markdown.
-
-        The user will be shown the file path and content, and must
-        approve before the write proceeds.
-
-        Parameters
-        ----------
-        path : str
-            Target file path (absolute, or relative to the data directory).
-        content : str
-            The text content to write.
-        description : str
-            Brief human-readable description of what is being written.
-        """
+        """Write text content to a file. Requires user approval."""
         p = Path(path)
         if not p.is_absolute():
             p = Path(data_dir) / p
-        if is_path_denied(p):
-            return f"[Access denied: cannot write to protected file {p.name}]"
+        if _write_denied(p):
+            return f"[Access denied: cannot write to {p}]"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return f"Wrote {len(content)} characters to {p}"
 
-    tools = [run_code, read_file, list_files, search_documents, think, ask_human, read_pdf]
+    @tool
+    def write_binary_artifact(path: str, content_base64: str, mime_type: str, description: str = "") -> str:
+        """Save base64-encoded in-memory output such as a PNG or SVG."""
+        return "Binary artifact write is handled by the approval layer."
+
+    from ..memories_backend import MemoriesBackend
+    from ..skills_registry import list_skills, read_skill
+
+    _mem_backend = MemoriesBackend(
+        personal_dir=personal_dir, server_mode=server_mode, user_id=user_id,
+    )
+
+    @tool
+    def memory_search(query: str) -> str:
+        """Search MEMORY.md and rollout summaries under the memory folder."""
+        return _mem_backend.search(query)
+
+    @tool
+    def memory_read(path: str, offset: int = 1, limit: int = 200) -> str:
+        """Read a file under the memory folder by relative path."""
+        return _mem_backend.read(path, offset=offset, limit=limit)
+
+    @tool
+    def memory_list(path: str = ".") -> str:
+        """List a directory under the memory folder."""
+        return _mem_backend.list_dir(path)
+
+    @tool
+    def memory_add_note(slug: str, content: str) -> str:
+        """Add an ad-hoc memory note (only when user explicitly requested)."""
+        return _mem_backend.add_ad_hoc_note(slug, content)
+
+    @tool
+    def skill_list() -> str:
+        """List available skills (name, description, path)."""
+        return list_skills(data_dir, personal_dir=personal_dir)
+
+    @tool
+    def skill_read(path: str) -> str:
+        """Load full SKILL.md body for a skill path from skill_list."""
+        return read_skill(path, data_dir, personal_dir=personal_dir)
+
+    @tool
+    async def request_permissions(reason: str, network_domains: str = "") -> str:
+        """Request elevated permissions (network, shared write). Requires user approval."""
+        if not allow_request_permissions or request_permissions_fn is None:
+            return "[REQUEST DENIED] Permission elevation is disabled."
+        domains = [d.strip() for d in network_domains.split(",") if d.strip()]
+        return await request_permissions_fn(reason, domains)
+
+    unified = (
+        execution_service is not None
+        and execution_service._exec_cfg.unified_shell
+    )
+    shell_tools = [exec_command, write_stdin] if unified else []
+    memory_tools = [memory_search, memory_read, memory_list, memory_add_note] if use_memories else []
+    skill_tools = [skill_list, skill_read]
+    perm_tools = [request_permissions] if allow_request_permissions and request_permissions_fn else []
+    tools = [
+        run_python, run_code, *shell_tools, run_node,
+        *memory_tools, *skill_tools, *perm_tools,
+        read_file, list_files, search_documents, think, ask_human, read_pdf,
+    ]
     if not disable_write_tools:
-        tools.append(write_file)
+        tools.extend([apply_patch, write_file, write_binary_artifact])
+
+    if allowed_tools is not None:
+        tools = [t for t in tools if t.name in allowed_tools]
     return tools

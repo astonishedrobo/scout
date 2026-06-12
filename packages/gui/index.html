@@ -6,8 +6,15 @@
     <title>Scout — AI Data Research Agent</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+    <!-- General Sans: clean grotesque for all UI/body (telka substitute) -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://api.fontshare.com/v2/css?f[]=general-sans@300,400,500,600&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Archivo Black: theatrical display face, used ONLY on the hero headline -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <script>
@@ -15,7 +22,7 @@
       if (saved === "light") document.documentElement.classList.replace("dark", "light");
     </script>
   </head>
-  <body class="bg-scout-bg text-scout-text-primary font-sans antialiased">
+  <body class="bg-scout-canvas text-scout-text font-sans antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

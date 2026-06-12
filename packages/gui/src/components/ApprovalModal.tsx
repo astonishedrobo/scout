@@ -1,173 +1,289 @@
 import { useState } from "react";
-import { X, Check, CheckCheck, XCircle, MessageSquare } from "lucide-react";
+import { Check, CheckCheck, XCircle, MessageSquare, Share2, Shield } from "lucide-react";
 import type { ApprovalRequest } from "../hooks/useChat";
+import { CenterModal } from "./ui/CenterModal";
+import { Button } from "./ui/Button";
+import { Input } from "./ui/Input";
 
 interface ApprovalModalProps {
   request: ApprovalRequest;
-  onRespond: (action: string, feedback?: string) => void;
+  onRespond: (action: string, feedback?: string, saveExecpolicy?: boolean) => void;
 }
 
 function DiffLine({ line }: { line: string }) {
-  let cls = "text-scout-text-secondary";
+  let cls = "text-scout-muted";
   if (line.startsWith("+")) cls = "text-scout-success";
   else if (line.startsWith("-")) cls = "text-scout-error";
   else if (line.startsWith("@@")) cls = "text-scout-cyan";
 
-  return (
-    <div className={`${cls} font-mono text-xs whitespace-pre`}>{line}</div>
-  );
+  return <div className={`${cls} font-mono text-xs whitespace-pre`}>{line}</div>;
 }
+
+const actionBtn =
+  "flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold transition-colors";
 
 export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
   const [suggestMode, setSuggestMode] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [saveExecpolicy, setSaveExecpolicy] = useState(false);
+
+  if (request.kind === "permission_elevation" && request.permissionRequest) {
+    const pr = request.permissionRequest;
+    return (
+      <CenterModal
+        open
+        onClose={() => onRespond("deny")}
+        title="Permission Elevation"
+        maxWidth="md"
+        closeOnEscape={false}
+        closeOnBackdrop={false}
+      >
+        <div className="px-5 py-4 space-y-3">
+          <div className="flex items-center gap-2 text-scout-warning mb-2">
+            <Shield size={18} />
+          </div>
+          <div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
+            <p className="text-sm text-scout-text">{pr.reason}</p>
+          </div>
+          {pr.network_domains && pr.network_domains.length > 0 && (
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Network domains</span>
+              <p className="text-sm font-mono text-scout-muted">{pr.network_domains.join(", ")}</p>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline">
+            <button
+              onClick={() => onRespond("allow_once")}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+            >
+              <Check size={16} /> Allow Once
+            </button>
+            <button
+              onClick={() => onRespond("allow_session")}
+              className={`${actionBtn} bg-scout-lift text-scout-text`}
+            >
+              <CheckCheck size={16} /> Allow for Session
+            </button>
+            <button
+              onClick={() => onRespond("deny")}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+            >
+              <XCircle size={16} /> Deny
+            </button>
+          </div>
+        </div>
+      </CenterModal>
+    );
+  }
+
+  if (request.kind === "capability" && request.capability) {
+    const cap = request.capability;
+    return (
+      <CenterModal
+        open
+        onClose={() => onRespond("deny")}
+        title="Capability Request"
+        maxWidth="md"
+        closeOnEscape={false}
+        closeOnBackdrop={false}
+      >
+        <div className="px-5 py-4 space-y-3">
+          <div className="flex items-center gap-2 text-scout-warning mb-2">
+            <Shield size={18} />
+          </div>
+          <div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Capability</span>
+            <p className="text-sm font-mono text-scout-text">{cap.capability}</p>
+          </div>
+          <div>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
+            <p className="text-sm text-scout-text">{cap.reason}</p>
+          </div>
+          {cap.command_summary && (
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Command</span>
+              <p className="text-sm font-mono text-scout-muted">{cap.command_summary}</p>
+            </div>
+          )}
+          {Object.keys(cap.scope).length > 0 && (
+            <div>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Scope</span>
+              <pre className="text-xs font-mono bg-scout-canvas rounded-btn p-2 mt-1 overflow-x-auto border border-scout-hairline">
+                {JSON.stringify(cap.scope, null, 2)}
+              </pre>
+            </div>
+          )}
+          <p className="text-xs text-scout-muted">
+            Approving grants this capability only — execution remains sandboxed.
+          </p>
+          {cap.command_summary && (
+            <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+              <input
+                type="checkbox"
+                checked={saveExecpolicy}
+                onChange={(e) => setSaveExecpolicy(e.target.checked)}
+                className="accent-scout-text w-3.5 h-3.5"
+              />
+              <span className="text-xs text-scout-muted">Save to execpolicy (always allow this prefix)</span>
+            </label>
+          )}
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline">
+            <button
+              onClick={() => onRespond("allow_once")}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+            >
+              <Check size={16} /> Allow Once
+            </button>
+            <button
+              onClick={() => onRespond("allow_session", undefined, saveExecpolicy)}
+              className={`${actionBtn} bg-scout-lift text-scout-text`}
+            >
+              <CheckCheck size={16} /> Allow for Session
+            </button>
+            <button
+              onClick={() => onRespond("deny")}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+            >
+              <XCircle size={16} /> Deny
+            </button>
+          </div>
+        </div>
+      </CenterModal>
+    );
+  }
+
+  const isPromotion = request.kind === "execution_promotion";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-scout-surface border border-scout-border rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-scout-border">
-          <h3 className="font-semibold text-scout-text-primary">
-            File Changes
-          </h3>
-          <button
-            onClick={() => onRespond("no")}
-            className="p-1 rounded-lg hover:bg-scout-surface-hover text-scout-text-secondary"
-          >
-            <X size={18} />
-          </button>
-        </div>
+    <CenterModal
+      open
+      onClose={() => onRespond("no")}
+      title={isPromotion ? "Promote Staged Output" : "File Changes"}
+      maxWidth="lg"
+      closeOnEscape={false}
+      closeOnBackdrop={false}
+    >
+      {isPromotion && (
+        <p className="px-5 pt-4 text-sm text-scout-muted">
+          Promote staged execution output to your workspace? Files below were created in an isolated staging area.
+        </p>
+      )}
 
-        {/* Diffs */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {request.diffs.map((entry, i) => {
-            const statusColor =
-              entry.status === "added"
-                ? "text-scout-success"
-                : entry.status === "deleted"
-                  ? "text-scout-error"
-                  : "text-scout-warning";
-            const statusLabel =
-              entry.status === "added"
-                ? "NEW"
-                : entry.status === "deleted"
-                  ? "DELETE"
-                  : "MODIFIED";
+      <div className="px-5 py-4 space-y-4 max-h-[50vh] overflow-y-auto">
+        {request.diffs.map((entry, i) => {
+          const statusColor =
+            entry.status === "added"
+              ? "text-scout-success"
+              : entry.status === "deleted"
+                ? "text-scout-error"
+                : "text-scout-warning";
+          const statusLabel =
+            entry.status === "added" ? "NEW" : entry.status === "deleted" ? "DELETE" : "MODIFIED";
 
-            const lines = entry.diff.split("\n").filter(
-              (l) =>
-                !l.startsWith("diff --git") &&
-                !l.startsWith("index ") &&
-                !l.startsWith("---") &&
-                !l.startsWith("+++") &&
-                !l.startsWith("new file") &&
-                !l.startsWith("deleted file"),
-            );
+          const lines = entry.diff.split("\n").filter(
+            (l) =>
+              !l.startsWith("diff --git") &&
+              !l.startsWith("index ") &&
+              !l.startsWith("---") &&
+              !l.startsWith("+++") &&
+              !l.startsWith("new file") &&
+              !l.startsWith("deleted file"),
+          );
 
-            return (
-              <div key={i}>
-                <div className="flex items-center gap-2 mb-2">
-                  <span
-                    className={`text-xs font-semibold px-2 py-0.5 rounded ${statusColor} bg-current/10`}
-                  >
-                    {statusLabel}
-                  </span>
-                  <span className="text-sm text-scout-accent font-mono">
-                    {entry.path}
-                  </span>
-                </div>
-                <div className="bg-scout-bg rounded-lg border border-scout-border p-3 overflow-x-auto max-h-48 overflow-y-auto">
-                  {lines.slice(0, 30).map((line, j) => (
-                    <DiffLine key={j} line={line} />
-                  ))}
-                  {lines.length > 30 && (
-                    <div className="text-xs text-scout-text-secondary italic mt-1">
-                      ... {lines.length - 30} more lines
-                    </div>
-                  )}
-                </div>
+          return (
+            <div key={i}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-md border border-scout-hairline ${statusColor}`}>
+                  {statusLabel}
+                </span>
+                <span className="text-sm text-scout-text font-mono">{entry.path}</span>
               </div>
-            );
-          })}
-        </div>
+              <div className="bg-scout-canvas rounded-card border border-scout-hairline p-3 overflow-x-auto max-h-48 overflow-y-auto">
+                {lines.slice(0, 30).map((line, j) => (
+                  <DiffLine key={j} line={line} />
+                ))}
+                {lines.length > 30 && (
+                  <div className="text-xs text-scout-muted italic mt-1">
+                    ... {lines.length - 30} more lines
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
-        {/* Actions */}
-        <div className="px-5 py-4 border-t border-scout-border">
-          {!suggestMode ? (
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => onRespond("yes")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-scout-success/20
-                           text-scout-success hover:bg-scout-success/30 text-sm font-medium transition-colors"
-              >
-                <Check size={16} /> Approve
-              </button>
+      <div className="px-5 py-4 border-t border-scout-hairline">
+        {!suggestMode ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => onRespond("yes")}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+            >
+              <Check size={16} /> {isPromotion ? "Promote" : "Approve"}
+            </button>
+            {!isPromotion && (
               <button
                 onClick={() => onRespond("always")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-scout-accent/20
-                           text-scout-accent hover:bg-scout-accent/30 text-sm font-medium transition-colors"
+                className={`${actionBtn} bg-scout-lift text-scout-text`}
               >
                 <CheckCheck size={16} /> Always Approve
               </button>
+            )}
+            {request.canShare && !isPromotion && (
               <button
-                onClick={() => setSuggestMode(true)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-scout-surface-hover
-                           text-scout-text-secondary hover:text-scout-text-primary text-sm font-medium transition-colors"
+                onClick={() => onRespond("shared")}
+                className={`${actionBtn} bg-scout-lift text-scout-cyan`}
+                title="Move into the shared team repo"
               >
-                <MessageSquare size={16} /> Suggest Changes
+                <Share2 size={16} /> Approve &amp; Save to Shared
               </button>
-              <button
-                onClick={() => onRespond("no")}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-scout-error/20
-                           text-scout-error hover:bg-scout-error/30 text-sm font-medium transition-colors ml-auto"
+            )}
+            <button
+              onClick={() => setSuggestMode(true)}
+              className={`${actionBtn} text-scout-muted hover:text-scout-text`}
+            >
+              <MessageSquare size={16} /> Suggest Changes
+            </button>
+            <button
+              onClick={() => onRespond("no")}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+            >
+              <XCircle size={16} /> Reject
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-scout-text">Describe the changes you&apos;d like:</p>
+            <div className="flex gap-2">
+              <Input
+                autoFocus
+                type="text"
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && feedback.trim()) onRespond("suggest", feedback.trim());
+                  if (e.key === "Escape") setSuggestMode(false);
+                }}
+                placeholder="Type your suggestion..."
+                className="flex-1"
+              />
+              <Button
+                variant="filled"
+                surface="panel"
+                onClick={() => feedback.trim() && onRespond("suggest", feedback.trim())}
+                disabled={!feedback.trim()}
               >
-                <XCircle size={16} /> Reject
-              </button>
+                Send
+              </Button>
+              <Button variant="ghost" surface="panel" onClick={() => setSuggestMode(false)}>
+                Cancel
+              </Button>
             </div>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm text-scout-accent">
-                Describe the changes you'd like:
-              </p>
-              <div className="flex gap-2">
-                <input
-                  autoFocus
-                  type="text"
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && feedback.trim()) {
-                      onRespond("suggest", feedback.trim());
-                    }
-                    if (e.key === "Escape") setSuggestMode(false);
-                  }}
-                  placeholder="Type your suggestion..."
-                  className="flex-1 bg-scout-bg border border-scout-border rounded-lg px-3 py-2
-                             text-sm text-scout-text-primary outline-none focus:border-scout-accent"
-                />
-                <button
-                  onClick={() => {
-                    if (feedback.trim())
-                      onRespond("suggest", feedback.trim());
-                  }}
-                  disabled={!feedback.trim()}
-                  className="px-4 py-2 rounded-lg bg-scout-accent text-scout-bg text-sm font-medium
-                             disabled:opacity-40 hover:bg-scout-accent/80 transition-colors"
-                >
-                  Send
-                </button>
-                <button
-                  onClick={() => setSuggestMode(false)}
-                  className="px-3 py-2 rounded-lg text-sm text-scout-text-secondary
-                             hover:bg-scout-surface-hover transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
-    </div>
+    </CenterModal>
   );
 }

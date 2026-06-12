@@ -45,6 +45,34 @@ export interface Message {
   content: string;
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
+  artifacts?: Artifact[];
+  attachments?: string[];
+  chatImages?: ChatImage[];
+}
+
+export type VisionSupport = "supported" | "unsupported" | "unverified";
+export interface ChatImage {
+  id: string;
+  name: string;
+  mime_type: string;
+  width: number;
+  height: number;
+  size: number;
+  url: string;
+}
+
+export type ArtifactRenderer = "markdown" | "html" | "image" | "csv" | "json" | "code" | "text";
+
+export interface Artifact {
+  id: string;
+  path: string;
+  name: string;
+  title: string;
+  mime_type: string;
+  renderer: ArtifactRenderer;
+  size: number;
+  version: string;
+  presentation: "inline" | "panel" | "both";
 }
 
 // ── Chat events (server → client via SSE) ────────────────────────
@@ -57,18 +85,35 @@ export interface FileDiffEntry {
   diff: string;
 }
 
+export interface CapabilityRequestPayload {
+  capability: string;
+  reason: string;
+  scope: Record<string, unknown>;
+  command_summary: string;
+}
+
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "approval_request";
+  type: "accepted" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
+  session_id?: string;
   name?: string;
   args?: Record<string, unknown>;
   output?: string;
+  tool_call_id?: string;
+  process_id?: number;
+  chunk?: string;
   content?: string;
   message?: string;
+  title?: string;
   retry_after?: number | null;
   // Approval request fields
   approval_id?: string;
+  kind?: "file_changes" | "capability" | "execution_promotion" | "permission_elevation";
   tool_name?: string;
   diffs?: FileDiffEntry[];
+  capability?: CapabilityRequestPayload;
+  permission_request?: { reason: string; network_domains?: string[] };
+  can_share?: boolean;
+  artifacts?: Artifact[];
 }
 
 /**
@@ -103,6 +148,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   { name: "/resume", description: "Resume a previous chat session" },
   { name: "/editor", description: "Set preferred external editor" },
   { name: "/config", description: "Edit config (/config llm | /config agent)" },
+  { name: "/memory", description: "Manage cross-session memories" },
   { name: "/reset", description: "Clear conversation and start new session" },
   { name: "/quit", description: "Exit Scout" },
   { name: "/exit", description: "Exit Scout" },

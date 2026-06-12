@@ -10,6 +10,7 @@ Part of the Scout agent framework.
 from __future__ import annotations
 
 import logging
+import base64
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal
 
@@ -22,16 +23,25 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from ..artifacts import describe_artifact
 from langgraph.graph import END, StateGraph
 
 from .exceptions import ProviderRateLimitError
-from .file_tracker import FileDiff, FileTracker
+from .file_tracker import FileDiff, FileTracker, content_hash, exact_file_diff
+from ..hooks import run_hook
+from .patch import parse_patch
 from .state import AgentState
 
 if TYPE_CHECKING:
     from ..config import AgentConfig
 
 ApprovalFn = Callable[[str, list[FileDiff], dict], Awaitable[tuple[str, str]]]
+CapabilityApprovalFn = Callable[[object], Awaitable[tuple[str, str]]]
+PromotionApprovalFn = ApprovalFn
+
+_EXECUTION_TOOLS = frozenset({
+    "run_code", "run_python", "run_shell", "exec_command", "write_stdin", "run_node",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +142,17 @@ def _compress_messages(
     summary_parts: list[str] = []
     for m in old_messages:
         role = _msg_role(m)
-        content = (m.content or "")[:500]  # cap per-message length
+        raw_content = m.content or ""
+        if isinstance(raw_content, list):
+            content = " ".join(
+                str(item.get("text", ""))
+                for item in raw_content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )[:500]
+            if any(isinstance(item, dict) and item.get("type") in {"image", "image_url"} for item in raw_content):
+                content += " [image attached]"
+        else:
+            content = str(raw_content)[:500]
         if isinstance(m, AIMessage) and m.tool_calls:
             tool_names = [tc["name"] for tc in m.tool_calls]
             summary_parts.append(f"[assistant called: {', '.join(tool_names)}]")
@@ -188,6 +208,11 @@ def build_graph(
     approval_callback: ApprovalFn | None = None,
     cwd: str | None = None,
     data_dir: str | None = None,
+    execution_service: object | None = None,
+    *,
+    hooks_enabled: bool = True,
+    personal_dir: str | None = None,
+    server_mode: bool = False,
 ) -> StateGraph:
     """Construct and compile the ReAct agent graph.
 
@@ -221,22 +246,39 @@ def build_graph(
 
     _MAX_TOOL_RESULT_CHARS = 3_000
 
-    # Read-only tools that never produce file changes
-    _SKIP_TRACKING = {"read_file", "list_files", "search_documents", "think",
-                      "ask_human", "read_pdf"}
-
     # ── Nodes ────────────────────────────────────────────────────────
 
     async def tool_node(state: AgentState) -> dict:
-        """Execute tools, detect file changes via git diff, gate via approval."""
+        """Execute tools and approve only exact, tool-attributed mutations.
+
+        Extension point: lifecycle hooks (PreToolUse/PostToolUse) attach here.
+        Extension point: MCP tool providers can be merged into ``_tools_by_name``.
+        """
         messages = state["messages"]
         last_ai = messages[-1]
 
         results: list[ToolMessage] = []
         for tc in last_ai.tool_calls:
             tool_name = tc["name"]
-            tool_args = tc.get("args", {})
+            tool_args = dict(tc.get("args", {}))
             tool_id = tc["id"]
+
+            pre = run_hook(
+                "PreToolUse",
+                {"tool_name": tool_name, "tool_input": tool_args},
+                personal_dir=personal_dir,
+                server_mode=server_mode,
+                enabled=hooks_enabled,
+            )
+            if pre.blocked:
+                results.append(ToolMessage(
+                    content=f"[BLOCKED BY HOOK] {pre.message}",
+                    name=tool_name,
+                    tool_call_id=tool_id,
+                ))
+                continue
+            if pre.mutated_input is not None:
+                tool_args = pre.mutated_input
 
             tool_fn = _tools_by_name.get(tool_name)
             if tool_fn is None:
@@ -247,90 +289,110 @@ def build_graph(
                 ))
                 continue
 
-            # Build list of tracking roots (multi-root for out-of-cwd writes)
-            trackers: list[FileTracker] = []
-            if cwd and tool_name not in _SKIP_TRACKING:
-                roots: list[str] = [cwd]
-                if tool_name == "write_file":
-                    target = Path(tool_args.get("path", ""))
-                    if not target.is_absolute():
-                        base = data_dir or cwd
-                        target = Path(base) / target
-                    target_dir = str(target.resolve().parent)
-                    if target_dir != str(Path(cwd).resolve()):
-                        roots.append(target_dir)
-                for root in roots:
-                    t = FileTracker(root)
-                    t.snapshot()
-                    trackers.append(t)
-
-            try:
-                output = tool_fn.invoke(tool_args)
-            except Exception as exc:
-                output = f"[Tool error: {exc}]"
-
-            # Check for file changes after execution
-            if trackers and (approval_callback or agent_config.disable_write_tools):
-                all_diffs: list[FileDiff] = []
-                for t in trackers:
-                    all_diffs.extend(t.diff())
-                
-                if all_diffs:
-                    # STRICT ENFORCEMENT: If write tools are disabled, auto-revert 
-                    # immediately and return an error to the agent. This prevents 
-                    # the approval callback (and popup) from triggering.
+            artifacts: list[dict] = []
+            if tool_name == "apply_patch":
+                root = Path(data_dir or cwd or ".").resolve()
+                patch_text = str(tool_args.get("patch") or tool_args.get("input") or "")
+                try:
+                    file_patches = parse_patch(patch_text, root)
+                except Exception as exc:
+                    output = f"[Patch preparation failed: {exc}]"
+                else:
+                    diffs: list[FileDiff] = []
+                    pending: list[tuple[Path, bytes | None, bytes]] = []
+                    for fp in file_patches:
+                        target = Path(fp.path)
+                        old = target.read_bytes() if target.exists() else None
+                        if fp.new_content == b"" and target.exists():
+                            diffs.append(exact_file_diff(target, root, old, None))
+                            pending.append((target, old, b""))
+                        else:
+                            diffs.append(exact_file_diff(target, root, old, fp.new_content))
+                            pending.append((target, old, fp.new_content))
                     if agent_config.disable_write_tools:
-                        for t in trackers:
-                            t.revert()
-                        results.append(ToolMessage(
-                            content=(
-                                "[WRITE FAILED / ACCESS DENIED] Write operations are disabled in this "
-                                "environment. Your changes have been automatically reverted. "
-                                "Do NOT attempt to create or modify files. Use your tools strictly "
-                                "for data reading and analysis."
-                            ),
-                            name=tool_name,
-                            tool_call_id=tool_id,
-                        ))
-                        continue
-
-                    # Regular approval flow
-                    action, feedback = await approval_callback(
-                        tool_name, all_diffs, tool_args,
+                        output = "[WRITE FAILED / ACCESS DENIED] Write operations are disabled."
+                    else:
+                        action, feedback = (
+                            await approval_callback(tool_name, diffs, tool_args)
+                            if approval_callback else ("yes", "")
+                        )
+                        if action in {"no", "suggest"}:
+                            output = (
+                                f"[PATCH NOT APPLIED] User feedback: {feedback}"
+                                if action == "suggest" else
+                                "[PATCH NOT APPLIED] The user rejected this change."
+                            )
+                        else:
+                            applied = 0
+                            for target, old, proposed in pending:
+                                if content_hash(target.read_bytes() if target.exists() else None) != content_hash(old):
+                                    output = "[WRITE CONFLICT] A file changed after approval was requested. No changes applied."
+                                    break
+                                if proposed == b"":
+                                    if target.exists():
+                                        target.unlink()
+                                else:
+                                    target.parent.mkdir(parents=True, exist_ok=True)
+                                    target.write_bytes(proposed)
+                                applied += 1
+                                art = describe_artifact(target, root) if proposed else None
+                                if art:
+                                    artifacts.append(art)
+                            else:
+                                output = f"Applied patch to {applied} file(s)"
+            elif tool_name in {"write_file", "write_binary_artifact"}:
+                target = Path(str(tool_args.get("path", "")))
+                if not target.is_absolute():
+                    target = Path(data_dir or cwd or ".") / target
+                target = target.resolve()
+                root = Path(data_dir or cwd or ".").resolve()
+                try:
+                    target.relative_to(root)
+                    old = target.read_bytes() if target.exists() else None
+                    proposed = (
+                        base64.b64decode(str(tool_args.get("content_base64", "")), validate=True)
+                        if tool_name == "write_binary_artifact"
+                        else str(tool_args.get("content", "")).encode("utf-8")
                     )
-                    if action == "no":
-                        for t in trackers:
-                            t.revert()
-                        results.append(ToolMessage(
-                            content=(
-                                "[CHANGES REVERTED] The user rejected the file changes. "
-                                "All modifications have been undone. "
-                                "Do NOT retry this write. Continue with analysis/text only."
-                            ),
-                            name=tool_name,
-                            tool_call_id=tool_id,
-                        ))
-                        continue
-                    elif action == "suggest":
-                        for t in trackers:
-                            t.revert()
-                        results.append(ToolMessage(
-                            content=(
-                                f"[CHANGES REVERTED — REVISION REQUESTED]\n"
-                                f"User feedback: {feedback}\n"
-                                f"Revise your approach based on this feedback and try once more."
-                            ),
-                            name=tool_name,
-                            tool_call_id=tool_id,
-                        ))
-                        continue
-                    elif action == "edit":
-                        final_diffs: list[FileDiff] = []
-                        for t in trackers:
-                            final_diffs.extend(t.diff())
-                        diff_summary = ", ".join(d.path for d in final_diffs) if final_diffs else "(no further changes)"
-                        output = str(output or "") + f"\n[User edited files: {diff_summary}]"
-                    # "yes" and "always" → keep changes as-is
+                    diff = exact_file_diff(target, root, old, proposed)
+                except Exception as exc:
+                    output = f"[Write preparation failed: {exc}]"
+                else:
+                    if agent_config.disable_write_tools:
+                        output = "[WRITE FAILED / ACCESS DENIED] Write operations are disabled."
+                    else:
+                        action, feedback = (
+                            await approval_callback(tool_name, [diff], tool_args)
+                            if approval_callback else ("yes", "")
+                        )
+                        if action in {"no", "suggest"}:
+                            output = (
+                                f"[WRITE NOT APPLIED] User feedback: {feedback}"
+                                if action == "suggest" else
+                                "[WRITE NOT APPLIED] The user rejected this change."
+                            )
+                        elif content_hash(target.read_bytes() if target.exists() else None) != content_hash(old):
+                            output = "[WRITE CONFLICT] The target changed after approval was requested. No change was applied."
+                        else:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(proposed)
+                            output = f"Wrote {len(proposed)} bytes to {target}"
+                            artifact = describe_artifact(target, root)
+                            if artifact:
+                                artifacts.append(artifact)
+            else:
+                if tool_name in _EXECUTION_TOOLS and execution_service is not None:
+                    execution_service.set_active_tool_call_id(tool_id)
+                try:
+                    output = await tool_fn.ainvoke(tool_args)
+                except TypeError:
+                    output = tool_fn.invoke(tool_args)
+                except Exception as exc:
+                    output = f"[Tool error: {exc}]"
+                if tool_name in _EXECUTION_TOOLS and execution_service is not None:
+                    last = getattr(execution_service, "last_tool_result", None)
+                    if last and last.artifacts:
+                        artifacts.extend(last.artifacts)
 
             content = str(output) if output is not None else ""
             if len(content) > _MAX_TOOL_RESULT_CHARS:
@@ -340,10 +402,19 @@ def build_graph(
                     f"use .head()/.describe() for large DataFrames]"
                 )
 
+            run_hook(
+                "PostToolUse",
+                {"tool_name": tool_name, "tool_input": tool_args, "tool_output": content},
+                personal_dir=personal_dir,
+                server_mode=server_mode,
+                enabled=hooks_enabled,
+            )
+
             results.append(ToolMessage(
                 content=content,
                 name=tool_name,
                 tool_call_id=tool_id,
+                additional_kwargs={"artifacts": artifacts} if artifacts else {},
             ))
 
         return {"messages": results}
@@ -364,6 +435,13 @@ def build_graph(
             logger.info(
                 "Context at %.0f%% (%d / %d tokens) — compressing",
                 usage_ratio * 100, current_tokens, context_window,
+            )
+            run_hook(
+                "PreCompact",
+                {"token_count": current_tokens, "context_window": context_window},
+                personal_dir=personal_dir,
+                server_mode=server_mode,
+                enabled=hooks_enabled,
             )
             messages = _compress_messages(messages, model_name, keep_recent, llm)
 
@@ -402,6 +480,7 @@ def build_graph(
                 or "Failed to parse tool call" in err_msg
             )
             if is_tool_error:
+                original_messages = list(messages)
                 logger.warning(
                     "Model produced invalid tool call — retrying "
                     "(max %d retries): %s",
@@ -438,38 +517,11 @@ def build_graph(
                         continue
 
                 if response is None:
-                    # All retries exhausted — fall back to text-only.
                     logger.warning(
-                        "Tool call failed %d times — falling back to "
-                        "text-only response.", bad_req_retries,
+                        "Tool call failed %d times — retrying original "
+                        "request without tools.", bad_req_retries,
                     )
-                    import re as _re
-                    fg_match = _re.search(
-                        r'"failed_generation"\s*:\s*"(.*?)"\s*\}',
-                        err_msg,
-                        _re.DOTALL,
-                    )
-                    failed_text = fg_match.group(1) if fg_match else ""
-
-                    fallback_hint = HumanMessage(
-                        content=(
-                            "[System] Tool calls failed repeatedly.  "
-                            "Respond with a plain text message — present "
-                            "whatever findings you have so far.  Do NOT "
-                            "attempt any more tool calls."
-                        )
-                    )
-                    messages.append(fallback_hint)
-                    try:
-                        response = llm.invoke(messages)
-                    except Exception:
-                        fallback_content = (
-                            failed_text.replace("\\n", "\n")
-                            if len(failed_text) > 50
-                            else "I encountered an error while formatting "
-                                 "my response.  Please try again."
-                        )
-                        response = AIMessage(content=fallback_content)
+                    response = llm.invoke(original_messages)
             else:
                 raise
 

@@ -34,8 +34,10 @@ user's machine.
    If they say "analyse data Y", analyse it. Match the scope of your \
    response to the scope of the request — don't over-complicate simple \
    tasks.
-2. **Prefer action over asking.** Use your tools to accomplish the \
-   task directly. Only ask for clarification when genuinely ambiguous.
+2. **Use tools with judgment.** Use tools when they provide information or \
+   perform work needed for the user's request. Answer greetings, acknowledgements, \
+   casual conversation, and questions already answerable from context directly. \
+   Do not inspect files or data unless the user asks or it is necessary.
 3. **Be concise.** Short tasks get short answers. Deep analysis gets \
    detailed responses. Let the user's request set the depth.
 
@@ -45,16 +47,28 @@ user's machine.
 
 ## Tools at Your Disposal
 
-- **`run_code`** — Execute Python in a persistent session. Variables \
-  and imports persist across calls. Use for computation, \
-  data analysis, or any coding task.
+- **`run_python`** — Execute Python in a persistent sandboxed session. Variables \
+  and imports persist across calls. Use for computation and data analysis.
+- **`exec_command`** — Run a command in a PTY. Returns output or a session ID \
+  for long-running commands. Poll with `write_stdin(session_id, "")`. Network \
+  requires approval. File writes are staged for approval.
+- **`write_stdin`** — Send input to a running exec session (session ID from \
+  exec_command). Empty chars polls for more output.
+- **`run_node`** — Execute JavaScript/Node.js in an isolated sandbox.
+- **`run_code`** — Alias for `run_python` (backwards compatible).
+- **`apply_patch`** — Apply unified-diff patches to one or more files in a \
+  single approval. Use for multi-file edits.
 - **`write_file`** — Create or overwrite a file at a given path. \
-  Preferred over run_code for writing text files since the user gets \
+  Preferred over execution tools for writing text files since the user gets \
   a clear preview. All writes require user approval.
+- **`write_binary_artifact`** — Save base64-encoded in-memory output such \
+  as PNG or SVG. All writes require user approval.
 - **`read_file`** — Read file contents.
 - **`list_files`** — List directory contents.
-- **`search_documents`** — Keyword search across indexed text, PDF, \
-  and JSON documents.
+- **`search_documents`** — Keyword search across all indexed files: \
+  `.txt`, `.md`, `.json`, `.csv`, and **`.pdf`** files are all \
+  searchable. Use this to find relevant content before reading entire \
+  files.
 - **`ask_human`** — Ask the user a question. Use sparingly.
 
 ## Tool Usage Tips
@@ -69,9 +83,20 @@ user's machine.
   If you expect a value/table, use explicit `print(...)` (or a final \
   expression) so the result appears in tool output.
 - **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.
-- **Do not generate plots.** Avoid `matplotlib` / `seaborn` plotting calls \
-  (`plt.plot`, `plt.show`, etc.). Plot images are not returned as tool \
-  output in this pipeline; use tabular/statistical summaries instead.
+- **Create useful visualizations when requested.** Save plots and diagrams \
+  as supported workspace files such as PNG, SVG, HTML, or Markdown. Approved \
+  generated files appear to the user as clickable artifacts.
+- **Use Mermaid for diagrams.** Put Mermaid diagrams in fenced `mermaid` \
+  blocks inside Markdown files or responses when that communicates clearly.
+- **HTML artifacts must be self-contained and offline.** Use inline CSS, \
+  inline JavaScript, SVG, Canvas, and native HTML only. Never use CDN \
+  Tailwind, remote fonts, images, scripts, or stylesheets. If Tailwind is \
+  requested, write equivalent inline CSS. Prefer Mermaid in Markdown.
+- **Install packages via the shell.** Use `exec_command("python -m pip install \
+  <package>")` for Python packages or `exec_command("npm install <package>")` \
+  for Node packages. Network access requires user approval. Packages install \
+  into `.scout-cache/python-packages` and are available to `run_python` \
+  automatically. Do not install packages from inside `run_python`.
 
 ## File Writing
 
@@ -79,8 +104,9 @@ user's machine.
   and must approve before the write is committed.
 - If the user suggests changes, revise and try again.
 - If the user declines, acknowledge and move on.
-- Writes via `run_code` (e.g. `df.to_csv(...)`) are also tracked \
-  and require approval.
+- Persistent file writes must use `write_file` so Scout can attribute and \
+  approve the exact change. Do not write files from `run_code`; such writes \
+  cannot be safely attributed when multiple threads share a workspace.
 
 ## Data Analysis Guidelines
 
@@ -199,6 +225,7 @@ def build_manifest(
     data_dir: str | Path,
     config: "AppConfig | None" = None,
     max_files_per_type: int = 40,
+    focus_path: Path | str | None = None,
 ) -> str:
     """Scan *data_dir* and produce a human-readable manifest string.
 
@@ -209,6 +236,17 @@ def build_manifest(
     - Source descriptions from config (csv_sources / json_sources)
     """
     root = Path(data_dir)
+    scan_root = root
+    if focus_path is not None:
+        fp = Path(focus_path)
+        if not fp.is_absolute():
+            fp = root / fp
+        if fp.is_dir() and fp.exists():
+            try:
+                fp.resolve().relative_to(root.resolve())
+                scan_root = fp.resolve()
+            except ValueError:
+                pass
     parts: list[str] = []
 
     # Collect descriptions from config for annotation
@@ -224,8 +262,14 @@ def build_manifest(
 
     # 1) File tree
     parts.append(f"**Data directory:** `{root}`\n")
+    if scan_root != root.resolve():
+        try:
+            rel_focus = scan_root.relative_to(root.resolve())
+            parts.append(f"**Active subtree:** `{rel_focus}` (manifest scoped to this folder)\n")
+        except ValueError:
+            pass
     parts.append("```")
-    parts.append(_file_tree(root))
+    parts.append(_file_tree(scan_root if scan_root != root.resolve() else root))
     parts.append("```\n")
 
     # Helper to scan while ignoring heavy folders and limiting depth
@@ -234,7 +278,7 @@ def build_manifest(
     def _safe_scan(pattern: str, max_depth: int = 3, max_total_scanned: int = 1000) -> list[Path]:
         found = []
         # queue: [(directory, current_depth)]
-        queue = [(root, 0)]
+        queue = [(scan_root, 0)]
         scanned_count = 0
         
         while queue and len(found) < max_files_per_type and scanned_count < max_total_scanned:
@@ -318,12 +362,23 @@ def build_system_prompt(
     config: "AppConfig | None" = None,
     skills_text: str = "",
     disable_write_tools: bool = False,
+    focus_path: Path | str | None = None,
+    memories_text: str = "",
+    memory_instructions: str = "",
 ) -> str:
     """Return the system prompt with a pre-built data manifest injected."""
-    manifest = build_manifest(data_dir, config=config)
+    manifest = build_manifest(data_dir, config=config, focus_path=focus_path)
     skills_section = ""
     if skills_text.strip():
-        skills_section = f"\n## Domain Skills\n\n{skills_text}\n"
+        skills_section = (
+            "\n## Layered Instructions\n\n"
+            "_Closer directories override parent rules. Child AGENTS.md overrides parent._\n\n"
+            f"{skills_text}\n"
+        )
+    if memory_instructions.strip():
+        skills_section += f"\n{memory_instructions}\n"
+    elif memories_text.strip():
+        skills_section += f"\n## User Memories\n\n{memories_text}\n"
 
     # Use .replace() instead of .format() to avoid KeyError/ValueError from {} in snippets
     prompt = SYSTEM_PROMPT.replace("{manifest}", manifest).replace("{skills_section}", skills_section)

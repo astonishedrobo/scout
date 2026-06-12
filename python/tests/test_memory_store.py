@@ -1,0 +1,32 @@
+"""Tests for memory SQLite store."""
+
+from pathlib import Path
+
+from scout.memory_store import JOB_KIND_STAGE1, MemoryStore, Stage1Output
+
+
+def test_upsert_and_record_usage(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.db")
+    store.upsert_stage1(Stage1Output(
+        thread_id="sess-1",
+        session_path="/tmp/sess-1.jsonl",
+        raw_memory="- prefers pytest",
+        rollout_summary="User likes pytest.",
+        rollout_slug="pytest-pref",
+        source_updated_at=1000,
+        generated_at=1001,
+    ))
+    assert store.get_stage1("sess-1") is not None
+    assert store.record_usage(["sess-1"]) == 1
+    row = store.get_stage1("sess-1")
+    assert row and row.usage_count == 1
+
+
+def test_job_claim_and_finish(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.db")
+    token = store.try_claim_job(JOB_KIND_STAGE1, "job-a")
+    assert token is not None
+    assert store.try_claim_job(JOB_KIND_STAGE1, "job-a") is None
+    store.finish_job(JOB_KIND_STAGE1, "job-a", token, success=True)
+    token2 = store.try_claim_job(JOB_KIND_STAGE1, "job-a")
+    assert token2 is not None

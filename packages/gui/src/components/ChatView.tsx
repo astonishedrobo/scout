@@ -1,9 +1,10 @@
 import { useRef, useEffect } from "react";
+import { FileText, BarChart3, Compass, type LucideIcon } from "lucide-react";
 import type { Message, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
-import { Sparkles } from "lucide-react";
+import type { Artifact } from "scout-core";
 
 interface ChatViewProps {
   messages: Message[];
@@ -13,15 +14,83 @@ interface ChatViewProps {
   isLoading: boolean;
   onSuggestionClick?: (text: string) => void;
   onRetry?: (assistantIndex: number) => void;
+  onFork?: (messageIndex: number) => void;
+  onOpenArtifact?: (artifact: Artifact) => void;
+  baseUrl: string;
+  token: string | null;
 }
+
+const SUGGESTIONS: {
+  title: string;
+  description: string;
+  prompt: string;
+  tint: "lavender" | "peach" | "amber";
+  icon: LucideIcon;
+}[] = [
+  {
+    title: "Summarize workspace",
+    description: "Get an overview of the files in your project",
+    prompt: "Summarize the files in my workspace",
+    tint: "lavender",
+    icon: FileText,
+  },
+  {
+    title: "Visualize data",
+    description: "Create charts and plots from your datasets",
+    prompt: "Create a chart from my data",
+    tint: "peach",
+    icon: BarChart3,
+  },
+  {
+    title: "Explore a dataset",
+    description: "Investigate patterns, stats, and outliers",
+    prompt: "Help me explore a dataset",
+    tint: "amber",
+    icon: Compass,
+  },
+];
+
+// Pika-style tints — theme-aware tokens, dark text in light / light text in dark.
+const tintClasses = {
+  lavender: "bg-scout-card-lavender hover:bg-scout-card-lavender-hover",
+  peach: "bg-scout-card-peach hover:bg-scout-card-peach-hover",
+  amber: "bg-scout-card-amber hover:bg-scout-card-amber-hover",
+};
 
 export function WelcomeContent() {
   return (
-    <div className="text-center">
-      <Sparkles size={28} className="text-scout-accent mx-auto mb-4 opacity-40" />
-      <h2 className="text-2xl font-semibold text-scout-text-primary mb-8">
-        How can I help you?
-      </h2>
+    <div className="w-full">
+      <h1 className="font-display text-display text-scout-text mb-5 text-center uppercase">
+        Explore your data
+      </h1>
+      <p className="text-body font-medium text-scout-text/80 max-w-md mx-auto text-center leading-relaxed">
+      Scout helps you analyze data, write code, and create charts, reports, and more.
+      </p>
+    </div>
+  );
+}
+
+export function SuggestionChips({
+  onSuggestionClick,
+}: {
+  onSuggestionClick: (text: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      {SUGGESTIONS.map((s) => {
+        const Icon = s.icon;
+        return (
+          <button
+            key={s.prompt}
+            onClick={() => onSuggestionClick(s.prompt)}
+            title={s.description}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-pill text-[13px] font-medium text-scout-text transition-all duration-150 hover:-translate-y-0.5 hover:shadow-card-hover active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-scout-text/30 ${tintClasses[s.tint]}`}
+          >
+            <Icon size={15} strokeWidth={2} className="text-scout-text/70" />
+            {s.title}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -33,6 +102,10 @@ export function ChatView({
   currentTool,
   isLoading,
   onRetry,
+  onFork,
+  onOpenArtifact,
+  baseUrl,
+  token,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -45,15 +118,21 @@ export function ChatView({
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-3xl mx-auto px-4 py-6 space-y-8">
         {messages.map((msg, i) => (
           <div key={i}>
+            {/* Tool steps happen before the reply is written — show them in
+                that order so the transcript reads chronologically. */}
             {msg.role === "assistant" && msg.steps && msg.steps.length > 0 && (
               <ToolCard steps={msg.steps} />
             )}
             <MessageBubble
               message={msg}
               onRetry={msg.role === "assistant" && onRetry ? () => onRetry(i) : undefined}
+              onFork={onFork ? () => onFork(i) : undefined}
+              onOpenArtifact={onOpenArtifact}
+              baseUrl={baseUrl}
+              token={token}
             />
           </div>
         ))}
@@ -63,6 +142,15 @@ export function ChatView({
             {streamingSteps.length > 0 && (
               <ToolCard steps={streamingSteps} defaultExpanded />
             )}
+            {streamingText ? (
+              <div className="prose-scout text-[15px]">
+                <MessageBubble
+                  message={{ role: "assistant", content: streamingText }}
+                  baseUrl={baseUrl}
+                  token={token}
+                />
+              </div>
+            ) : null}
             <StreamingIndicator currentTool={currentTool} text={streamingText} />
           </div>
         )}

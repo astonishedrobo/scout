@@ -1,7 +1,22 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Send, Plus, AtSign, FileText, Command, ChevronDown, Square } from "lucide-react";
-
-/* ── Slash commands ─────────────────────────────────────────────── */
+import {
+  Send,
+  Plus,
+  AtSign,
+  FileText,
+  Command,
+  ChevronDown,
+  Square,
+  Loader2,
+  Upload,
+  Check,
+  X,
+  Camera,
+  AlertTriangle,
+} from "lucide-react";
+import { AnchoredPopover } from "./ui/AnchoredPopover";
+import type { ChatImage } from "scout-core";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 
 interface SlashCommand {
   name: string;
@@ -16,66 +31,79 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/help", description: "Show help" },
 ];
 
-/* ── Component ──────────────────────────────────────────────────── */
+interface FileEntry {
+  path: string;
+  abs_path: string;
+  scope: "personal" | "shared" | null;
+}
 
 interface InputBarProps {
   baseUrl: string;
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, attachments?: string[], chatImages?: ChatImage[], onAccepted?: () => void) => Promise<boolean>;
   onSlashCommand?: (command: string) => void;
   disabled: boolean;
   isLoading?: boolean;
   onStop?: () => void;
   models: string[];
+  capabilities: Record<string, { vision: "supported" | "unsupported" | "unverified" }>;
   currentModel: string;
   onSelectModel: (model: string) => void;
-  centered?: boolean;
+  isMultiUser?: boolean;
+  token?: string | null;
+  uploadingCount?: number;
+  onUpload?: (files: FileList | null) => void;
+  welcomeMode?: boolean;
+  embedded?: boolean;
+  requiresVision?: boolean;
+  ensureSession: () => Promise<string>;
 }
 
-export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoading, onStop, models, currentModel, onSelectModel, centered = false }: InputBarProps) {
+export function InputBar({
+  baseUrl,
+  onSubmit,
+  onSlashCommand,
+  disabled,
+  isLoading,
+  onStop,
+  models,
+  capabilities,
+  currentModel,
+  onSelectModel,
+  token,
+  uploadingCount = 0,
+  onUpload,
+  welcomeMode = false,
+  embedded = false,
+  requiresVision = false,
+  ensureSession,
+}: InputBarProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Plus menu state ────────────────────────────────────────────
   const [showPlusMenu, setShowPlusMenu] = useState(false);
-  const plusMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showPlusMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
-        setShowPlusMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showPlusMenu]);
-
-  // ── Slash command state ─────────────────────────────────────────
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [showAt, setShowAt] = useState(false);
+  const [atIndex, setAtIndex] = useState(0);
+  const [atFiles, setAtFiles] = useState<FileEntry[]>([]);
+  const [atPrefix, setAtPrefix] = useState("");
+  const [atStartPos, setAtStartPos] = useState(0);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [imageAttachments, setImageAttachments] = useState<FileEntry[]>([]);
+  const [chatImages, setChatImages] = useState<ChatImage[]>([]);
+  const [pastingImages, setPastingImages] = useState(false);
+
+  const fetchIdRef = useRef(0);
+  const cursorPosRef = useRef(0);
 
   const slashFilter = value.startsWith("/") ? value.toLowerCase() : "";
   const filteredCommands = slashFilter
     ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slashFilter))
     : SLASH_COMMANDS;
-
-  useEffect(() => {
-    if (value.startsWith("/") && !value.includes(" ")) {
-      setShowSlash(true);
-      setSlashIndex(0);
-    } else {
-      setShowSlash(false);
-    }
-  }, [value]);
-
-  // ── @ file autocomplete state ──────────────────────────────────
-  const [showAt, setShowAt] = useState(false);
-  const [atIndex, setAtIndex] = useState(0);
-  const [atFiles, setAtFiles] = useState<string[]>([]);
-  const [atPrefix, setAtPrefix] = useState("");
-  const [atStartPos, setAtStartPos] = useState(0);
-  const fetchIdRef = useRef(0);
-  const cursorPosRef = useRef(0);
 
   const updateCursorPos = useCallback(() => {
     cursorPosRef.current = textareaRef.current?.selectionStart ?? value.length;
@@ -95,6 +123,15 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
   }, [updateCursorPos]);
 
   useEffect(() => {
+    if (value.startsWith("/") && !value.includes(" ")) {
+      setShowSlash(true);
+      setSlashIndex(0);
+    } else {
+      setShowSlash(false);
+    }
+  }, [value]);
+
+  useEffect(() => {
     const pos = cursorPosRef.current || value.length;
     const before = value.slice(0, pos);
     const atMatch = before.match(/(^|[\s])@([^\s]*)$/);
@@ -108,13 +145,21 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
 
       const timer = setTimeout(() => {
         const id = ++fetchIdRef.current;
-        fetch(`${baseUrl}/files?prefix=${encodeURIComponent(prefix)}&limit=20`)
+        fetch(`${baseUrl}/files?prefix=${encodeURIComponent(prefix)}&limit=20`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        })
           .then((r) => {
             if (!r.ok) throw new Error(`${r.status}`);
             return r.json();
           })
           .then((data) => {
-            if (fetchIdRef.current === id) setAtFiles(data.files ?? []);
+            if (fetchIdRef.current === id) {
+              const raw = data.files ?? [];
+              const entries: FileEntry[] = raw.map((f: FileEntry | string) =>
+                typeof f === "string" ? { path: f, abs_path: f, scope: null } : f,
+              );
+              setAtFiles(entries);
+            }
           })
           .catch(() => {
             if (fetchIdRef.current === id) setAtFiles([]);
@@ -125,11 +170,10 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
       setShowAt(false);
       setAtFiles([]);
     }
-  }, [value, baseUrl]);
+  }, [value, baseUrl, token]);
 
-  // ── Auto-resize textarea ───────────────────────────────────────
-  const minH = centered ? 80 : 40;
-  const maxH = centered ? 200 : 160;
+  const minH = welcomeMode ? 120 : 44;
+  const maxH = welcomeMode ? 240 : 160;
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -138,24 +182,27 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
     ta.style.height = Math.max(Math.min(ta.scrollHeight, maxH), minH) + "px";
   }, [value, minH, maxH]);
 
-  // ── Accept helpers ─────────────────────────────────────────────
   const acceptSlashCommand = useCallback(
     (cmd: SlashCommand) => {
       setShowSlash(false);
       setValue("");
-      if (onSlashCommand) onSlashCommand(cmd.name);
+      onSlashCommand?.(cmd.name);
     },
     [onSlashCommand],
   );
 
   const acceptFileRef = useCallback(
-    (filePath: string) => {
+    (file: FileEntry) => {
+      const insertPath = file.abs_path;
       const before = value.slice(0, atStartPos);
       const after = value.slice(atStartPos + 1 + atPrefix.length);
-      const newValue = before + "@" + filePath + " " + after;
-      const newPos = before.length + 1 + filePath.length + 1;
+      const newValue = before + "@" + insertPath + " " + after;
+      const newPos = before.length + 1 + insertPath.length + 1;
       cursorPosRef.current = newPos;
       setValue(newValue);
+      if (/\.(png|jpe?g|webp|gif)$/i.test(file.abs_path)) {
+        setImageAttachments((prev) => prev.some((p) => p.abs_path === file.abs_path) ? prev : [...prev, file]);
+      }
       setShowAt(false);
       setTimeout(() => {
         const ta = textareaRef.current;
@@ -199,18 +246,18 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
     }, 0);
   }, []);
 
-  // ── Submit ─────────────────────────────────────────────────────
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
-    if (!trimmed || disabled) return;
+    if ((!trimmed && imageAttachments.length === 0 && chatImages.length === 0) || disabled) return;
+    if ((imageAttachments.length > 0 || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported") return;
 
     if (showSlash && filteredCommands.length > 0) {
-      acceptSlashCommand(filteredCommands[slashIndex]);
+      acceptSlashCommand(filteredCommands[slashIndex]!);
       return;
     }
 
     if (showAt && atFiles.length > 0) {
-      acceptFileRef(atFiles[atIndex]);
+      acceptFileRef(atFiles[atIndex]!);
       return;
     }
 
@@ -218,17 +265,47 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
       const match = SLASH_COMMANDS.find((c) => c.name === trimmed);
       if (match) {
         setValue("");
-        if (onSlashCommand) onSlashCommand(match.name);
+        onSlashCommand?.(match.name);
         return;
       }
     }
 
-    onSubmit(trimmed);
-    setValue("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [value, disabled, onSubmit, onSlashCommand, showSlash, filteredCommands, slashIndex, acceptSlashCommand, showAt, atFiles, atIndex, acceptFileRef]);
+    let cleared = false;
+    const clearAcceptedDraft = () => {
+      cleared = true;
+      setValue("");
+      setImageAttachments([]);
+      setChatImages([]);
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+    };
+    const accepted = await onSubmit(
+      trimmed,
+      imageAttachments.map((a) => a.abs_path),
+      chatImages,
+      clearAcceptedDraft,
+    );
+    if (accepted && !cleared) {
+      clearAcceptedDraft();
+    }
+  }, [
+    value,
+    disabled,
+    onSubmit,
+    onSlashCommand,
+    showSlash,
+    filteredCommands,
+    slashIndex,
+    acceptSlashCommand,
+    showAt,
+    atFiles,
+    atIndex,
+    acceptFileRef,
+    imageAttachments,
+    capabilities,
+    currentModel,
+    chatImages,
+  ]);
 
-  // ── Keyboard navigation ────────────────────────────────────────
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (showSlash && filteredCommands.length > 0) {
@@ -244,7 +321,7 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
         }
         if (e.key === "Tab") {
           e.preventDefault();
-          acceptSlashCommand(filteredCommands[slashIndex]);
+          acceptSlashCommand(filteredCommands[slashIndex]!);
           return;
         }
         if (e.key === "Escape") {
@@ -267,7 +344,7 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
         }
         if (e.key === "Tab") {
           e.preventDefault();
-          acceptFileRef(atFiles[atIndex]);
+          acceptFileRef(atFiles[atIndex]!);
           return;
         }
         if (e.key === "Escape") {
@@ -282,103 +359,101 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
         handleSubmit();
       }
     },
-    [handleSubmit, showSlash, filteredCommands, slashIndex, acceptSlashCommand, showAt, atFiles, atIndex, acceptFileRef],
+    [
+      handleSubmit,
+      showSlash,
+      filteredCommands,
+      slashIndex,
+      acceptSlashCommand,
+      showAt,
+      atFiles,
+      atIndex,
+      acceptFileRef,
+    ],
   );
+
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (files.length === 0) return;
+    e.preventDefault();
+    setPastingImages(true);
+    try {
+      const sessionId = await ensureSession();
+      const uploaded: ChatImage[] = [];
+      for (const [index, file] of files.entries()) {
+        const form = new FormData();
+        form.append("file", file, file.name || `pasted-image-${index + 1}.png`);
+        const resp = await fetch(`${baseUrl}/sessions/${sessionId}/chat-images`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: form,
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        uploaded.push(await resp.json() as ChatImage);
+      }
+      setChatImages((prev) => [...prev, ...uploaded]);
+    } finally {
+      setPastingImages(false);
+    }
+  }, [baseUrl, token, ensureSession]);
 
   useEffect(() => {
     if (!disabled) textareaRef.current?.focus();
   }, [disabled]);
 
-  // ── Model dropdown state ────────────────────────────────────────
-  const [showModelMenu, setShowModelMenu] = useState(false);
-  const modelMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showModelMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
-        setShowModelMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showModelMenu]);
-
   const hasText = value.trim().length > 0;
+  const visionBlocked = (imageAttachments.length > 0 || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported";
+  const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
-  const shortModel = currentModel
-    ? currentModel.split("/").pop() ?? currentModel
-    : "No model";
+  const popoverMenuItem =
+    "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium hover:bg-scout-lift transition-colors text-left";
+
+  const sendBtnClass = welcomeMode
+    ? "flex items-center gap-2 px-4 py-2 rounded-pill flex-shrink-0 transition-all text-sm font-semibold"
+    : "flex items-center gap-1.5 px-3 py-1.5 rounded-pill flex-shrink-0 transition-all text-xs font-semibold";
 
   return (
-    <div className={`relative w-full ${centered ? "max-w-2xl" : "max-w-3xl flex-shrink-0"} mx-auto px-3 ${centered ? "" : "pb-2 pt-1"}`}>
-      {/* Slash command dropdown */}
-      {showSlash && filteredCommands.length > 0 && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 bg-scout-surface border border-scout-border rounded-lg shadow-xl overflow-hidden z-50">
-          {filteredCommands.map((cmd, i) => (
-            <button
-              key={cmd.name}
-              onClick={() => acceptSlashCommand(cmd)}
-              onMouseEnter={() => setSlashIndex(i)}
-              className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors
-                ${i === slashIndex ? "bg-scout-surface-hover" : ""}`}
-            >
-              <span className="font-mono text-scout-text-primary font-medium text-[13px]">
-                {cmd.name}
-              </span>
-              <span className="text-scout-text-secondary text-xs">
-                {cmd.description}
-              </span>
-            </button>
-          ))}
-          <div className="px-3 py-1.5 border-t border-scout-border">
-            <span className="text-[10px] text-scout-text-secondary">
-              <kbd className="px-1 py-0.5 rounded bg-scout-bg border border-scout-border text-[10px] font-mono">Tab</kbd>
-              {" "}to select{" \u00b7 "}
-              <kbd className="px-1 py-0.5 rounded bg-scout-bg border border-scout-border text-[10px] font-mono">Esc</kbd>
-              {" "}to dismiss
-            </span>
-          </div>
+    <div
+      ref={containerRef}
+      className={`relative w-full shrink-0 ${
+        embedded ? "" : "max-w-3xl mx-auto px-4 bg-scout-canvas py-3"
+      } ${welcomeMode && !embedded ? "pt-4 pb-6" : ""}`}
+    >
+      {uploadingCount > 0 && (
+        <div className="flex items-center gap-1.5 px-1 pb-2 text-xs text-scout-muted">
+          <Loader2 size={12} className="animate-spin" />
+          <span>
+            {uploadingCount} file{uploadingCount > 1 ? "s" : ""} still uploading
+          </span>
         </div>
       )}
 
-      {/* @ file autocomplete dropdown */}
-      {showAt && atFiles.length > 0 && !showSlash && (
-        <div className="absolute bottom-full left-3 right-3 mb-1 bg-scout-surface border border-scout-border rounded-lg shadow-xl overflow-hidden z-50 max-h-60 overflow-y-auto">
-          {atFiles.map((file, i) => (
-            <button
-              key={file}
-              onClick={() => acceptFileRef(file)}
-              onMouseEnter={() => setAtIndex(i)}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
-                ${i === atIndex ? "bg-scout-surface-hover" : ""}`}
-            >
-              <FileText size={14} className="text-scout-text-secondary flex-shrink-0" />
-              <span className="font-mono text-scout-text-primary truncate text-xs">
-                {file}
-              </span>
-            </button>
-          ))}
-          <div className="px-3 py-1.5 border-t border-scout-border">
-            <span className="text-[10px] text-scout-text-secondary">
-              <kbd className="px-1 py-0.5 rounded bg-scout-bg border border-scout-border text-[10px] font-mono">Tab</kbd>
-              {" "}to select{" \u00b7 "}
-              <kbd className="px-1 py-0.5 rounded bg-scout-bg border border-scout-border text-[10px] font-mono">Esc</kbd>
-              {" "}to dismiss
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Input container */}
       <div
-        className={`
-          flex flex-col rounded-2xl border
-          ${disabled ? "border-scout-border/50 opacity-60" : "border-scout-border"}
-          bg-scout-input-bg overflow-visible relative
-        `}
+        className={`flex flex-col bg-scout-input-bg overflow-visible border border-transparent focus-within:border-scout-hairline transition-colors ${
+          welcomeMode ? "rounded-hero" : "rounded-card"
+        } ${disabled ? "opacity-60" : ""}`}
       >
-        {/* Textarea */}
+        {(imageAttachments.length > 0 || chatImages.length > 0) && (
+          <div className="flex gap-2 overflow-x-auto px-3 pt-3">
+            {chatImages.map((image) => (
+              <div key={image.id} className="relative shrink-0 w-20 rounded-btn border border-scout-hairline-faint bg-scout-panel overflow-hidden">
+                <AuthenticatedImage src={`${baseUrl}${image.url}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.name} />
+                <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.name}</div>
+                <button onClick={() => setChatImages((p) => p.filter((x) => x.id !== image.id))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
+              </div>
+            ))}
+            {imageAttachments.map((image) => (
+              <div key={image.abs_path} className="relative shrink-0 w-20 rounded-btn border border-scout-hairline-faint bg-scout-panel overflow-hidden">
+                <AuthenticatedImage src={`${baseUrl}/files/content?path=${encodeURIComponent(image.abs_path)}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.path} />
+                <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.path.split("/").pop()}</div>
+                <button onClick={() => setImageAttachments((p) => p.filter((x) => x.abs_path !== image.abs_path))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={value}
@@ -387,115 +462,214 @@ export function InputBar({ baseUrl, onSubmit, onSlashCommand, disabled, isLoadin
             setValue(e.target.value);
           }}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           disabled={disabled}
-          placeholder={disabled ? "Waiting for response..." : "How can I help you?"}
+          placeholder={
+            disabled
+              ? "Waiting for response..."
+              : welcomeMode
+                ? "Describe what you want to explore…"
+                : "How can I help you?"
+          }
           rows={1}
-          className="flex-1 bg-transparent text-sm text-scout-text-primary
-                     placeholder:text-scout-text-secondary/50
-                     resize-none outline-none
-                     px-4 pt-3 pb-1"
+          className={`flex-1 bg-transparent text-scout-text placeholder:text-scout-muted resize-none outline-none px-5 pt-4 pb-2 ${
+            welcomeMode ? "text-base" : "text-[15px]"
+          }`}
           style={{ minHeight: minH, maxHeight: maxH }}
         />
 
-        {/* Bottom row: + button | model selector | send */}
-        <div className="flex items-center justify-between px-1.5 pb-1.5 pt-0">
-          {/* Left: Plus button */}
-          <div className="relative flex-shrink-0" ref={plusMenuRef}>
+        <div className="flex items-center justify-between px-3 pb-3 pt-0">
+          <div className="flex items-center gap-1">
             <button
+              ref={plusBtnRef}
               onClick={() => setShowPlusMenu((p) => !p)}
               disabled={disabled}
-              className="p-1.5 rounded-lg text-scout-text-secondary/60
-                         hover:text-scout-text-primary hover:bg-scout-surface-hover
-                         transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              aria-label="More options"
+              className={`flex items-center justify-center rounded-xl bg-white dark:bg-scout-charcoal text-scout-text shadow-sm border border-scout-hairline-faint hover:opacity-90 transition disabled:opacity-30 ${
+                welcomeMode ? "w-9 h-9" : "w-8 h-8"
+              }`}
+              aria-label="Attach files and more"
             >
-              <Plus size={18} />
+              <Plus size={welcomeMode ? 18 : 16} />
             </button>
-
-            {showPlusMenu && (
-              <div className="absolute bottom-full left-0 mb-1 w-52 bg-scout-surface border border-scout-border rounded-lg shadow-xl overflow-hidden z-50">
-                <button
-                  onClick={insertAtSymbol}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm
-                             hover:bg-scout-surface-hover transition-colors"
-                >
-                  <AtSign size={16} className="text-scout-text-secondary" />
-                  <span className="text-scout-text-primary">Reference files</span>
-                </button>
-                <button
-                  onClick={insertSlash}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-sm
-                             hover:bg-scout-surface-hover transition-colors"
-                >
-                  <Command size={16} className="text-scout-text-secondary" />
-                  <span className="text-scout-text-primary">Commands</span>
-                </button>
-              </div>
-            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                onUpload?.(e.target.files);
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                setShowPlusMenu(false);
+              }}
+            />
           </div>
 
-          {/* Right: Model selector + Send */}
-          <div className="flex items-center gap-1">
-            {/* Model selector */}
-            <div className="relative" ref={modelMenuRef}>
-              <button
-                onClick={() => setShowModelMenu((p) => !p)}
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs
-                           text-scout-text-secondary hover:text-scout-text-primary
-                           hover:bg-scout-surface-hover transition-colors"
-              >
-                <span className="truncate max-w-[140px]">{shortModel}</span>
-                <ChevronDown size={12} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
-              </button>
+          <div className="flex items-center gap-2">
+            <button
+              ref={modelBtnRef}
+              onClick={() => setShowModelMenu((p) => !p)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-medium text-scout-text/70 hover:text-scout-text hover:bg-scout-lift transition-colors"
+            >
+              <span className="truncate max-w-[160px]">{shortModel}</span>
+              <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
+            </button>
 
-              {showModelMenu && models.length > 0 && (
-                <div className="absolute bottom-full right-0 mb-1 w-64 bg-scout-surface border border-scout-border rounded-lg shadow-xl max-h-48 overflow-y-auto z-50">
-                  {models.map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => { onSelectModel(m); setShowModelMenu(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-scout-surface-hover transition-colors
-                        ${m === currentModel ? "text-scout-text-primary" : "text-scout-text-secondary"}`}
-                    >
-                      {m}
-                      {m === currentModel && <span className="ml-1 opacity-50">(active)</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Send / Stop button */}
             {isLoading ? (
               <button
                 onClick={onStop}
-                className="p-1.5 rounded-lg transition-colors flex-shrink-0 bg-scout-text-primary text-scout-bg hover:opacity-90"
+                className={`${sendBtnClass} bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]`}
                 aria-label="Stop execution"
               >
-                <Square size={16} fill="currentColor" />
+                <Square size={welcomeMode ? 14 : 12} fill="currentColor" />
+                {welcomeMode && <span>Stop</span>}
               </button>
             ) : (
               <button
-                onClick={handleSubmit}
-                disabled={disabled || !hasText}
-                className={`p-1.5 rounded-lg transition-colors flex-shrink-0
-                  ${hasText && !disabled
-                    ? "bg-scout-text-primary text-scout-bg hover:opacity-90"
-                    : "text-scout-text-secondary/30 cursor-not-allowed"
-                  }`}
+                onClick={() => void handleSubmit()}
+                disabled={disabled || pastingImages || (!hasText && imageAttachments.length === 0 && chatImages.length === 0) || visionBlocked}
+                className={`${sendBtnClass} ${
+                  (hasText || imageAttachments.length > 0 || chatImages.length > 0) && !disabled && !visionBlocked
+                    ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
+                    : "bg-white dark:bg-scout-charcoal text-scout-muted shadow-sm border border-scout-hairline-faint cursor-not-allowed"
+                }`}
                 aria-label="Send message"
               >
-                <Send size={16} />
+                <Send size={welcomeMode ? 16 : 14} />
+                {welcomeMode && <span>Send</span>}
               </button>
             )}
           </div>
         </div>
       </div>
+      {visionBlocked && (
+        <div className="flex items-center gap-2 px-2 pt-2 text-xs text-scout-warning">
+          <AlertTriangle size={13} />
+          <span className="flex-1">This model cannot view images.</span>
+          <button onClick={() => setShowModelMenu(true)} className="font-semibold hover:underline">Change model</button>
+        </div>
+      )}
 
-      {/* Disclaimer */}
-      <p className="text-center text-[11px] text-scout-text-secondary/50 mt-1.5 pb-1">
-        AI responses may make mistakes. Please verify responses.
-      </p>
+      {!welcomeMode && (
+        <p className="text-center text-caption text-scout-muted mt-3">
+          AI responses may make mistakes. Please verify responses.
+        </p>
+      )}
+
+      <AnchoredPopover
+        open={showSlash && filteredCommands.length > 0}
+        onClose={() => setShowSlash(false)}
+        anchorRef={containerRef}
+        placement="top-start"
+        matchAnchorWidth
+        className="p-1.5"
+      >
+        {filteredCommands.map((cmd, i) => (
+          <button
+            key={cmd.name}
+            onClick={() => acceptSlashCommand(cmd)}
+            onMouseEnter={() => setSlashIndex(i)}
+            className={`${popoverMenuItem} ${i === slashIndex ? "bg-scout-lift" : ""}`}
+          >
+            <span className="font-mono text-scout-text font-semibold text-[13px]">{cmd.name}</span>
+            <span className="text-scout-muted text-xs font-normal">{cmd.description}</span>
+          </button>
+        ))}
+      </AnchoredPopover>
+
+      <AnchoredPopover
+        open={showAt && atFiles.length > 0 && !showSlash}
+        onClose={() => setShowAt(false)}
+        anchorRef={containerRef}
+        placement="top-start"
+        matchAnchorWidth
+        maxHeight={240}
+        className="p-1.5"
+      >
+        {atFiles.map((file, i) => (
+          <button
+            key={file.abs_path}
+            onClick={() => acceptFileRef(file)}
+            onMouseEnter={() => setAtIndex(i)}
+            className={`${popoverMenuItem} ${i === atIndex ? "bg-scout-lift" : ""}`}
+          >
+            <FileText size={14} className="text-scout-muted shrink-0" />
+            <span className="font-mono text-scout-text truncate text-xs flex-1">{file.path}</span>
+            {file.scope && (
+              <span className="text-[10px] px-1 rounded-btn border border-scout-hairline text-scout-muted shrink-0">
+                {file.scope}
+              </span>
+            )}
+          </button>
+        ))}
+      </AnchoredPopover>
+
+      <AnchoredPopover
+        open={showPlusMenu}
+        onClose={() => setShowPlusMenu(false)}
+        anchorRef={plusBtnRef}
+        placement="bottom-start"
+        className="w-52 p-1.5"
+      >
+        <button onClick={insertAtSymbol} className={popoverMenuItem}>
+          <AtSign size={16} className="text-scout-muted" />
+          <span className="text-scout-text">Reference files</span>
+        </button>
+        <button onClick={insertSlash} className={popoverMenuItem}>
+          <Command size={16} className="text-scout-muted" />
+          <span className="text-scout-text">Commands</span>
+        </button>
+        {onUpload && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className={popoverMenuItem}
+          >
+            <Upload size={16} className="text-scout-muted" />
+            <span className="text-scout-text">Upload files</span>
+          </button>
+        )}
+      </AnchoredPopover>
+
+      <AnchoredPopover
+        open={showModelMenu && models.length > 0}
+        onClose={() => setShowModelMenu(false)}
+        anchorRef={modelBtnRef}
+        placement="bottom-end"
+        className="w-72 p-1.5"
+      >
+        {models.map((m) => {
+          const isActive = m === currentModel;
+          const slash = m.indexOf("/");
+          const provider = slash > -1 ? m.slice(0, slash + 1) : "";
+          const name = slash > -1 ? m.slice(slash + 1) : m;
+          const vision = capabilities[m]?.vision ?? "unverified";
+          const incompatible = (imageAttachments.length > 0 || chatImages.length > 0 || requiresVision) && vision !== "supported";
+          return (
+            <button
+              key={m}
+              disabled={incompatible}
+              title={incompatible ? "A verified vision model is required for attached images." : undefined}
+              onClick={() => {
+                onSelectModel(m);
+                setShowModelMenu(false);
+              }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                isActive
+                  ? "text-scout-text bg-scout-lift"
+                  : "text-scout-text/70 hover:bg-scout-input-bg hover:text-scout-text"
+              }`}
+            >
+              <span className="flex-1 truncate">
+                {provider && <span className="text-scout-muted">{provider}</span>}
+                {name}
+              </span>
+              {vision === "supported" && <Camera size={14} className="text-scout-muted shrink-0" />}
+              {vision === "unverified" && <span className="text-[10px] text-scout-muted">Unverified</span>}
+              {isActive && <Check size={15} className="shrink-0 text-scout-text" />}
+            </button>
+          );
+        })}
+      </AnchoredPopover>
+
     </div>
   );
 }

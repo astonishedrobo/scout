@@ -27,9 +27,13 @@ export {
   pruneOldSessions,
   appendUserMessage,
   appendAssistantMessage,
+  scheduleSessionTitleGeneration,
   sessionDir,
+  DEFAULT_SESSION_TITLE,
+  LEGACY_DEFAULT_TITLES,
 } from "./sessionStore.js";
 export type { SessionMeta } from "./sessionStore.js";
+export { normalizeTitle, generateSessionTitle } from "./sessionTitle.js";
 export { theme, STATUS_ICONS, separator } from "./theme.js";
 export { parseFileRefs } from "./fileRef.js";
 export type { ParseResult } from "./fileRef.js";

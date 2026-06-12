@@ -7,12 +7,14 @@
  */
 
 import { EventSourceParserStream } from "eventsource-parser/stream";
-import type { ChatEvent } from "./types.js";
+import type { ChatEvent, ChatImage } from "./types.js";
 
 export interface ChatOptions {
   baseUrl: string;
+  sessionId: string;
   message: string;
   attachments?: string[];
+  chatImageIds?: string[];
 }
 
 /**
@@ -26,7 +28,9 @@ export async function* streamChat(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: opts.message,
+      session_id: opts.sessionId,
       attachments: opts.attachments ?? [],
+      chat_image_ids: opts.chatImageIds ?? [],
     }),
   });
 
@@ -73,8 +77,22 @@ export async function* streamChat(
 }
 
 /** Send a reset request to clear conversation. */
-export async function resetConversation(baseUrl: string): Promise<void> {
-  await fetch(`${baseUrl}/reset`, { method: "POST" });
+export async function resetConversation(baseUrl: string, sessionId: string): Promise<void> {
+  await fetch(`${baseUrl}/reset?session_id=${encodeURIComponent(sessionId)}`, { method: "POST" });
+}
+
+export async function ensureServerSession(baseUrl: string, sessionId: string, model?: string): Promise<void> {
+  const query = model ? `?model=${encodeURIComponent(model)}` : "";
+  const resp = await fetch(`${baseUrl}/sessions/${sessionId}${query}`, { method: "PUT" });
+  if (!resp.ok) throw new Error(`Session registration failed: ${resp.status}`);
+}
+
+export async function uploadChatImage(baseUrl: string, sessionId: string, bytes: Uint8Array, name: string, type: string): Promise<ChatImage> {
+  const form = new FormData();
+  form.append("file", new Blob([Buffer.from(bytes)], { type }), name);
+  const resp = await fetch(`${baseUrl}/sessions/${sessionId}/chat-images`, { method: "POST", body: form });
+  if (!resp.ok) throw new Error(`Image upload failed: ${resp.status}`);
+  return resp.json() as Promise<ChatImage>;
 }
 
 /** Get the current config from the server. */
@@ -146,9 +164,10 @@ export async function reloadServerConfig(
 /** Restore conversation history on the Python server from a persisted session. */
 export async function restoreServerSession(
   baseUrl: string,
-  messages: { role: "user" | "assistant"; content: string }[],
+  sessionId: string,
+  messages: { role: "user" | "assistant"; content: string; chatImages?: ChatImage[] }[],
 ): Promise<number> {
-  const resp = await fetch(`${baseUrl}/restore`, {
+  const resp = await fetch(`${baseUrl}/restore?session_id=${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),

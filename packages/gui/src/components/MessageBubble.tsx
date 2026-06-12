@@ -1,14 +1,21 @@
 import { useState, useCallback } from "react";
 import type { Message } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { Copy, Check, RotateCcw } from "lucide-react";
+import { Copy, Check, RotateCcw, GitBranch } from "lucide-react";
+import type { Artifact } from "scout-core";
+import { ArtifactCards } from "./ArtifactCards";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 
 interface MessageBubbleProps {
   message: Message;
   onRetry?: () => void;
+  onFork?: () => void;
+  onOpenArtifact?: (artifact: Artifact) => void;
+  baseUrl?: string;
+  token?: string | null;
 }
 
-export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, baseUrl = "", token = null }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -22,17 +29,30 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
     return (
       <div className="flex justify-end group w-full">
         <div className="max-w-[min(75%,34rem)]">
-          <div className="bg-[#141413] rounded-xl px-4 py-2.5">
-            <p className="text-scout-text-primary text-sm whitespace-pre-wrap break-words">
+          <div className="bg-scout-input-bg rounded-2xl px-4 py-2.5 shadow-none">
+            {!!message.chatImages?.length && (
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {message.chatImages.map((image) => (
+                  <AuthenticatedImage key={image.id} src={`${baseUrl}${image.url}`} token={token} alt={image.name} className="h-28 max-w-48 rounded-btn object-cover border border-scout-hairline-faint" />
+                ))}
+              </div>
+            )}
+            {message.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)) && (
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {message.attachments.filter((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)).map((path) => (
+                  <AuthenticatedImage key={path} src={`${baseUrl}/files/content?path=${encodeURIComponent(path)}`} token={token} alt={path.split("/").pop() ?? path} className="h-28 max-w-48 rounded-btn object-cover border border-scout-hairline-faint" />
+                ))}
+              </div>
+            )}
+            <p className="text-scout-text text-[15px] leading-relaxed whitespace-pre-wrap break-words">
               {message.content}
             </p>
           </div>
           <div className="mt-1 flex justify-end">
             <button
               onClick={handleCopy}
-              className="p-1.5 rounded-lg text-scout-text-secondary/40 hover:text-scout-text-primary
-                       hover:bg-scout-surface-hover transition-all
-                       opacity-0 group-hover:opacity-100"
+              className="hover-reveal p-2 rounded-btn text-scout-muted hover:text-scout-text
+                       hover:bg-scout-lift"
               title="Copy message"
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -46,17 +66,19 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
   return (
     <div>
       <div className="min-w-0 overflow-hidden">
-        <div className="prose-scout text-sm overflow-x-auto">
+        <div className="prose-scout text-[15px] overflow-x-auto">
           <MarkdownRenderer content={message.content} />
         </div>
       </div>
+      {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
+        <ArtifactCards artifacts={message.artifacts} onOpen={onOpenArtifact} />
+      )}
 
-      {/* Action buttons - always visible */}
       <div className="flex items-center gap-0.5 mt-2">
         <button
           onClick={handleCopy}
-          className="p-1.5 rounded-lg text-scout-text-secondary/50 hover:text-scout-text-primary
-                     hover:bg-scout-surface-hover transition-colors"
+          className="p-2 rounded-btn text-scout-muted hover:text-scout-text
+                     hover:bg-scout-lift transition-colors"
           title="Copy response"
         >
           {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -64,11 +86,21 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         {onRetry && (
           <button
             onClick={onRetry}
-            className="p-1.5 rounded-lg text-scout-text-secondary/50 hover:text-scout-text-primary
-                       hover:bg-scout-surface-hover transition-colors"
+            className="p-2 rounded-btn text-scout-muted hover:text-scout-text
+                       hover:bg-scout-lift transition-colors"
             title="Retry"
           >
             <RotateCcw size={16} />
+          </button>
+        )}
+        {onFork && (
+          <button
+            onClick={onFork}
+            className="p-2 rounded-btn text-scout-muted hover:text-scout-text
+                       hover:bg-scout-lift transition-colors"
+            title="Fork from here"
+          >
+            <GitBranch size={16} />
           </button>
         )}
       </div>

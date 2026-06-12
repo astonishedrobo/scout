@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from "react";
 export interface User {
   id: number;
   username: string;
+  is_admin: boolean;
 }
 
 interface AuthState {

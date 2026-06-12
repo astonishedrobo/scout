@@ -1,6 +1,8 @@
-import { X, Keyboard } from "lucide-react";
+import { Keyboard } from "lucide-react";
+import { CenterModal } from "./ui/CenterModal";
 
 interface HelpDialogProps {
+  open: boolean;
   onClose: () => void;
 }
 
@@ -18,63 +20,43 @@ const FEATURES = [
   { title: "Init Workspace", desc: "Generate .scout/skills/workspace.md to give the agent context about your project." },
 ];
 
-export function HelpDialog({ onClose }: HelpDialogProps) {
+export function HelpDialog({ open, onClose }: HelpDialogProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-scout-surface border border-scout-border rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-scout-border">
-          <h3 className="font-semibold text-scout-text-primary">Help</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-scout-surface-hover text-scout-text-secondary"
-          >
-            <X size={18} />
-          </button>
-        </div>
+    <CenterModal open={open} onClose={onClose} title="Help" maxWidth="md">
+      <div className="px-5 py-4 space-y-5">
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <Keyboard size={14} className="text-scout-muted" />
+            <h4 className="text-sm font-semibold text-scout-text">Keyboard Shortcuts</h4>
+          </div>
+          <div className="space-y-2">
+            {SHORTCUTS.map((s) => (
+              <div key={s.keys} className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-scout-text/70">{s.desc}</span>
+                <kbd className="px-2 py-1 rounded-lg bg-scout-input-bg border border-scout-hairline text-xs font-mono font-medium text-scout-text shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)]">
+                  {s.keys}
+                </kbd>
+              </div>
+            ))}
+          </div>
+        </section>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {/* Shortcuts */}
-          <section>
-            <div className="flex items-center gap-2 mb-2">
-              <Keyboard size={14} className="text-scout-text-secondary" />
-              <h4 className="text-sm font-semibold text-scout-text-primary">
-                Keyboard Shortcuts
-              </h4>
-            </div>
-            <div className="space-y-1.5">
-              {SHORTCUTS.map((s) => (
-                <div key={s.keys} className="flex items-center justify-between text-sm">
-                  <span className="text-scout-text-secondary">{s.desc}</span>
-                  <kbd className="px-2 py-0.5 rounded bg-scout-bg border border-scout-border text-xs font-mono text-scout-text-primary">
-                    {s.keys}
-                  </kbd>
-                </div>
-              ))}
-            </div>
-          </section>
+        <section>
+          <h4 className="text-sm font-semibold text-scout-text mb-3">Features</h4>
+          <div className="space-y-3">
+            {FEATURES.map((f) => (
+              <div key={f.title}>
+                <p className="text-sm font-medium text-scout-text">{f.title}</p>
+                <p className="text-[13px] text-scout-muted leading-relaxed">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
 
-          {/* Features */}
-          <section>
-            <h4 className="text-sm font-semibold text-scout-text-primary mb-2">
-              Features
-            </h4>
-            <div className="space-y-3">
-              {FEATURES.map((f) => (
-                <div key={f.title}>
-                  <p className="text-sm font-medium text-scout-text-primary">{f.title}</p>
-                  <p className="text-xs text-scout-text-secondary leading-relaxed">{f.desc}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Version */}
-          <p className="text-xs text-scout-text-secondary pt-2 border-t border-scout-border">
-            Scout v0.1.0
-          </p>
-        </div>
+        <p className="text-xs font-medium text-scout-muted pt-3 border-t border-scout-hairline-faint">
+          Scout v0.1.0
+        </p>
       </div>
-    </div>
+    </CenterModal>
   );
 }

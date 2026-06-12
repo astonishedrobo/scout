@@ -3,13 +3,15 @@ import { useState, useEffect, useCallback } from "react";
 interface UseConfigReturn {
   models: string[];
   currentModel: string;
-  setModel: (model: string) => Promise<void>;
+  setModel: (model: string, sessionId?: string | null) => Promise<void>;
   reloadConfig: () => Promise<void>;
+  capabilities: Record<string, { vision: "supported" | "unsupported" | "unverified" }>;
 }
 
 export function useConfig(baseUrl: string, isReady: boolean, token: string | null): UseConfigReturn {
   const [models, setModels] = useState<string[]>([]);
   const [currentModel, setCurrentModel] = useState("");
+  const [capabilities, setCapabilities] = useState<UseConfigReturn["capabilities"]>({});
 
   const fetchConfig = useCallback(async () => {
     if (!isReady) return;
@@ -22,6 +24,7 @@ export function useConfig(baseUrl: string, isReady: boolean, token: string | nul
       const modelsBody = await modelsResp.json();
       setCurrentModel(cfg?.agent?.model ?? "");
       setModels(modelsBody?.models ?? []);
+      setCapabilities(modelsBody?.capabilities ?? {});
     } catch {
       // best-effort
     }
@@ -32,26 +35,21 @@ export function useConfig(baseUrl: string, isReady: boolean, token: string | nul
   }, [fetchConfig]);
 
   const setModel = useCallback(
-    async (model: string) => {
-      setCurrentModel(model);
-      await fetch(`${baseUrl}/config`, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          key: "agent.model",
-          value: model,
-          scope: "global",
-        }),
-      }).catch(() => {});
-      await fetch(`${baseUrl}/config/reload`, { 
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      }).catch(() => {});
+    async (model: string, sessionId?: string | null) => {
+      if (!sessionId) throw new Error("Start a conversation before switching models.");
+      const resp = await fetch(`${baseUrl}/sessions/${sessionId}/model`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ model }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body?.detail?.message ?? body?.detail ?? "Could not switch model.");
+      }
+      const body = await resp.json();
+      setCurrentModel(body.model);
     },
-    [baseUrl],
+    [baseUrl, token],
   );
 
   const reloadConfig = useCallback(async () => {
@@ -62,5 +60,5 @@ export function useConfig(baseUrl: string, isReady: boolean, token: string | nul
     await fetchConfig();
   }, [baseUrl, fetchConfig]);
 
-  return { models, currentModel, setModel, reloadConfig };
+  return { models, currentModel, setModel, reloadConfig, capabilities };
 }
