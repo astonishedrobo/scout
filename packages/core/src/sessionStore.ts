@@ -21,11 +21,7 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Message, ToolStep } from "./types.js";
-import {
-  DEFAULT_SESSION_TITLE,
-  LEGACY_DEFAULT_TITLES,
-  generateSessionTitle,
-} from "./sessionTitle.js";
+import { DEFAULT_SESSION_TITLE, LEGACY_DEFAULT_TITLES } from "./sessionTitle.js";
 
 /* ── Types ────────────────────────────────────────────────────────── */
 
@@ -153,26 +149,6 @@ export function appendUserMessage(
     ...(attachments?.length ? { attachments } : {}),
   };
   appendFileSync(sessionFile(cwd, sessionId), jsonLine(line));
-}
-
-/**
- * Fire-and-forget LLM title generation for the first user turn.
- */
-export function scheduleSessionTitleGeneration(
-  cwd: string,
-  sessionId: string,
-  message: string,
-  model: string,
-): void {
-  void (async () => {
-    const header = readHeader(sessionFile(cwd, sessionId));
-    if (!header || !LEGACY_DEFAULT_TITLES.has(header.title)) return;
-    const title = await generateSessionTitle(message, model);
-    if (LEGACY_DEFAULT_TITLES.has(title)) return;
-    const latest = readHeader(sessionFile(cwd, sessionId));
-    if (!latest || !LEGACY_DEFAULT_TITLES.has(latest.title)) return;
-    setSessionTitle(cwd, sessionId, title);
-  })();
 }
 
 /**

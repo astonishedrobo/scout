@@ -90,6 +90,7 @@ from ..session_snapshot import copy_session_snapshot, load_session_snapshot, sav
 from .session_title import (
     DEFAULT_SESSION_TITLE,
     LEGACY_DEFAULT_TITLES,
+    fallback_title,
     generate_session_title,
 )
 from .workspace import ensure_workspaces, shared_workspace, user_workspace
@@ -183,28 +184,77 @@ def _set_session_title(session_path: Path, title: str) -> None:
     session_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-async def _run_title_generation(
+def _update_session_header(session_path: Path, **updates: Any) -> dict:
+    text = session_path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    header = json.loads(lines[0])
+    header.update(updates)
+    lines[0] = json.dumps(header)
+    session_path.write_text("\n".join(lines), encoding="utf-8")
+    return header
+
+
+def _title_context(session_path: Path, assistant_response: str | None = None) -> dict:
+    parsed = _parse_session_file(session_path)
+    messages = parsed["messages"] if parsed else []
+    first_user = next((m for m in messages if m["role"] == "user"), {})
+    first_assistant = assistant_response or next(
+        (m["content"] for m in messages if m["role"] == "assistant" and m.get("content")), ""
+    )
+    attachments = list(first_user.get("attachments") or [])
+    chat_images = list(first_user.get("chatImages") or [])
+    return {
+        "message": first_user.get("content", ""),
+        "assistant_response": first_assistant,
+        "has_images": bool(chat_images or image_paths(attachments)),
+        "attachment_names": [Path(p).name for p in attachments],
+    }
+
+
+async def _run_title_job(
     session_path: Path,
-    message: str,
     model: str,
-    title_queue: asyncio.Queue,
     assistant_response: str | None = None,
+    timeout_seconds: int = 60,
+    max_attempts: int = 2,
 ) -> None:
     try:
         header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
         if header.get("title") not in LEGACY_DEFAULT_TITLES:
             return
-        title = await generate_session_title(
-            message, model=model, assistant_response=assistant_response,
+        context = _title_context(session_path, assistant_response)
+        _update_session_header(
+            session_path, titleGenerationStatus="pending",
+            titleGenerationAttempts=0, titleGenerationLastError=None,
         )
+        title = DEFAULT_SESSION_TITLE
+        for attempt in range(1, max_attempts + 1):
+            _update_session_header(session_path, titleGenerationAttempts=attempt)
+            title = await generate_session_title(
+                context["message"], model=model,
+                assistant_response=context["assistant_response"],
+                timeout_seconds=timeout_seconds,
+            )
+            if title not in LEGACY_DEFAULT_TITLES:
+                break
+            logger.info("Session title attempt %d/%d failed", attempt, max_attempts)
         header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
         if header.get("title") not in LEGACY_DEFAULT_TITLES:
             return
         if title in LEGACY_DEFAULT_TITLES:
-            return
-        _set_session_title(session_path, title)
-        await title_queue.put({"type": "session_title", "title": title})
-    except Exception:
+            title = fallback_title(**context)
+            logger.info("Using deterministic session title fallback: %s", title)
+        _update_session_header(
+            session_path, title=title, titleGenerationStatus="completed",
+            titleGenerationLastError=None,
+        )
+        logger.info("Session title updated: %s", title)
+    except Exception as exc:
+        if session_path.exists():
+            _update_session_header(
+                session_path, titleGenerationStatus="failed",
+                titleGenerationLastError=type(exc).__name__,
+            )
         logger.warning("Session title generation task failed", exc_info=True)
 
 
@@ -254,6 +304,7 @@ def _parse_session_file(path: Path) -> dict | None:
             "model": header.get("model"),
             "parentSessionId": header.get("parentSessionId"),
             "forkPointIndex": header.get("forkPointIndex"),
+            "titleGenerationStatus": header.get("titleGenerationStatus"),
         },
         "messages": messages,
     }
@@ -315,6 +366,7 @@ def create_app(
         "init_error": None,
         "multi_user": multi_user,
         "execution_health": None,
+        "title_tasks": {},
     }
 
     def _load_base_config() -> AppConfig:
@@ -329,6 +381,35 @@ def create_app(
 
     def _base_config_copy() -> AppConfig:
         return _state["base_config"].model_copy(deep=True)
+
+    def _schedule_title_job(
+        session_path: Path,
+        *,
+        model: str,
+        config: AppConfig,
+        assistant_response: str | None = None,
+    ) -> None:
+        if not config.session_titles.enabled or not session_path.exists():
+            return
+        try:
+            header = json.loads(session_path.read_text(encoding="utf-8").splitlines()[0])
+        except Exception:
+            logger.warning("Could not inspect session for title generation", exc_info=True)
+            return
+        if header.get("title") not in LEGACY_DEFAULT_TITLES:
+            return
+        key = str(session_path)
+        existing = _state["title_tasks"].get(key)
+        if existing and not existing.done():
+            return
+        title_model = config.session_titles.model or model or config.agent.model
+        task = asyncio.create_task(_run_title_job(
+            session_path, title_model, assistant_response,
+            timeout_seconds=config.session_titles.timeout_seconds,
+            max_attempts=config.session_titles.max_attempts,
+        ))
+        _state["title_tasks"][key] = task
+        task.add_done_callback(lambda _task: _state["title_tasks"].pop(key, None))
 
     async def _probe_execution_sandbox() -> dict:
         """Probe the execution worker and refresh cached health/init state."""
@@ -741,9 +822,27 @@ def create_app(
             "multi-user" if multi_user else "local",
             _state["cwd"],
         )
+        config = _base_config_copy()
+        if config.session_titles.enabled:
+            for path in SESSIONS_ROOT.glob("*/*/*.jsonl"):
+                try:
+                    parsed = _parse_session_file(path)
+                    header = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+                    if (
+                        parsed and header.get("title") in LEGACY_DEFAULT_TITLES
+                        and any(m["role"] == "assistant" for m in parsed["messages"])
+                    ):
+                        _schedule_title_job(
+                            path, model=header.get("model") or config.agent.model,
+                            config=config,
+                        )
+                except Exception:
+                    logger.warning("Could not resume pending title job for %s", path, exc_info=True)
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        for task in _state["title_tasks"].values():
+            task.cancel()
         for s in _state["sessions"].values():
             await s.agent.close()
 
@@ -861,19 +960,6 @@ def create_app(
 
         cwd = _session_cwd(uid)
         session_path = _session_file(cwd, req.session_id, uid)
-        title_queue: asyncio.Queue = asyncio.Queue()
-        title_task: asyncio.Task | None = None
-        title_model = s.model
-        if session_path.exists():
-            try:
-                header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
-                if header.get("title") in LEGACY_DEFAULT_TITLES:
-                    title_task = asyncio.create_task(
-                        _run_title_generation(session_path, req.message, title_model, title_queue),
-                    )
-            except Exception:
-                logger.debug("Could not schedule session title generation", exc_info=True)
-
         async def _generate():
             event_count = 0
 
@@ -883,17 +969,6 @@ def create_app(
 
             def session_event(payload: dict) -> dict:
                 return {**payload, "session_id": req.session_id}
-
-            async def retry_title_after_initial(response: str) -> None:
-                if title_task:
-                    try:
-                        await title_task
-                    except Exception:
-                        pass
-                await _run_title_generation(
-                    session_path, req.message, title_model, asyncio.Queue(),
-                    assistant_response=response,
-                )
 
             event_count += 1
             yield ServerSentEvent(
@@ -917,17 +992,6 @@ def create_app(
             done = False
             try:
                 while not done:
-                    while True:
-                        try:
-                            title_event = title_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                        event_count += 1
-                        yield ServerSentEvent(
-                            data=json.dumps(session_event(title_event)),
-                            event="session_title",
-                        )
-
                     agent_get = asyncio.ensure_future(agent_events.get())
                     approval_get = asyncio.ensure_future(approval_q.get())
                     abort_get = asyncio.ensure_future(s.abort_event.wait())
@@ -1004,16 +1068,9 @@ def create_app(
 
             finally:
                 if first_assistant_response and session_path.exists():
-                    asyncio.create_task(retry_title_after_initial(first_assistant_response))
-                while True:
-                    try:
-                        title_event = title_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    event_count += 1
-                    yield ServerSentEvent(
-                        data=json.dumps(session_event(title_event)),
-                        event="session_title",
+                    _schedule_title_job(
+                        session_path, model=s.model, config=cfg,
+                        assistant_response=first_assistant_response,
                     )
                 if stream_task and not stream_task.done():
                     stream_task.cancel()
@@ -1485,6 +1542,7 @@ def create_app(
         if not path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
         _set_session_title(path, title)
+        _update_session_header(path, titleGenerationStatus="completed", titleGenerationLastError=None)
         return {"title": title}
 
     @app.put("/sessions/{session_id}/model")
@@ -1662,6 +1720,15 @@ def create_app(
 
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+
+        if req.role == "assistant":
+            personal = user_workspace(_state["workspace_root"], uid) if _state["multi_user"] else Path(_state["cwd"])
+            cfg = _effective_config(personal, uid)
+            header = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+            _schedule_title_job(
+                path, model=req.model or header.get("model") or cfg.agent.model,
+                config=cfg, assistant_response=req.content,
+            )
 
         return {"status": "ok"}
 

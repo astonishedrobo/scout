@@ -88,6 +88,15 @@ class HooksConfig(BaseModel):
     enabled: bool = True
 
 
+class SessionTitlesConfig(BaseModel):
+    """Automatic conversation title settings."""
+
+    enabled: bool = True
+    timeout_seconds: int = Field(60, ge=1)
+    max_attempts: int = Field(2, ge=1, le=5)
+    model: str | None = None
+
+
 class ExecutionConfig(BaseModel):
     """Execution sandbox settings."""
 
@@ -282,6 +291,7 @@ class AppConfig(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
+    session_titles: SessionTitlesConfig = Field(default_factory=SessionTitlesConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
     # Resolved absolute paths (populated after validation)

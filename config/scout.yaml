@@ -1,6 +1,6 @@
 # Operator-managed deployment defaults. Secrets belong in Docker secrets or .env.
 agent:
-  model: groq/llama-3.3-70b-versatile
+  model: openai/gpt-5-mini
   temperature: 0.2
   max_iterations: 15
   code_timeout: 30
@@ -31,6 +31,11 @@ permissions:
 
 hooks:
   enabled: true
+
+session_titles:
+  enabled: true
+  timeout_seconds: 60
+  max_attempts: 2
 
 llm:
   providers:

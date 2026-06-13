@@ -161,6 +161,22 @@ model_capabilities:
 
 The capability key must exactly match the configured model ID. Only set `vision: supported` after confirming that the model and the service hosting it both accept images.
 
+## Conversation titles
+
+Scout generates a short title in the background after the first message. By default it uses the conversation model and waits up to 60 seconds. A slow or unavailable model does not delay the conversation; Scout uses a short title based on the first message if generation fails.
+
+Administrators can change this behavior in YAML:
+
+```yaml
+session_titles:
+  enabled: true
+  timeout_seconds: 60
+  max_attempts: 2
+  model: openai/gpt-5-mini
+```
+
+Omit `model` to use each conversation's selected model. The configured title model must be available through one of the configured providers. Title generation runs after the first response is available, including for image-only and file-only prompts. If every model attempt fails, Scout creates a title from the saved conversation content.
+
 ## Apply configuration changes
 
 For a local launch, stop and restart Scout after changing YAML or environment variables.
