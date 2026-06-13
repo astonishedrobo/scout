@@ -47,4 +47,4 @@ EXPOSE 4200
 ENV PYTHONUNBUFFERED=1
 ENV HOME=/home/scout
 
-CMD ["python", "-m", "scout.server", "--cwd", "/app/workspace", "--host", "0.0.0.0", "--port", "4200", "--serve-gui", "/app/gui-dist/web", "--multi-user"]
+CMD ["python", "-m", "scout.server", "--cwd", "/app/workspace", "--host", "0.0.0.0", "--port", "4200", "--serve-gui", "/app/gui-dist/web"]

@@ -1,151 +1,185 @@
-# Using Local LLMs with Scout
+# Local LLM Setup
 
-Scout routes all LLM calls through [LiteLLM](https://docs.litellm.ai/), which means any LiteLLM-compatible local provider works out of the box. This guide covers the two most common options: **Ollama** and **vLLM**.
+Scout can use a model running on your computer or on another machine you control. This page shows complete Ollama and vLLM examples.
 
----
+Before continuing, choose how Scout itself will run:
 
-## How model configuration works
+- For one user on one computer, follow [Local setup](local-setup.md).
+- For multiple users, follow [Server deployment](deployment.md). Multi-user Scout must run with Docker.
 
-Scout discovers available models from environment variables:
+## How the connection works
 
-| Variable | Purpose |
-|---|---|
-| `{PROVIDER}_API_KEY` | API key for the provider (required, can be a dummy value for local servers) |
-| `{PROVIDER}_API_BASE` | Custom endpoint URL |
-| `{PROVIDER}_MODELS` | Comma-separated list of models to expose in the UI |
-| `AGENT_MODEL` | Default model used when a session starts |
+Scout needs four pieces of information:
 
-All `{PROVIDER}_MODELS` lists are merged into a single model picker in the UI, so users can switch between cloud and local models freely.
+1. A **provider label**, such as `ollama` or `vllm`. Scout uses this label to find environment variables.
+2. An **API base URL**, which is the address of the running model service.
+3. A **model ID**, such as `ollama/llama3.2`. Its prefix tells Scout how to connect.
+4. An optional **capability entry** that says whether the exact model ID accepts images.
 
----
+The model ID must match exactly under `agent.model`, the provider's `models` list, and `model_capabilities`.
 
-## Option 1: Ollama
+## Ollama: local Scout launch
 
-[Ollama](https://ollama.com) is the easiest way to run models locally. It downloads and serves models (Llama, Mistral, Gemma, etc.) with a single command.
+Install Ollama, start it, and download a model:
 
-### docker-compose.yml
+```bash
+ollama serve
+ollama pull llama3.2
+```
+
+In another terminal, set a placeholder API key. Ollama does not normally verify it, but Scout needs a non-empty value before it will list the provider's models:
+
+```bash
+export OLLAMA_API_KEY=not-needed
+```
+
+Create a configuration file, for example `ollama-scout.yaml`:
+
+```yaml
+agent:
+  model: ollama/llama3.2
+
+llm:
+  providers:
+    ollama:
+      api_base: http://localhost:11434
+      models:
+        - ollama/llama3.2
+
+model_capabilities:
+  ollama/llama3.2:
+    vision: unsupported
+```
+
+Launch Scout with that file:
+
+```bash
+node packages/scout/dist/index.js --gui --config ./ollama-scout.yaml
+```
+
+Here, `ollama` is both the provider label and the model ID prefix. The model downloaded by Ollama is named `llama3.2`, while Scout refers to it as `ollama/llama3.2`.
+
+## Ollama: Docker multi-user deployment
+
+Add the placeholder key to `.env`:
+
+```dotenv
+OLLAMA_API_KEY=not-needed
+```
+
+Add an Ollama service to `docker-compose.yml`:
 
 ```yaml
 services:
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:latest
     volumes:
       - ollama-data:/root/.ollama
 
-  scout-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: scout-server
-    restart: unless-stopped
-    ports:
-      - "4200:4200"
-    volumes:
-      - scout-data:/root/.config/scout
-      - ./workspace:/app/workspace
-      - ./skills:/app/workspace/.scout/skills:ro
-    environment:
-      - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY}
-      # Ollama — no API key needed
-      - OLLAMA_API_BASE=http://ollama:11434
-      - OLLAMA_MODELS=ollama/llama3.2,ollama/mistral
-      - AGENT_MODEL=${AGENT_MODEL:-ollama/llama3.2}
-    depends_on:
-      - ollama
-
 volumes:
-  scout-data:
   ollama-data:
 ```
 
-### Pull a model after starting
+Configure Scout in `config/scout.yaml`:
+
+```yaml
+agent:
+  model: ollama/llama3.2
+
+llm:
+  providers:
+    ollama:
+      api_base: http://ollama:11434
+      models:
+        - ollama/llama3.2
+
+model_capabilities:
+  ollama/llama3.2:
+    vision: unsupported
+```
+
+Start the services and download the model into the Ollama container:
 
 ```bash
-docker compose up -d
-docker exec ollama ollama pull llama3.2
+docker compose up --build -d
+docker compose exec ollama ollama pull llama3.2
 ```
 
-Models must be pulled before they can be used. See [ollama.com/library](https://ollama.com/library) for available models.
+The URL uses `ollama`, the Docker service name. Do not use `localhost` here because `localhost` inside the Scout container refers to Scout itself.
 
----
+## vLLM
 
-## Option 2: vLLM
+This example serves `mistralai/Mistral-7B-Instruct-v0.2` with vLLM:
 
-[vLLM](https://docs.vllm.ai) is a high-throughput inference server. It exposes an OpenAI-compatible API, so you use the `openai/` LiteLLM prefix but point it at your local server.
+```bash
+vllm serve mistralai/Mistral-7B-Instruct-v0.2
+```
 
-> **Note:** vLLM requires a CUDA-capable GPU in most configurations.
+Set a placeholder API key and the service URL:
 
-### docker-compose.yml
+```bash
+export VLLM_API_KEY=not-needed
+export VLLM_API_BASE=http://localhost:8000/v1
+```
+
+Configure Scout:
 
 ```yaml
-services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    command: --model mistralai/Mistral-7B-Instruct-v0.2
-    volumes:
-      - vllm-models:/root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+agent:
+  model: hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2
 
-  scout-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: scout-server
-    restart: unless-stopped
-    ports:
-      - "4200:4200"
-    volumes:
-      - scout-data:/root/.config/scout
-      - ./workspace:/app/workspace
-      - ./skills:/app/workspace/.scout/skills:ro
-    environment:
-      - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY}
-      # vLLM — uses openai/ prefix with a custom api_base
-      - VLLM_API_KEY=not-needed
-      - VLLM_API_BASE=http://vllm:8000/v1
-      - VLLM_MODELS=openai/mistralai/Mistral-7B-Instruct-v0.2
-      - AGENT_MODEL=${AGENT_MODEL:-openai/mistralai/Mistral-7B-Instruct-v0.2}
-    depends_on:
-      - vllm
+llm:
+  providers:
+    vllm:
+      models:
+        - hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2
 
-volumes:
-  scout-data:
-  vllm-models:
+model_capabilities:
+  hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2:
+    vision: unsupported
 ```
 
-The model name in `VLLM_MODELS` must match exactly what vLLM was started with (the Hugging Face model ID passed to `--model`).
+The names differ for a reason:
 
----
+- `vllm` is the provider label, so Scout reads `VLLM_API_KEY` and `VLLM_API_BASE`.
+- `mistralai/Mistral-7B-Instruct-v0.2` is the name served by vLLM.
+- Scout adds `hosted_vllm/` to the model ID so its model library knows to use a vLLM-compatible server.
 
-## Mixing local and cloud models
+For Docker, put `VLLM_API_KEY` and `VLLM_API_BASE` in `.env`. If vLLM runs as another Docker Compose service, use that service name in the URL instead of `localhost`.
 
-You can combine any number of providers. Users can then pick from all of them in the UI:
+## Models that accept images
+
+Do not assume a model accepts images because another version from the same family does. Confirm support in the model's documentation and with the server that hosts it.
+
+Then mark the exact Scout model ID:
 
 ```yaml
-environment:
-  - OPENAI_API_KEY=${OPENAI_API_KEY}
-  - OPENAI_MODELS=openai/gpt-4o,openai/gpt-4o-mini
-
-  - OLLAMA_API_BASE=http://ollama:11434
-  - OLLAMA_MODELS=ollama/llama3.2,ollama/mistral
-
-  - AGENT_MODEL=${AGENT_MODEL:-openai/gpt-4o}  # cloud default, override to use local
+model_capabilities:
+  ollama/llava:
+    vision: supported
 ```
 
----
+If support is unknown, omit the entry. Scout will try to detect support and will prevent image use when it cannot verify that sending images is safe.
 
-## Comparison
+## Troubleshooting
 
-| | Ollama | vLLM |
-|---|---|---|
-| LiteLLM prefix | `ollama/` | `openai/` |
-| API key | not required | required (dummy value is fine) |
-| GPU | optional | recommended |
-| Model loading | `ollama pull <model>` after start | `--model` flag at startup |
-| Best for | local dev, CPU-friendly models | production, high-throughput GPU inference |
+### The model does not appear
+
+Check all of the following:
+
+- The provider has a non-empty API key. Use `not-needed` for a local service that does not verify keys.
+- The model ID in `agent.model` exactly matches an entry in the provider's `models` list.
+- The model service is running.
+- The API base URL is reachable from where Scout runs.
+
+### Scout cannot connect
+
+- A local Scout launch normally reaches a local model service through `localhost`.
+- A Docker Scout deployment must use a Docker service name or a network address reachable from the container.
+- Include `/v1` in the vLLM URL when its OpenAI-compatible endpoint expects it.
+
+### Images are unavailable
+
+Make sure the capability key exactly matches the configured model ID and that `vision` is set to `supported`. Start a new conversation after changing capabilities.
+
+For the full explanation of provider labels, environment variables, and model IDs, read [Configuration](configuration.md).

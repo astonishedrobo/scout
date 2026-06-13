@@ -1,0 +1,46 @@
+# Operator-managed deployment defaults. Secrets belong in Docker secrets or .env.
+agent:
+  model: groq/llama-3.3-70b-versatile
+  temperature: 0.2
+  max_iterations: 15
+  code_timeout: 30
+
+memories:
+  use_memories: true
+  generate_memories: true
+  stage1_max_jobs_per_startup: 4
+  stage1_concurrency: 4
+
+retriever:
+  top_k: 5
+  chunk_size: 1000
+  chunk_overlap: 200
+
+execution:
+  enabled: true
+  backend: worker
+  isolation: container
+  require_isolation: true
+  network_default: deny
+
+skills:
+  defer_loading: true
+
+permissions:
+  allow_request_permissions: true
+
+hooks:
+  enabled: true
+
+llm:
+  providers:
+    groq:
+      models:
+        - groq/llama-3.1-8b-instant
+        - groq/llama-3.3-70b-versatile
+        - groq/openai/gpt-oss-20b
+    openai:
+      models:
+        - openai/gpt-5-mini
+    anthropic:
+      models: []

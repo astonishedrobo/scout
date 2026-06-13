@@ -23,10 +23,9 @@ program
   .version("0.1.0")
   .option("--app", "Launch Electron desktop app")
   .option("--gui", "Launch browser-based GUI instead of terminal CLI")
-  .option("--multi-user", "Enable multi-user authentication mode")
   .option("-p, --port <number>", "Port to listen on (for GUI mode)", (v) => parseInt(v, 10))
   .option("-c, --config <path>", "Path to project config YAML (optional)")
-  .action(async (opts: { app?: boolean; gui?: boolean; multiUser?: boolean; port?: number; config?: string }) => {
+  .action(async (opts: { app?: boolean; gui?: boolean; port?: number; config?: string }) => {
     const { ensureSetup } = await import("scout-core");
 
     const cwd = process.cwd();
@@ -84,7 +83,6 @@ program
         cwd,
         configPath,
         guiStaticDir: guiDist,
-        multiUser: opts.multiUser,
         port: opts.port,
       });
 

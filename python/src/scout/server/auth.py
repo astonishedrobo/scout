@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import logging
 import jwt
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7,8 +8,9 @@ from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bcrypt
 from pydantic import BaseModel
+from ..secrets import load_secret
 
-SECRET_KEY = os.environ.get("SCOUT_SECRET_KEY", "fallback_secret_key_for_dev_only_please_change")
+SECRET_KEY = load_secret("SCOUT_SECRET_KEY", "fallback_secret_key_for_dev_only_please_change")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
@@ -24,6 +26,7 @@ security = HTTPBearer()
 
 SCOUT_HOME = Path.home() / ".config" / "scout"
 DB_PATH = SCOUT_HOME / "scout_users.db"
+logger = logging.getLogger(__name__)
 
 
 class User(BaseModel):
@@ -42,6 +45,20 @@ def init_db():
             hashed_password TEXT NOT NULL
         )
     """)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_memory_preferences (
+                user_id INTEGER PRIMARY KEY,
+                use_memories INTEGER NOT NULL,
+                generate_memories INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+    except sqlite3.OperationalError as exc:
+        if "readonly" not in str(exc).lower():
+            raise
+        logger.warning("Could not initialize user memory preferences: %s", exc)
     conn.commit()
 
     # Migration: add is_admin column if it doesn't exist yet
@@ -169,6 +186,55 @@ def get_user_permission_profile(user_id: int | str) -> str:
 def is_user_admin(user_id: int | str) -> bool:
     """DB-backed admin check from permission_profile (admin) or legacy is_admin."""
     return get_user_permission_profile(user_id) == "admin"
+
+
+def get_user_memory_preferences(user_id: int | str) -> dict[str, bool] | None:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT use_memories, generate_memories
+            FROM user_memory_preferences WHERE user_id = ?
+            """,
+            (int(user_id),),
+        )
+    except sqlite3.OperationalError as exc:
+        conn.close()
+        if "no such table" in str(exc).lower():
+            return None
+        raise
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {
+        "use_memories": bool(row[0]),
+        "generate_memories": bool(row[1]),
+    }
+
+
+def set_user_memory_preferences(
+    user_id: int | str,
+    *,
+    use_memories: bool,
+    generate_memories: bool,
+) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """
+        INSERT INTO user_memory_preferences (
+            user_id, use_memories, generate_memories, updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            use_memories=excluded.use_memories,
+            generate_memories=excluded.generate_memories,
+            updated_at=excluded.updated_at
+        """,
+        (int(user_id), int(use_memories), int(generate_memories), int(datetime.now().timestamp())),
+    )
+    conn.commit()
+    conn.close()
 
 
 def create_user(username: str, password: str):

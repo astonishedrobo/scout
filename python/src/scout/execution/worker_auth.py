@@ -8,6 +8,7 @@ import json
 import os
 import time
 from typing import Any
+from ..secrets import load_secret
 
 from fastapi import HTTPException
 
@@ -19,7 +20,7 @@ _SEEN_NONCES: dict[str, float] = {}
 
 
 def require_worker_secret() -> str:
-    secret = os.environ.get("SCOUT_WORKER_SECRET", "")
+    secret = load_secret("SCOUT_WORKER_SECRET")
     if not secret or secret == "scout-worker-dev-secret":
         if os.environ.get("SCOUT_ENV", "").lower() in {"production", "prod"}:
             raise RuntimeError("SCOUT_WORKER_SECRET must be set in production")

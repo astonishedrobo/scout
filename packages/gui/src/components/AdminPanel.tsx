@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Upload, Trash2, RefreshCw, Shield, Users } from "lucide-react";
+import { Upload, Trash2, RefreshCw, Shield, Users, Settings } from "lucide-react";
 import { RightDrawer } from "./ui/RightDrawer";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
@@ -42,7 +42,8 @@ function fmtSize(bytes: number): string {
 }
 
 export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
-  const [tab, setTab] = useState<"files" | "users" | "execution">("files");
+  const [tab, setTab] = useState<"files" | "users" | "execution" | "config">("files");
+  const [configInfo, setConfigInfo] = useState<any>(null);
   const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
   const [users, setUsers] = useState<UserEntry[]>([]);
   const [execHealth, setExecHealth] = useState<ExecutionHealth | null>(null);
@@ -103,11 +104,34 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
     }
   };
 
+  const loadConfig = async () => {
+    setError(null);
+    try {
+      const r = await fetch(`${baseUrl}/admin/config/effective`, { headers });
+      if (!r.ok) throw new Error(await r.text());
+      setConfigInfo(await r.json());
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const reloadConfig = async () => {
+    setError(null);
+    try {
+      const r = await fetch(`${baseUrl}/admin/config/reload`, { method: "POST", headers });
+      if (!r.ok) throw new Error(await r.text());
+      await loadConfig();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
     if (tab === "files") loadFiles();
     else if (tab === "users") loadUsers();
-    else loadExecution();
+    else if (tab === "execution") loadExecution();
+    else loadConfig();
   }, [open, tab]);
 
   const handleUpload = async (files: FileList | null) => {
@@ -176,15 +200,15 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
     <>
     <RightDrawer open={open} onClose={onClose} title="Admin" width={480}>
         <div className="flex border-b border-scout-hairline">
-          {(["files", "users", "execution"] as const).map((t) => (
+          {(["files", "users", "execution", "config"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={`flex-1 py-2.5 text-[13px] transition-colors flex items-center justify-center gap-1.5 border-b-2 -mb-px
                 ${tab === t ? "border-scout-text text-scout-text font-semibold" : "border-transparent font-medium text-scout-muted hover:text-scout-text"}`}
             >
-              {t === "files" ? <Upload size={14} /> : t === "users" ? <Users size={14} /> : <Shield size={14} />}
-              {t === "files" ? "Shared Files" : t === "users" ? "Users" : "Execution"}
+              {t === "files" ? <Upload size={14} /> : t === "users" ? <Users size={14} /> : t === "execution" ? <Shield size={14} /> : <Settings size={14} />}
+              {t === "files" ? "Files" : t === "users" ? "Users" : t === "execution" ? "Execution" : "Config"}
             </button>
           ))}
         </div>
@@ -342,6 +366,28 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
                 <p className="text-xs text-scout-muted/60 py-6 text-center">
                   {loadingExec ? "Loading…" : "No execution health data"}
                 </p>
+              )}
+            </div>
+          )}
+          {tab === "config" && (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <Button variant="filled" surface="panel" onClick={reloadConfig}>Reload config</Button>
+                <button onClick={loadConfig} className="p-2 rounded-btn text-scout-muted hover:text-scout-text">
+                  <RefreshCw size={14} />
+                </button>
+              </div>
+              <p className="text-xs text-scout-muted">Read-only operator configuration. Reloaded values apply to new conversations.</p>
+              {configInfo && (
+                <>
+                  <div className="text-xs text-scout-muted">
+                    <p>Source: <span className="font-mono text-scout-text">{configInfo.source}</span></p>
+                    <p>Version: <span className="font-mono text-scout-text">{configInfo.version}</span></p>
+                  </div>
+                  <pre className="text-xs font-mono bg-scout-input-bg rounded-xl p-3 border border-scout-hairline-faint overflow-auto max-h-[55vh]">
+                    {JSON.stringify(configInfo.config, null, 2)}
+                  </pre>
+                </>
               )}
             </div>
           )}

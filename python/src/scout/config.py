@@ -8,10 +8,12 @@ pass through without validation errors.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+from .secrets import load_secret
 
 
 # ── Leaf-level config models ────────────────────────────────────────────────
@@ -126,9 +128,8 @@ class ExecutionConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Settings for the agentic (conversational) mode."""
 
-    # Can be overridden by AGENT_MODEL env var
     model: str = Field(
-        default_factory=lambda: __import__("os").environ.get("AGENT_MODEL", "groq/llama-3.1-8b-instant"),
+        "groq/llama-3.1-8b-instant",
         description="LiteLLM model string (e.g. 'groq/llama-3.1-8b-instant').",
     )
     disable_write_tools: bool = Field(
@@ -231,7 +232,7 @@ class LLMConfig(BaseModel):
 
         for name in provider_names:
             prov = self.providers.get(name, LLMProviderConfig())
-            api_key = prov.api_key or os.environ.get(f"{name.upper()}_API_KEY")
+            api_key = prov.api_key or load_secret(f"{name.upper()}_API_KEY")
             if api_key:
                 env_models = os.environ.get(f"{name.upper()}_MODELS")
                 if env_models:
@@ -247,8 +248,9 @@ class LLMConfig(BaseModel):
         import os
 
         for name, prov in self.providers.items():
-            if prov.api_key:
-                os.environ.setdefault(f"{name.upper()}_API_KEY", prov.api_key)
+            api_key = prov.api_key or load_secret(f"{name.upper()}_API_KEY")
+            if api_key:
+                os.environ.setdefault(f"{name.upper()}_API_KEY", api_key)
             if prov.api_base:
                 os.environ.setdefault(f"{name.upper()}_API_BASE", prov.api_base)
 
@@ -309,6 +311,7 @@ class AppConfig(BaseModel):
 
 _XDG_CONFIG = Path.home() / ".config" / "scout"
 GLOBAL_CONFIG_PATH = _XDG_CONFIG / "config.yaml"
+SECRET_FIELDS = {"api_key", "secret", "password", "token"}
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -373,3 +376,37 @@ def load_config(
     object.__setattr__(config, "_config_dir", base_dir)
     config._resolve_paths()
     return config
+
+
+def load_deployment_config(config_path: str | Path, *, cwd: str | Path | None = None) -> AppConfig:
+    """Load a strict operator-managed deployment config without global overrides."""
+    path = Path(config_path).resolve()
+    with open(path, "rb") as f:
+        content = f.read()
+    raw = yaml.safe_load(content) or {}
+    known = set(AppConfig.model_fields)
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise ValueError(f"Unknown deployment config section(s): {', '.join(unknown)}")
+    config = AppConfig(**raw)
+    base_dir = Path(cwd).resolve() if cwd is not None else path.parent
+    object.__setattr__(config, "_config_dir", base_dir)
+    config._resolve_paths()
+    return config
+
+
+def config_hash(config: AppConfig) -> str:
+    payload = yaml.safe_dump(config.model_dump(mode="json"), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def redacted_config(config: AppConfig) -> dict[str, Any]:
+    def redact(value: Any, key: str = "") -> Any:
+        if any(part in key.lower() for part in SECRET_FIELDS):
+            return "[REDACTED]" if value else ""
+        if isinstance(value, dict):
+            return {k: redact(v, k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [redact(v) for v in value]
+        return value
+    return redact(config.model_dump(mode="json"))

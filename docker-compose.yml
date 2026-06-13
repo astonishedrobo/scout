@@ -107,26 +107,38 @@ services:
       - scout-data:/home/scout/.config/scout
       - ./workspace:/app/workspace
       - ./skills:/app/workspace/.scout/skills:ro
+      - ./config/scout.yaml:/etc/scout/scout.yaml:ro
+    command:
+      - python
+      - -m
+      - scout.server
+      - --config
+      - /etc/scout/scout.yaml
+      - --cwd
+      - /app/workspace
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "4200"
+      - --serve-gui
+      - /app/gui-dist/web
     environment:
+      - SCOUT_SERVER_DEPLOYMENT=docker
       # ── LLM providers ────────────────────────────────────────────────────────
       # API keys for each provider. Set these in a .env file (see .env.example).
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-
-      # Models exposed per provider (comma-separated LiteLLM strings).
-      # If unset, a built-in default list is used for each provider that has a key.
-      - GROQ_MODELS=${GROQ_MODELS:-groq/llama-3.1-8b-instant,groq/llama-3.3-70b-versatile,groq/openai/gpt-oss-20b}
-      - OPENAI_MODELS=${OPENAI_MODELS:-openai/gpt-5}
-      - ANTHROPIC_MODELS=${ANTHROPIC_MODELS:-}
-
-      # Default model the agent uses (must be one of the models listed above).
-      - AGENT_MODEL=${AGENT_MODEL:-groq/llama-3.3-70b-versatile}
+      - GROQ_API_KEY_FILE=${GROQ_API_KEY_FILE:-/run/secrets/groq_api_key}
+      - OPENAI_API_KEY_FILE=${OPENAI_API_KEY_FILE:-/run/secrets/openai_api_key}
+      - ANTHROPIC_API_KEY_FILE=${ANTHROPIC_API_KEY_FILE:-/run/secrets/anthropic_api_key}
 
       # ── Security ─────────────────────────────────────────────────────────────
       # Change SCOUT_SECRET_KEY to a long random string before deploying.
       - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY:-my-super-secret-jwt-key-change-me}
       - SCOUT_WORKER_SECRET=${SCOUT_WORKER_SECRET:-scout-worker-dev-secret}
+      - SCOUT_SECRET_KEY_FILE=${SCOUT_SECRET_KEY_FILE:-/run/secrets/scout_secret_key}
+      - SCOUT_WORKER_SECRET_FILE=${SCOUT_WORKER_SECRET_FILE:-/run/secrets/scout_worker_secret}
       - SCOUT_WORKER_URL=http://execution-worker:7891
 
       # ── Admin accounts ───────────────────────────────────────────────────────

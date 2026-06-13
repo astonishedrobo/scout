@@ -44,7 +44,14 @@ from ..agent.file_guard import WorkspaceGuard
 from ..execution.grants import CapabilityGrantStore
 from ..execution.models import CapabilityRequest
 from ..artifacts import MAX_ARTIFACT_SIZE, RENDERERS
-from ..config import GLOBAL_CONFIG_PATH, AppConfig, load_config
+from ..config import (
+    GLOBAL_CONFIG_PATH,
+    AppConfig,
+    config_hash,
+    load_config,
+    load_deployment_config,
+    redacted_config,
+)
 from ..retriever import RetrieverProxy
 from .attachments import build_attachment_notes
 from ..agent.multimodal import image_paths
@@ -57,11 +64,13 @@ from .auth import (
     create_user,
     get_current_user,
     get_current_user_optional,
+    get_user_memory_preferences,
     get_user_by_username,
     get_user_permission_profile,
     is_user_admin,
     list_users,
     set_user_admin,
+    set_user_memory_preferences,
     set_user_permission_profile,
     verify_password,
 )
@@ -308,6 +317,19 @@ def create_app(
         "execution_health": None,
     }
 
+    def _load_base_config() -> AppConfig:
+        if _state["multi_user"] and _state["config_path"]:
+            return load_deployment_config(_state["config_path"], cwd=_state["cwd"])
+        return load_config(_state["config_path"], cwd=_state["cwd"])
+
+    initial_config = _load_base_config()
+    _state["base_config"] = initial_config
+    _state["config_version"] = config_hash(initial_config)
+    _state["config_reloaded_at"] = time.time()
+
+    def _base_config_copy() -> AppConfig:
+        return _state["base_config"].model_copy(deep=True)
+
     async def _probe_execution_sandbox() -> dict:
         """Probe the execution worker and refresh cached health/init state."""
         from ..config import ExecutionConfig
@@ -371,12 +393,21 @@ def create_app(
             shared = shared_workspace(_state["workspace_root"])
             personal.mkdir(parents=True, exist_ok=True)
             shared.mkdir(parents=True, exist_ok=True)
-            config = load_config(_state["config_path"], cwd=str(personal))
+            config = _base_config_copy()
             _state["retrievers"][uid] = RetrieverProxy(
                 workspace_roots=[personal, shared],
                 config=config,
             )
         return _state["retrievers"][uid]
+
+    def _effective_config(personal: Path, user_id: str | int = "default") -> AppConfig:
+        config = _base_config_copy()
+        if _state["multi_user"] and str(user_id) != "default":
+            preferences = get_user_memory_preferences(user_id)
+            if preferences is not None:
+                config.memories.use_memories = preferences["use_memories"]
+                config.memories.generate_memories = preferences["generate_memories"]
+        return config
 
     def _get_session_state(session_id: str, user_id: str | int = "default", user: User | None = None) -> SessionState:
         """Return the SessionState for a given ID, creating it if needed."""
@@ -401,7 +432,7 @@ def create_app(
                         allow_write_shared=perm_profile.allow_shared_write,
                     )
                     proxy = _get_or_create_proxy(user_id)
-                    agent_config = load_config(_state["config_path"], cwd=str(personal))
+                    agent_config = _effective_config(personal, user_id)
                     if session_model:
                         agent_config.agent.model = session_model
                     agent = ScoutAgent(
@@ -421,7 +452,7 @@ def create_app(
                         config=agent_config,
                     )
                 else:
-                    agent_config = load_config(_state["config_path"], cwd=_state["cwd"])
+                    agent_config = _base_config_copy()
                     if session_model:
                         agent_config.agent.model = session_model
                     agent = ScoutAgent(
@@ -460,7 +491,7 @@ def create_app(
                     personal, _ = ensure_workspaces(_state["workspace_root"], user.id)
                 else:
                     personal = Path(_state["cwd"])
-                cfg = load_config(_state["config_path"], cwd=str(personal))
+                cfg = _effective_config(personal, user_id)
                 run_hook(
                     "SessionStart",
                     {"session_id": session_id, "user_id": str(user_id)},
@@ -783,7 +814,7 @@ def create_app(
             personal, _ = ensure_workspaces(_state["workspace_root"], user.id)
         else:
             personal = Path(_state["cwd"])
-        cfg = load_config(_state["config_path"], cwd=str(personal))
+        cfg = _effective_config(personal, uid)
         sdir = _session_dir(_session_cwd(uid), uid)
         try:
             private_images = [str(p) for p in resolve_assets(sdir, req.session_id, req.chat_image_ids)]
@@ -1121,6 +1152,8 @@ def create_app(
                 "status": "ok",
                 "uptime_seconds": round(uptime, 1),
                 "multi_user": _state["multi_user"],
+                "config_version": _state["config_version"],
+                "config_reloaded_at": _state["config_reloaded_at"],
             }
             if exec_health:
                 body["execution"] = exec_health
@@ -1193,6 +1226,36 @@ def create_app(
                 }
         return {"execution": health_info, "metrics": metrics}
 
+    @app.get("/admin/config/effective")
+    async def admin_effective_config(admin: User = Depends(require_admin)) -> dict:
+        config = _base_config_copy()
+        source = "deployment_yaml" if _state["config_path"] else "defaults_and_global"
+        return {
+            "config": redacted_config(config),
+            "source": source,
+            "config_path": _state["config_path"],
+            "version": _state["config_version"],
+            "reloaded_at": _state["config_reloaded_at"],
+            "applies_to": "new_conversations",
+        }
+
+    @app.post("/admin/config/reload")
+    async def admin_reload_config(admin: User = Depends(require_admin)) -> dict:
+        try:
+            candidate = _load_base_config()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid configuration: {exc}") from exc
+        candidate.llm.inject_env_vars()
+        _state["base_config"] = candidate
+        _state["config_version"] = config_hash(candidate)
+        _state["config_reloaded_at"] = time.time()
+        return {
+            "status": "ok",
+            "version": _state["config_version"],
+            "reloaded_at": _state["config_reloaded_at"],
+            "applies_to": "new_conversations",
+        }
+
     # ── Warnings (set by Node launcher after sandbox check) ────────
     _startup_warnings: list[str] = []
 
@@ -1212,13 +1275,13 @@ def create_app(
     @app.get("/config")
     async def get_config() -> dict:
         """Return the merged configuration."""
-        config = load_config(_state["config_path"], cwd=_state["cwd"])
+        config = _base_config_copy()
         return config.model_dump()
 
     @app.get("/config/models")
     async def get_models() -> dict:
         """Return all models aggregated from llm.providers."""
-        config = load_config(_state["config_path"], cwd=_state["cwd"])
+        config = _base_config_copy()
         models = config.llm.get_all_models()
         overrides = getattr(config, "model_capabilities", None)
         overrides = overrides if isinstance(overrides, dict) else {}
@@ -1237,8 +1300,11 @@ def create_app(
         The running agent instance is NOT recreated — only env vars
         are refreshed so subsequent LLM calls pick up new keys.
         """
-        config = load_config(_state["config_path"], cwd=_state["cwd"])
+        config = _load_base_config()
         config.llm.inject_env_vars()
+        _state["base_config"] = config
+        _state["config_version"] = config_hash(config)
+        _state["config_reloaded_at"] = time.time()
         return {"status": "ok", "models": config.llm.get_all_models()}
 
     @app.post("/config")
@@ -1433,8 +1499,8 @@ def create_app(
         path = _session_file(cwd, session_id, uid)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
-        config_cwd = str(user_workspace(_state["workspace_root"], uid)) if _state["multi_user"] and user else _state["cwd"]
-        config = load_config(_state["config_path"], cwd=config_cwd)
+        personal = user_workspace(_state["workspace_root"], uid) if _state["multi_user"] and user else Path(_state["cwd"])
+        config = _effective_config(personal, uid)
         if req.model not in config.llm.get_all_models():
             raise HTTPException(status_code=400, detail={"code": "UNKNOWN_MODEL", "message": "Model is not configured."})
         text = path.read_text(encoding="utf-8")
@@ -1920,6 +1986,67 @@ def create_app(
         entry: str = ""
         remove_index: int | None = None
         summary: str | None = None
+
+    class MemoryPreferencesRequest(BaseModel):
+        use_memories: bool
+        generate_memories: bool
+
+    def _memory_preferences_response(user: User | None) -> dict:
+        defaults = _base_config_copy().memories
+        stored = (
+            get_user_memory_preferences(user.id)
+            if _state["multi_user"] and user is not None
+            else None
+        )
+        effective = stored or {
+            "use_memories": defaults.use_memories,
+            "generate_memories": defaults.generate_memories,
+        }
+        inherited = stored is None
+        return {
+            **effective,
+            "defaults": {
+                "use_memories": defaults.use_memories,
+                "generate_memories": defaults.generate_memories,
+            },
+            "inherited": {
+                "use_memories": inherited,
+                "generate_memories": inherited,
+            },
+            "applies_to": "new_conversations",
+        }
+
+    @app.get("/memories/preferences")
+    async def get_memory_preferences(user: User | None = Depends(get_user_context)) -> dict:
+        return _memory_preferences_response(user)
+
+    @app.put("/memories/preferences")
+    async def put_memory_preferences(
+        req: MemoryPreferencesRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        if _state["multi_user"]:
+            if user is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            set_user_memory_preferences(
+                user.id,
+                use_memories=req.use_memories,
+                generate_memories=req.generate_memories,
+            )
+        else:
+            target = GLOBAL_CONFIG_PATH
+            if target.exists():
+                with open(target) as f:
+                    raw = yaml.safe_load(f) or {}
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                raw = {}
+            memories = raw.setdefault("memories", {})
+            memories["use_memories"] = req.use_memories
+            memories["generate_memories"] = req.generate_memories
+            with open(target, "w") as f:
+                yaml.safe_dump(raw, f, sort_keys=False)
+        return _memory_preferences_response(user)
 
     @app.post("/memories")
     async def post_memories(req: MemoriesRequest, user: User | None = Depends(get_user_context)) -> dict:

@@ -53,12 +53,15 @@ def main() -> None:
         default=None,
         help="Path to pre-built GUI static files to serve.",
     )
-    parser.add_argument(
-        "--multi-user",
-        action="store_true",
-        help="Enable multi-user mode with authentication.",
-    )
     args = parser.parse_args()
+
+    multi_user = os.environ.get("SCOUT_SERVER_DEPLOYMENT", "").lower() == "docker"
+    if multi_user:
+        from ..secrets import require_production_secret
+        require_production_secret(
+            "SCOUT_SECRET_KEY",
+            {"fallback_secret_key_for_dev_only_please_change", "my-super-secret-jwt-key-change-me"},
+        )
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -78,7 +81,7 @@ def main() -> None:
         config_path=args.config,
         cwd=args.cwd,
         gui_static_dir=args.serve_gui,
-        multi_user=args.multi_user,
+        multi_user=multi_user,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower())
 

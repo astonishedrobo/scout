@@ -36,6 +36,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
   const [memoriesLoading, setMemoriesLoading] = useState(false);
   const [useMemories, setUseMemories] = useState(true);
   const [generateMemories, setGenerateMemories] = useState(true);
+  const [memoryPreferenceStatus, setMemoryPreferenceStatus] = useState("");
   const [providers, setProviders] = useState<ProviderState[]>([]);
   const [agentModel, setAgentModel] = useState("");
   const [temperature, setTemperature] = useState(0.2);
@@ -61,9 +62,6 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
         setMaxIterations(cfg?.agent?.max_iterations ?? 15);
         setCodeTimeout(cfg?.agent?.code_timeout ?? 30);
         setPreferences(cfg?.agent?.preferences ?? "");
-        setUseMemories(cfg?.memories?.use_memories ?? true);
-        setGenerateMemories(cfg?.memories?.generate_memories ?? true);
-
         const provs = cfg?.llm?.providers ?? {};
         const list: ProviderState[] = Object.entries(provs).map(
           ([name, p]: [string, any]) => ({
@@ -157,6 +155,45 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
   }, [baseUrl, providers, agentModel, temperature, maxIterations, codeTimeout, preferences, setConfigValue]);
 
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+  useEffect(() => {
+    if (!open || tab !== "memories") return;
+    fetch(`${baseUrl}/memories/preferences`, { headers: authHeaders })
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail ?? "Could not load memory preferences.");
+        return r.json();
+      })
+      .then((d) => {
+        setUseMemories(d.use_memories ?? true);
+        setGenerateMemories(d.generate_memories ?? true);
+        setMemoryPreferenceStatus("");
+      })
+      .catch((err) => setMemoryPreferenceStatus(err.message));
+  }, [open, tab, baseUrl, token]);
+
+  const updateMemoryPreferences = async (nextUse: boolean, nextGenerate: boolean) => {
+    const previousUse = useMemories;
+    const previousGenerate = generateMemories;
+    setUseMemories(nextUse);
+    setGenerateMemories(nextGenerate);
+    setMemoryPreferenceStatus("Saving...");
+    try {
+      const r = await fetch(`${baseUrl}/memories/preferences`, {
+        method: "PUT",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          use_memories: nextUse,
+          generate_memories: nextGenerate,
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail ?? "Could not save memory preferences.");
+      setMemoryPreferenceStatus(isMultiUser ? "Saved. Applies to new conversations." : "Saved.");
+    } catch (err: any) {
+      setUseMemories(previousUse);
+      setGenerateMemories(previousGenerate);
+      setMemoryPreferenceStatus(err.message ?? "Could not save memory preferences.");
+    }
+  };
 
   useEffect(() => {
     if (!open || tab !== "memories") return;
@@ -263,10 +300,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                     <input
                       type="checkbox"
                       checked={useMemories}
-                      onChange={async (e) => {
-                        setUseMemories(e.target.checked);
-                        await setConfigValue("memories.use_memories", e.target.checked);
-                      }}
+                      onChange={(e) => updateMemoryPreferences(e.target.checked, generateMemories)}
                       className="w-4 h-4 accent-scout-text"
                     />
                     Use memories
@@ -275,15 +309,17 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                     <input
                       type="checkbox"
                       checked={generateMemories}
-                      onChange={async (e) => {
-                        setGenerateMemories(e.target.checked);
-                        await setConfigValue("memories.generate_memories", e.target.checked);
-                      }}
+                      onChange={(e) => updateMemoryPreferences(useMemories, e.target.checked)}
                       className="w-4 h-4 accent-scout-text"
                     />
                     Generate memories
                   </label>
                 </div>
+                {memoryPreferenceStatus && (
+                  <p className="text-xs font-medium text-scout-muted -mt-3 mb-5">
+                    {memoryPreferenceStatus}
+                  </p>
+                )}
                 <h3 className="text-sm font-semibold text-scout-text mb-1.5">Summary preview</h3>
                 <pre className="text-xs font-mono bg-scout-input-bg border border-scout-hairline-faint rounded-xl p-3 mb-5 max-h-32 overflow-y-auto whitespace-pre-wrap text-scout-muted">
                   {memorySummary || "(empty)"}

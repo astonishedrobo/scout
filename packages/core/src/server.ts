@@ -29,7 +29,6 @@ export interface ServerOptions {
   logLevel?: string;
   /** Path to pre-built GUI static files. Enables --serve-gui on the Python server. */
   guiStaticDir?: string;
-  multiUser?: boolean;
 }
 
 /**
@@ -123,10 +122,6 @@ export class ScoutServer {
       args.push("--serve-gui", resolve(this.opts.guiStaticDir));
     }
 
-    if (this.opts.multiUser) {
-      args.push("--multi-user");
-    }
-
     // Attempt sandbox wrapping for OS-level isolation
     let useSandbox = false;
     try {
@@ -180,12 +175,6 @@ export class ScoutServer {
     } catch (sandboxErr) {
       const reason =
         sandboxErr instanceof Error ? sandboxErr.message : String(sandboxErr);
-      if (this.opts.multiUser) {
-        throw new Error(
-          `Sandbox unavailable in server mode: ${reason}. ` +
-            `User code execution requires OS isolation. Install bubblewrap and socat.`
-        );
-      }
       this._warnings.push(
         `Sandbox unavailable: ${reason}. ` +
           `User code execution is disabled unless execution.allow_insecure_local_fallback is enabled.`
@@ -203,23 +192,12 @@ export class ScoutServer {
       } catch (wrapErr) {
         const reason =
           wrapErr instanceof Error ? wrapErr.message : String(wrapErr);
-        if (this.opts.multiUser) {
-          throw new Error(
-            `Sandbox wrapping failed in server mode: ${reason}. ` +
-              `Cannot start server without OS isolation.`
-          );
-        }
         this._warnings.push(
           `Sandbox wrapping failed: ${reason}. User execution may be unavailable.`
         );
         this.proc = spawn(pythonPath, args, { env, stdio: ["pipe", "pipe", "pipe"] });
       }
     } else {
-      if (this.opts.multiUser) {
-        throw new Error(
-          "Server mode requires OS sandbox support but sandbox initialization failed."
-        );
-      }
       this.proc = spawn(pythonPath, args, { env, stdio: ["pipe", "pipe", "pipe"] });
     }
 
@@ -347,15 +325,6 @@ export class ScoutServer {
             error?: string;
           };
           if (body.status === "ok") {
-            if (this.opts.multiUser) {
-              const exec = (body as { execution?: { available?: boolean; isolation?: boolean; error?: string } }).execution;
-              if (!exec?.available || !exec?.isolation) {
-                throw new Error(
-                  `Execution sandbox unavailable in server mode.\n` +
-                    `${exec?.error ?? "Worker isolation probe failed or worker unreachable."}`
-                );
-              }
-            }
             return;
           }
           if (body.status === "error" || body.status === "degraded") {
