@@ -59,9 +59,11 @@ class MemoriesConfig(BaseModel):
     generate_memories: bool = True
     max_summary_tokens: int = 4000
     stage1_scan_limit: int = 32
+    stage1_max_jobs_per_startup: int = 4
     stage1_concurrency: int = 4
     stage1_idle_hours: float = 1.0
     stage1_max_age_days: int = 30
+    stage1_retry_backoff_seconds: int = 3600
     phase2_top_n: int = 50
     max_unused_days: int = 90
 

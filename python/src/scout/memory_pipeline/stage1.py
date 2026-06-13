@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import asyncio
 from pathlib import Path
 
 from ..config import MemoriesConfig
@@ -29,7 +30,7 @@ def _eligible_sessions(
     *,
     idle_hours: float,
     max_age_days: int,
-    scan_limit: int,
+    exclude_thread_id: str | None = None,
 ) -> list[Path]:
     now = time.time()
     idle_cutoff = now - idle_hours * 3600
@@ -38,6 +39,8 @@ def _eligible_sessions(
     if not sessions_dir.is_dir():
         return []
     for path in sessions_dir.glob("*.jsonl"):
+        if path.stem == exclude_thread_id:
+            continue
         mtime = _session_mtime(path)
         if mtime > idle_cutoff:
             continue
@@ -45,7 +48,7 @@ def _eligible_sessions(
             continue
         candidates.append((mtime, path))
     candidates.sort(key=lambda x: x[0])
-    return [p for _, p in candidates[:scan_limit]]
+    return [p for _, p in candidates]
 
 
 def _extract_messages(session_path: Path) -> str:
@@ -149,7 +152,13 @@ async def run_stage1_for_session(
         return True
     except Exception:
         logger.exception("Stage-1 failed for %s", session_path)
-        store.finish_job(JOB_KIND_STAGE1, thread_id, token, success=False)
+        store.finish_job(
+            JOB_KIND_STAGE1,
+            thread_id,
+            token,
+            success=False,
+            retry_backoff_seconds=memories_config.stage1_retry_backoff_seconds,
+        )
         return False
 
 
@@ -160,21 +169,39 @@ async def run_stage1_batch(
     server_mode: bool,
     memories_config: MemoriesConfig,
     app_config,
+    exclude_thread_id: str | None = None,
 ) -> int:
+    store = open_memory_store(personal_dir, server_mode)
     paths = _eligible_sessions(
         sessions_dir,
         idle_hours=memories_config.stage1_idle_hours,
         max_age_days=memories_config.stage1_max_age_days,
-        scan_limit=memories_config.stage1_scan_limit,
+        exclude_thread_id=exclude_thread_id,
     )
-    count = 0
-    for path in paths:
-        if await run_stage1_for_session(
-            path,
-            personal_dir=personal_dir,
-            server_mode=server_mode,
-            memories_config=memories_config,
-            app_config=app_config,
-        ):
-            count += 1
-    return count
+    candidates = [(path.stem, _session_mtime(path)) for path in paths]
+    actionable_limit = min(
+        memories_config.stage1_scan_limit,
+        memories_config.stage1_max_jobs_per_startup,
+    )
+    thread_ids = set(store.filter_stage1_candidates(candidates, limit=actionable_limit))
+    selected = [path for path in paths if path.stem in thread_ids]
+    semaphore = asyncio.Semaphore(max(1, memories_config.stage1_concurrency))
+
+    async def run(path: Path) -> bool:
+        async with semaphore:
+            return await run_stage1_for_session(
+                path,
+                personal_dir=personal_dir,
+                server_mode=server_mode,
+                memories_config=memories_config,
+                app_config=app_config,
+            )
+
+    results = await asyncio.gather(*(run(path) for path in selected))
+    count = sum(results)
+    pruned = store.prune(memories_config.max_unused_days)
+    logger.info(
+        "Memory stage-1 scan: scanned=%d eligible=%d claimed=%d changed=%d pruned=%d",
+        len(paths), len(candidates), len(selected), count, pruned,
+    )
+    return count + pruned

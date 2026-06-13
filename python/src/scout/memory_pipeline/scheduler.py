@@ -33,20 +33,22 @@ def schedule_memory_pipeline(
 
     async def _run() -> None:
         try:
-            await run_stage1_batch(
+            changed = await run_stage1_batch(
                 sessions_dir,
                 personal_dir=personal_dir,
                 server_mode=server_mode,
                 memories_config=config.memories,
                 app_config=config,
+                exclude_thread_id=session_id,
             )
-            await run_stage2(
-                personal_dir=personal_dir,
-                server_mode=server_mode,
-                memories_config=config.memories,
-                app_config=config,
-                user_id=user_id,
-            )
+            if changed:
+                await run_stage2(
+                    personal_dir=personal_dir,
+                    server_mode=server_mode,
+                    memories_config=config.memories,
+                    app_config=config,
+                    user_id=user_id,
+                )
         except Exception:
             logger.exception("Memory pipeline failed for %s", key)
         finally:

@@ -7,8 +7,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
-
 JOB_KIND_STAGE1 = "memory_stage1"
 JOB_KIND_PHASE2 = "memory_consolidate_global"
 DEFAULT_LEASE_SECONDS = 300
@@ -60,13 +58,57 @@ class MemoryStore:
                 lease_until INTEGER,
                 ownership_token TEXT,
                 retry_remaining INTEGER DEFAULT 3,
+                retry_after INTEGER,
                 last_success_watermark INTEGER,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (kind, job_key)
             );
             """
         )
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(memory_jobs)").fetchall()
+        }
+        if "retry_after" not in columns:
+            self._conn.execute("ALTER TABLE memory_jobs ADD COLUMN retry_after INTEGER")
         self._conn.commit()
+
+    def filter_stage1_candidates(
+        self,
+        candidates: list[tuple[str, int]],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Return candidates that need model processing and can currently be claimed."""
+        now = int(time.time())
+        selected: list[str] = []
+        for thread_id, source_updated_at in candidates:
+            output = self._conn.execute(
+                "SELECT source_updated_at FROM stage1_outputs WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            job = self._conn.execute(
+                """
+                SELECT status, lease_until, retry_remaining, retry_after, last_success_watermark
+                FROM memory_jobs WHERE kind = ? AND job_key = ?
+                """,
+                (JOB_KIND_STAGE1, thread_id),
+            ).fetchone()
+            watermark = int(job["last_success_watermark"] or 0) if job else 0
+            output_watermark = int(output["source_updated_at"]) if output else 0
+            if max(watermark, output_watermark) >= source_updated_at:
+                continue
+            if job:
+                if job["status"] == "running" and int(job["lease_until"] or 0) > now:
+                    continue
+                if job["status"] == "failed" and (
+                    int(job["retry_remaining"] or 0) <= 0
+                    or int(job["retry_after"] or 0) > now
+                ):
+                    continue
+            selected.append(thread_id)
+            if len(selected) >= limit:
+                break
+        return selected
 
     def upsert_stage1(self, output: Stage1Output) -> None:
         self._conn.execute(
@@ -158,6 +200,7 @@ class MemoryStore:
     ) -> str | None:
         now = int(time.time())
         token = str(uuid.uuid4())
+        self._conn.execute("BEGIN IMMEDIATE")
         row = self._conn.execute(
             "SELECT * FROM memory_jobs WHERE kind = ? AND job_key = ?",
             (kind, job_key),
@@ -175,9 +218,13 @@ class MemoryStore:
         lease_until = row["lease_until"] or 0
         status = row["status"]
         if status == "running" and lease_until > now:
+            self._conn.rollback()
             return None
         retry = row["retry_remaining"] or 0
-        if status == "failed" and retry <= 0:
+        if status == "failed" and (
+            retry <= 0 or int(row["retry_after"] or 0) > now
+        ):
+            self._conn.rollback()
             return None
         self._conn.execute(
             """
@@ -198,6 +245,7 @@ class MemoryStore:
         *,
         success: bool,
         watermark: int | None = None,
+        retry_backoff_seconds: int = 3600,
     ) -> None:
         now = int(time.time())
         row = self._conn.execute(
@@ -212,7 +260,8 @@ class MemoryStore:
                 """
                 UPDATE memory_jobs
                 SET status = 'succeeded', lease_until = NULL, ownership_token = NULL,
-                    last_success_watermark = ?, updated_at = ?, retry_remaining = ?
+                    retry_after = NULL, last_success_watermark = ?, updated_at = ?,
+                    retry_remaining = ?
                 WHERE kind = ? AND job_key = ?
                 """,
                 (watermark or now, now, DEFAULT_RETRY_REMAINING, kind, job_key),
@@ -222,12 +271,32 @@ class MemoryStore:
                 """
                 UPDATE memory_jobs
                 SET status = 'failed', lease_until = NULL, ownership_token = NULL,
-                    updated_at = ?, retry_remaining = ?
+                    retry_after = ?, updated_at = ?, retry_remaining = ?
                 WHERE kind = ? AND job_key = ?
                 """,
-                (now, max(0, retry - 1), kind, job_key),
+                (now + retry_backoff_seconds, now, max(0, retry - 1), kind, job_key),
             )
         self._conn.commit()
+
+    def prune(self, max_unused_days: int) -> int:
+        cutoff = int(time.time()) - max_unused_days * 86400
+        cur = self._conn.execute(
+            """
+            DELETE FROM stage1_outputs
+            WHERE COALESCE(last_usage, generated_at) < ?
+            """,
+            (cutoff,),
+        )
+        self._conn.execute(
+            """
+            DELETE FROM memory_jobs
+            WHERE kind = ? AND status != 'running' AND updated_at < ?
+              AND job_key NOT IN (SELECT thread_id FROM stage1_outputs)
+            """,
+            (JOB_KIND_STAGE1, cutoff),
+        )
+        self._conn.commit()
+        return cur.rowcount
 
     def phase2_cooldown_ok(self, cooldown_seconds: int = 6 * 3600) -> bool:
         row = self._conn.execute(

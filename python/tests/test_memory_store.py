@@ -30,3 +30,32 @@ def test_job_claim_and_finish(tmp_path: Path):
     store.finish_job(JOB_KIND_STAGE1, "job-a", token, success=True)
     token2 = store.try_claim_job(JOB_KIND_STAGE1, "job-a")
     assert token2 is not None
+
+
+def test_filter_candidates_skips_unchanged_and_does_not_starve_new(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.db")
+    candidates = []
+    for i in range(40):
+        thread_id = f"old-{i}"
+        candidates.append((thread_id, 100 + i))
+        token = store.try_claim_job(JOB_KIND_STAGE1, thread_id)
+        assert token
+        store.finish_job(JOB_KIND_STAGE1, thread_id, token, success=True, watermark=100 + i)
+    candidates.append(("new", 1000))
+
+    assert store.filter_stage1_candidates(candidates, limit=4) == ["new"]
+
+
+def test_filter_candidates_respects_retry_backoff(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.db")
+    token = store.try_claim_job(JOB_KIND_STAGE1, "failed")
+    assert token
+    store.finish_job(
+        JOB_KIND_STAGE1,
+        "failed",
+        token,
+        success=False,
+        retry_backoff_seconds=3600,
+    )
+
+    assert store.filter_stage1_candidates([("failed", 100)], limit=4) == []
