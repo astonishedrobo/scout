@@ -245,6 +245,7 @@ class ScoutAgent:
             disable_write_tools=cfg.disable_write_tools,
             focus_path=focus_path,
             memory_instructions=memory_instructions,
+            allowed_tools=profile.allowed_tools,
         )
         self._graph = build_graph(
             cfg, tools, system_prompt,
