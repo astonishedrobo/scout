@@ -80,6 +80,8 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.append("- **Verify changes.** After edits, run the smallest relevant checks or inspect the resulting file. Report clearly when verification could not be run.")
     if "write_file" in enabled_tools or "write_binary_artifact" in enabled_tools:
         tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts.")
+    if ("run_python" in enabled_tools or "run_node" in enabled_tools) and "write_binary_artifact" in enabled_tools:
+        tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files from `run_python` or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
     return "\n".join(tips)
 
 

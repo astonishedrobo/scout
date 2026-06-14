@@ -98,6 +98,54 @@ def _msg_role(m: object) -> str:
     return "assistant"
 
 
+def _unresolved_tool_call_ids(messages: list) -> list[str]:
+    """Return tool-call IDs that have not received a matching ToolMessage."""
+    unresolved: dict[str, None] = {}
+    for message in messages:
+        if isinstance(message, AIMessage):
+            for tool_call in message.tool_calls:
+                unresolved[tool_call["id"]] = None
+        elif isinstance(message, ToolMessage):
+            unresolved.pop(message.tool_call_id, None)
+    return list(unresolved)
+
+
+def _assert_tool_history_complete(messages: list) -> None:
+    unresolved = _unresolved_tool_call_ids(messages)
+    if unresolved:
+        raise RuntimeError(
+            "Refusing provider call with unresolved tool calls: "
+            + ", ".join(unresolved)
+        )
+
+
+def _safe_recent_split(messages: list, split: int, start_idx: int = 0) -> int:
+    """Move a compression split left so it never separates a tool exchange."""
+    if split >= len(messages) or not isinstance(messages[split], ToolMessage):
+        return split
+    cursor = split - 1
+    while cursor >= start_idx and isinstance(messages[cursor], ToolMessage):
+        cursor -= 1
+    if cursor >= start_idx and isinstance(messages[cursor], AIMessage) and messages[cursor].tool_calls:
+        return cursor
+    return split
+
+
+def _route_after_agent(state: AgentState) -> Literal["tools", "__end__"]:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
+    return END  # type: ignore[return-value]
+
+
+def _route_after_tools(state: AgentState, max_iterations: int) -> Literal["agent", "wrap_up"]:
+    if _unresolved_tool_call_ids(state["messages"]):
+        raise RuntimeError("Tool node returned without resolving every tool call.")
+    if state.get("iteration", 0) >= max_iterations - 1:
+        return "wrap_up"
+    return "agent"
+
+
 def _parse_retry_after(error_msg: str) -> float | None:
     """Try to extract a retry-after duration (seconds) from the error string."""
     import re
@@ -132,6 +180,7 @@ def _compress_messages(
     system_msg = messages[0] if isinstance(messages[0], SystemMessage) else None
     start_idx = 1 if system_msg else 0
     split = len(messages) - keep_recent
+    split = _safe_recent_split(messages, split, start_idx)
     old_messages = messages[start_idx:split]
     recent_messages = messages[split:]
 
@@ -357,6 +406,11 @@ def build_graph(
                     diff = exact_file_diff(target, root, old, proposed)
                 except Exception as exc:
                     output = f"[Write preparation failed: {exc}]"
+                    if tool_name == "write_binary_artifact":
+                        output += (
+                            " Do not retry by printing or reconstructing base64. "
+                            "Generate and save the binary directly with run_python or run_node."
+                        )
                 else:
                     if agent_config.disable_write_tools:
                         output = "[WRITE FAILED / ACCESS DENIED] Write operations are disabled."
@@ -447,6 +501,7 @@ def build_graph(
 
         # ── LLM call with error handling ────────────────────────────
         try:
+            _assert_tool_history_complete(messages)
             response = llm_with_tools.invoke(messages)
         except litellm.RateLimitError as exc:
             # Provider rate-limit (429 / TPM / RPM).  Raise a clean
@@ -539,50 +594,45 @@ def build_graph(
                         "iteration": iteration + 1,
                     }
 
-        # ── Wrap-up nudge when approaching max iterations ────────────
-        # When the agent is 2 iterations from the limit, inject a hint
-        # so it wraps up on its own rather than being hard-stopped.
-        if iteration >= max_iter - 2 and response.tool_calls:
-            logger.info(
-                "Approaching max iterations (%d/%d) — injecting wrap-up nudge.",
-                iteration, max_iter,
-            )
-            nudge = SystemMessage(content=(
-                "[System] You are approaching the tool-call limit.  "
-                "Wrap up your analysis now and respond with your "
-                "findings.  Do not call any more tools."
-            ))
-            # Re-invoke without tools bound so the model can only
-            # produce text.
-            messages.append(response)  # include its last thinking
-            messages.append(nudge)
-            response = llm.invoke(messages)
-
         return {"messages": [response], "iteration": iteration + 1}
 
+    def wrap_up_node(state: AgentState) -> dict:
+        """Produce a final tool-free response after all pending tools complete."""
+        messages = list(state["messages"])
+        if not messages or not isinstance(messages[0], SystemMessage):
+            messages.insert(0, SystemMessage(content=system_prompt))
+        _assert_tool_history_complete(messages)
+        messages.append(SystemMessage(content=(
+            "[System] You have reached the tool-call limit. Summarize the work "
+            "completed, report any failures honestly, and respond without calling tools."
+        )))
+        logger.info("Tool-call limit reached — producing protocol-safe wrap-up.")
+        response = llm.invoke(messages)
+        if response.tool_calls:
+            logger.warning("Tool-free wrap-up returned tool calls; stripping them.")
+            content = response.content or (
+                "I reached the tool-call limit before I could complete the task."
+            )
+            response = AIMessage(content=content)
+        return {"messages": [response]}
+
     def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
-        """Route: tool_calls → tools, else → end.  Max iterations is the safety net."""
-        messages = state["messages"]
-        last = messages[-1]
-        iteration = state.get("iteration", 0)
+        """Always execute pending calls; otherwise finish."""
+        return _route_after_agent(state)
 
-        # Hard stop — max iterations reached
-        if iteration >= max_iter:
-            logger.warning("Hit max iterations (%d) — stopping.", max_iter)
-            return END  # type: ignore[return-value]
-
-        # Normal routing: tool_calls → execute, else → done
-        if isinstance(last, AIMessage) and last.tool_calls:
-            return "tools"
-        return END  # type: ignore[return-value]
+    def after_tools(state: AgentState) -> Literal["agent", "wrap_up"]:
+        """Wrap up only after every call in the latest assistant message has a result."""
+        return _route_after_tools(state, max_iter)
 
     # ── Wire the graph ───────────────────────────────────────────────
 
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", tool_node)
+    graph.add_node("wrap_up", wrap_up_node)
     graph.set_entry_point("agent")
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
+    graph.add_conditional_edges("tools", after_tools, {"agent": "agent", "wrap_up": "wrap_up"})
+    graph.add_edge("wrap_up", END)
 
     return graph.compile()

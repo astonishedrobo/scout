@@ -34,6 +34,7 @@ def test_writable_prompt_contains_writing_and_failure_guidance(tmp_path):
     assert "## File Writing" in prompt
     assert "**Recover from failures.**" in prompt
     assert "**Verify changes.**" in prompt
+    assert "never print base64 for reuse in `write_binary_artifact`" in prompt
 
 
 def test_prompt_defines_instruction_trust_boundary(tmp_path):
