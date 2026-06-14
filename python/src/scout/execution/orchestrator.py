@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import shlex
+import shutil
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from ..agent.file_guard import scan_code_for_denied_paths
 from ..agent.file_tracker import FileDiff, exact_file_diff
-from ..artifacts import describe_artifact
+from ..artifacts import describe_artifact, html_artifact_warning
 from ..config import ExecutionConfig
 from .backend import ExecutionBackend
 from .errors import ExecutionErrorCategory
@@ -28,6 +29,7 @@ from .staging import (
     promote_staged_files,
     snapshot_pre_promotion_hashes,
 )
+from .changes import diff_snapshots, snapshot_writable_roots
 from .unified_exec import UnifiedExecCommandRequest, UnifiedExecStdinRequest
 
 logger = logging.getLogger(__name__)
@@ -112,12 +114,29 @@ class ExecutionOrchestrator:
 
         scratch = self._personal / ".scout-cache" / "session-scratch" / self._session_id
         scratch.mkdir(parents=True, exist_ok=True)
+        before = snapshot_writable_roots((scratch,))
+        scratch_relative = scratch.relative_to(self._personal)
+        wrapped_code = (
+            "import os as _scout_os\n"
+            "if '_SCOUT_PYTHON_WORKDIR' not in globals():\n"
+            f"    _SCOUT_PYTHON_WORKDIR = _scout_os.path.abspath({str(scratch_relative)!r})\n"
+            "_scout_os.chdir(_SCOUT_PYTHON_WORKDIR)\n"
+            + code
+        )
         staging = create_staging(self._personal)
         req = self._make_request(
-            "python", code=code, staging=staging, persistent=True,
+            "python", code=wrapped_code, staging=staging, persistent=True,
             cwd=self._personal, scratch_dir=scratch,
         )
         result = await self._backend.execute(req, proxy_url=self._proxy_url)
+        after = snapshot_writable_roots((scratch,))
+        for change in diff_snapshots(before, after, (scratch,)):
+            source = Path(change.path)
+            target = staging.work_dir / source.relative_to(scratch)
+            if change.status == "deleted":
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
         return await self._finalize(result, staging, description or "run_python")
 
     def set_active_tool_call_id(self, tool_call_id: str) -> None:
@@ -263,7 +282,7 @@ class ExecutionOrchestrator:
             allow_shared_write=self._allow_shared_write,
             personal_write=self._personal_write,
             network_domains=domains,
-            staging_dir=staging.work_dir,
+            staging_dir=None if persistent else staging.work_dir,
         )
 
     async def run_shell(self, command: str, description: str = "") -> ToolExecutionResult:
@@ -348,7 +367,7 @@ class ExecutionOrchestrator:
             allow_shared_write=self._allow_shared_write,
             personal_write=self._personal_write,
             network_domains=domains,
-            staging_dir=None if persistent else staging.work_dir,
+            staging_dir=staging.work_dir,
             scratch_dir=scratch_dir,
             persistent=persistent,
         )
@@ -464,7 +483,16 @@ class ExecutionOrchestrator:
         else:
             discard_staging(staging)
 
-        return ToolExecutionResult(_format_result(result), artifacts=artifacts)
+        warnings = [
+            html_artifact_warning(self._personal / artifact["path"])
+            for artifact in artifacts
+            if artifact.get("renderer") == "html"
+        ]
+        text = _format_result(result)
+        warnings = [warning for warning in warnings if warning]
+        if warnings:
+            text = "\n".join([text, *warnings]).strip()
+        return ToolExecutionResult(text, artifacts=artifacts)
 
     @staticmethod
     def _needs_network(command: str) -> bool:

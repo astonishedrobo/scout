@@ -67,7 +67,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, baseUr
     <div>
       <div className="min-w-0 overflow-hidden">
         <div className="prose-scout text-[15px] overflow-x-auto">
-          <MarkdownRenderer content={message.content} />
+          <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
         </div>
       </div>
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (

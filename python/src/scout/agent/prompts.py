@@ -71,6 +71,7 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.extend([
             "- **Python variables persist.** Import once and reuse state. Print expected results explicitly.",
             "- **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.",
+            "- **Use simple relative paths for generated Python outputs.** For example, save a plot as `histogram.png`, not an absolute workspace path. Relative outputs are staged and surfaced for approval automatically.",
         ])
     if "exec_command" in enabled_tools:
         tips.append("- **Install packages via the shell.** Use `python -m pip install <package>` or `npm install <package>`; request narrow network permission when required.")
@@ -79,9 +80,10 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
     if enabled_tools & WRITE_TOOLS:
         tips.append("- **Verify changes.** After edits, run the smallest relevant checks or inspect the resulting file. Report clearly when verification could not be run.")
     if "write_file" in enabled_tools or "write_binary_artifact" in enabled_tools:
-        tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts.")
+        tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts. When asked to embed an image, inline its bytes as a `data:image/...;base64,...` URI; a relative `<img src=\"file.png\">` only references the image and is not embedded.")
+        tips.append("- **Markdown artifacts may reference sibling workspace images.** Use normal relative Markdown image syntax such as `![Plot](plot.png)`; external image URLs and path traversal are blocked.")
     if ("run_python" in enabled_tools or "run_node" in enabled_tools) and "write_binary_artifact" in enabled_tools:
-        tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files from `run_python` or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
+        tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from `run_python` or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
     return "\n".join(tips)
 
 
@@ -171,6 +173,7 @@ When the user asks about data (queries, analysis, exploration):
 - Clear, direct language. No unnecessary preamble.
 - Match the user's tone and depth expectations.
 - Never mention internal methodology names to the user.
+- Use workspace-relative paths in responses. Never reveal internal absolute filesystem paths.
 
 {skills_section}\
 """
@@ -307,7 +310,7 @@ def build_manifest(
                 json_descriptions[fname] = src.description
 
     # 1) File tree
-    parts.append(f"**Data directory:** `{root}`\n")
+    parts.append("**Data directory:** `workspace/`\n")
     if scan_root != root.resolve():
         try:
             rel_focus = scan_root.relative_to(root.resolve())

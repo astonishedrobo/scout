@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Artifact } from "scout-core";
 import { Download, RefreshCw, X } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+
+const artifactScrollPositions = new Map<string, number>();
 
 export function ArtifactPanel({
   artifact,
@@ -20,19 +22,60 @@ export function ArtifactPanel({
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const requestRef = useRef(0);
+  const previousPathRef = useRef(artifact.path);
+  const objectUrlRef = useRef("");
+  const iframeScrollRef = useRef({ x: 0, y: 0 });
+  const preservedScrollRef = useRef(artifactScrollPositions.get(artifact.path) ?? 0);
+  const restoringScrollRef = useRef(false);
+  const restoreTimerRef = useRef<number | undefined>(undefined);
+
+  const restoreScroll = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    restoringScrollRef.current = true;
+    element.scrollTop = preservedScrollRef.current;
+    requestAnimationFrame(() => {
+      restoringScrollRef.current = false;
+    });
+  };
+
+  const preserveScrollThroughLayout = () => {
+    window.clearTimeout(restoreTimerRef.current);
+    restoreScroll();
+    restoreTimerRef.current = window.setTimeout(restoreScroll, 250);
+  };
 
   useEffect(() => {
-    let objectUrl = "";
     const controller = new AbortController();
+    const requestId = ++requestRef.current;
+    const sameArtifact = previousPathRef.current === artifact.path;
+    const scrollTop = sameArtifact
+      ? scrollRef.current?.scrollTop ?? artifactScrollPositions.get(artifact.path) ?? 0
+      : 0;
+    preservedScrollRef.current = scrollTop;
+    artifactScrollPositions.set(artifact.path, scrollTop);
+    const iframeScroll = sameArtifact
+      ? readIframeScroll(iframeRef.current)
+      : { x: 0, y: 0 };
+    iframeScrollRef.current = iframeScroll;
+    previousPathRef.current = artifact.path;
     setError("");
-    setContent("");
-    setUrl("");
+    setIsRefreshing(true);
+    if (!sameArtifact) {
+      setContent("");
+      setUrl("");
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }
     const params = new URLSearchParams({
       path: artifact.path,
       version: artifact.version,
       refresh: String(refresh),
     });
-    fetch(`${baseUrl}/artifacts/content?${params}`, {
+    const request = fetch(`${baseUrl}/artifacts/content?${params}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: "no-store",
       signal: controller.signal,
@@ -40,20 +83,47 @@ export function ArtifactPanel({
       .then(async (response) => {
         if (!response.ok) throw new Error("Artifact is unavailable");
         const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-        if (artifact.renderer !== "image") setContent(await blob.text());
+        if (requestId !== requestRef.current) return;
+        const nextUrl = URL.createObjectURL(blob);
+        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = nextUrl;
+        setUrl(nextUrl);
+        if (artifact.renderer !== "image") {
+          const text = await blob.text();
+          const nextContent =
+            artifact.renderer === "html"
+              ? await inlineLocalAssets(text, artifact.path, baseUrl, token, controller.signal)
+              : text;
+          if (requestId !== requestRef.current) return;
+          setContent(nextContent);
+        }
+        requestAnimationFrame(() => {
+          if (requestId !== requestRef.current) return;
+          preserveScrollThroughLayout();
+        });
       })
       .catch((err) => {
-        if (!(err instanceof DOMException && err.name === "AbortError")) {
+        if (requestId === requestRef.current && !(err instanceof DOMException && err.name === "AbortError")) {
           setError(err instanceof Error ? err.message : String(err));
         }
+      })
+      .finally(() => {
+        if (requestId === requestRef.current) setIsRefreshing(false);
       });
+    void request;
     return () => {
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [artifact.path, artifact.version, baseUrl, token, refresh, artifact.renderer]);
+
+  useEffect(() => () => {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    window.clearTimeout(restoreTimerRef.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    preserveScrollThroughLayout();
+  }, [content, url, artifact.path]);
 
   const blocked = artifact.renderer === "html" && hasExternalAssets(content);
 
@@ -79,7 +149,7 @@ export function ArtifactPanel({
           className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift rounded-btn transition-colors"
           title="Refresh"
         >
-          <RefreshCw size={17} />
+          <RefreshCw size={17} className={isRefreshing ? "animate-spin" : ""} />
         </button>
         <button
           onClick={onClose}
@@ -89,7 +159,16 @@ export function ArtifactPanel({
           <X size={18} />
         </button>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto p-4 bg-scout-canvas">
+      <div
+        ref={scrollRef}
+        onScroll={(event) => {
+          if (restoringScrollRef.current) return;
+          const scrollTop = event.currentTarget.scrollTop;
+          preservedScrollRef.current = scrollTop;
+          artifactScrollPositions.set(artifact.path, scrollTop);
+        }}
+        className="flex-1 min-h-0 overflow-auto p-4 bg-scout-canvas"
+      >
         {blocked && (
           <p className="mb-3 rounded-card border border-scout-warning/40 bg-scout-warning-muted p-2 text-xs text-scout-warning">
             External assets were blocked. HTML previews must be self-contained.
@@ -102,15 +181,17 @@ export function ArtifactPanel({
         )}
         {artifact.renderer === "html" && content && (
           <iframe
+            ref={iframeRef}
+            onLoad={() => restoreIframeScroll(iframeRef.current, iframeScrollRef.current)}
             title={artifact.title}
-            srcDoc={sandboxHtml(content)}
+            srcDoc={sandboxHtml(content, artifact.path, baseUrl)}
             sandbox="allow-scripts"
             className="w-full h-full min-h-[70vh] bg-white rounded-card border border-scout-hairline"
           />
         )}
         {artifact.renderer === "markdown" && content && (
           <div className="prose-scout">
-            <MarkdownRenderer content={content} />
+            <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} artifactPath={artifact.path} />
           </div>
         )}
         {artifact.renderer === "json" && content && (
@@ -125,6 +206,22 @@ export function ArtifactPanel({
   );
 }
 
+function readIframeScroll(iframe: HTMLIFrameElement | null) {
+  try {
+    return { x: iframe?.contentWindow?.scrollX ?? 0, y: iframe?.contentWindow?.scrollY ?? 0 };
+  } catch {
+    return { x: 0, y: 0 };
+  }
+}
+
+function restoreIframeScroll(iframe: HTMLIFrameElement | null, position: { x: number; y: number }) {
+  try {
+    iframe?.contentWindow?.scrollTo(position.x, position.y);
+  } catch {
+    // Sandboxed/cross-origin iframe; parent panel scroll is still preserved.
+  }
+}
+
 function hasExternalAssets(content: string) {
   return (
     /(?:src|href)\s*=\s*["'](?:https?:)?\/\//i.test(content) ||
@@ -132,8 +229,42 @@ function hasExternalAssets(content: string) {
   );
 }
 
-function sandboxHtml(content: string) {
+function sandboxHtml(content: string, _artifactPath: string, _baseUrl: string) {
   return content.replace(/<script\b[^>]*\ssrc\s*=\s*["'][^"']+["'][^>]*>/gi, "<!-- blocked -->");
+}
+
+async function inlineLocalAssets(
+  content: string,
+  artifactPath: string,
+  baseUrl: string,
+  token: string | null,
+  signal: AbortSignal,
+) {
+  const directory = artifactPath.includes("/") ? artifactPath.slice(0, artifactPath.lastIndexOf("/") + 1) : "";
+  const matches = [...content.matchAll(/(\b(?:src|poster)\s*=\s*["'])(?!data:|https?:|\/\/|#|javascript:)([^"']+)(["'])/gi)];
+  let result = content;
+  for (const match of matches) {
+    const relative = match[2];
+    const path = `${directory}${relative}`.replace(/\/+/g, "/");
+    const response = await fetch(`${baseUrl}/artifacts/content?path=${encodeURIComponent(path)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) continue;
+    const dataUrl = await blobToDataUrl(await response.blob());
+    result = result.replace(match[0], `${match[1]}${dataUrl}${match[3]}`);
+  }
+  return result;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function formatJson(content: string) {

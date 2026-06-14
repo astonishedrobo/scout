@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,30 @@ RENDERERS = {
 
 INLINE_RENDERERS = {"image"}
 MAX_ARTIFACT_SIZE = 20 * 1024 * 1024
+_LOCAL_HTML_ASSET = re.compile(
+    r"""(?:src|href)\s*=\s*["'](?!data:|https?:|//|#|javascript:)([^"']+)["']|"""
+    r"""url\(\s*["']?(?!data:|https?:|//)([^)"']+)""",
+    re.IGNORECASE,
+)
+
+
+def local_html_assets(content: str) -> list[str]:
+    """Return relative local asset references from HTML/CSS."""
+    return [a or b for a, b in _LOCAL_HTML_ASSET.findall(content)]
+
+
+def html_artifact_warning(path: Path) -> str:
+    if path.suffix.lower() not in {".html", ".htm"} or not path.is_file():
+        return ""
+    refs = local_html_assets(path.read_text(encoding="utf-8", errors="replace"))
+    if not refs:
+        return ""
+    shown = ", ".join(refs[:3])
+    return (
+        f"[HTML NOT SELF-CONTAINED] Local asset references found: {shown}. "
+        "If the user asked to embed assets, inline their bytes as data: URIs; "
+        "do not claim referenced files are embedded."
+    )
 
 
 def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:

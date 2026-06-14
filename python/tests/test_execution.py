@@ -10,6 +10,8 @@ from scout.config import ExecutionConfig
 from scout.execution.changes import diff_snapshots, snapshot_writable_roots
 from scout.execution.env import ALLOWED_ENV_KEYS, build_execution_env
 from scout.execution.grants import CapabilityGrantStore
+from scout.execution.models import ExecutionResult
+from scout.execution.orchestrator import ExecutionOrchestrator
 from scout.execution.policy import build_execution_policy, is_ignored_execution_path, safe_read_bind_paths
 
 
@@ -47,6 +49,61 @@ def test_policy_staging_write_root(tmp_path: Path):
     )
     assert staging in policy.write_roots
     assert personal not in policy.write_roots
+
+
+def test_persistent_policy_uses_stable_scratch_write_root(tmp_path: Path):
+    personal = tmp_path / "users" / "1"
+    staging = personal / ".scout-executions" / "abc" / "work"
+    scratch = personal / ".scout-cache" / "session-scratch" / "s1"
+    staging.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+
+    policy = build_execution_policy(
+        personal_dir=personal,
+        shared_dir=None,
+        config=ExecutionConfig(),
+        staging_dir=staging,
+        scratch_dir=scratch,
+        persistent=True,
+    )
+
+    assert scratch in policy.write_roots
+    assert staging not in policy.write_roots
+    assert personal not in policy.write_roots
+
+
+@pytest.mark.asyncio
+async def test_run_python_promotes_relative_output_from_stable_scratch(tmp_path: Path):
+    personal = tmp_path / "users" / "1"
+    personal.mkdir(parents=True)
+
+    class FakeBackend:
+        async def execute(self, request, *, proxy_url=None):
+            assert request.persistent
+            assert request.scratch_dir is not None
+            assert "_scout_os.chdir(_SCOUT_PYTHON_WORKDIR)" in request.code
+            (request.scratch_dir / "plot.png").write_bytes(b"png")
+            return ExecutionResult(exit_code=0, stdout="ok", stderr="", persistent=True)
+
+    async def approve(*_):
+        return "yes", ""
+
+    orchestrator = ExecutionOrchestrator(
+        backend=FakeBackend(),
+        config=ExecutionConfig(),
+        personal_dir=personal,
+        shared_dir=None,
+        user_id="1",
+        session_id="s1",
+        grant_store=CapabilityGrantStore(),
+        promotion_approval=approve,
+    )
+
+    result = await orchestrator.run_python("print('ok')")
+
+    assert result.text == "ok"
+    assert (personal / "plot.png").read_bytes() == b"png"
+    assert any(artifact["name"] == "plot.png" for artifact in result.artifacts)
 
 
 def test_env_allowlist_removes_secrets(monkeypatch):

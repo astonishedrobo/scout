@@ -23,7 +23,8 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from ..artifacts import describe_artifact
+from ..artifacts import describe_artifact, html_artifact_warning
+from ..path_display import redact_paths, sanitize_artifacts
 from langgraph.graph import END, StateGraph
 
 from .exceptions import ProviderRateLimitError
@@ -261,6 +262,7 @@ def build_graph(
     *,
     hooks_enabled: bool = True,
     personal_dir: str | None = None,
+    shared_dir: str | None = None,
     server_mode: bool = False,
 ) -> StateGraph:
     """Construct and compile the ReAct agent graph.
@@ -431,6 +433,9 @@ def build_graph(
                             target.parent.mkdir(parents=True, exist_ok=True)
                             target.write_bytes(proposed)
                             output = f"Wrote {len(proposed)} bytes to {target}"
+                            warning = html_artifact_warning(target)
+                            if warning:
+                                output += f"\n{warning}"
                             artifact = describe_artifact(target, root)
                             if artifact:
                                 artifacts.append(artifact)
@@ -449,6 +454,8 @@ def build_graph(
                         artifacts.extend(last.artifacts)
 
             content = str(output) if output is not None else ""
+            content = redact_paths(content, data_dir or cwd or ".", shared_dir)
+            artifacts = sanitize_artifacts(artifacts, data_dir or cwd or ".", shared_dir)
             if len(content) > _MAX_TOOL_RESULT_CHARS:
                 content = (
                     content[:_MAX_TOOL_RESULT_CHARS]
@@ -594,6 +601,15 @@ def build_graph(
                         "iteration": iteration + 1,
                     }
 
+        if not response.tool_calls and response.content:
+            response = AIMessage(
+                content=redact_paths(str(response.content), data_dir or cwd or ".", shared_dir),
+                additional_kwargs=response.additional_kwargs,
+                response_metadata=response.response_metadata,
+                id=response.id,
+                usage_metadata=response.usage_metadata,
+            )
+
         return {"messages": [response], "iteration": iteration + 1}
 
     def wrap_up_node(state: AgentState) -> dict:
@@ -614,6 +630,14 @@ def build_graph(
                 "I reached the tool-call limit before I could complete the task."
             )
             response = AIMessage(content=content)
+        elif response.content:
+            response = AIMessage(
+                content=redact_paths(str(response.content), data_dir or cwd or ".", shared_dir),
+                additional_kwargs=response.additional_kwargs,
+                response_metadata=response.response_metadata,
+                id=response.id,
+                usage_metadata=response.usage_metadata,
+            )
         return {"messages": [response]}
 
     def should_continue(state: AgentState) -> Literal["tools", "__end__"]:

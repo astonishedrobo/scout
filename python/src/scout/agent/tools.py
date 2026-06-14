@@ -113,8 +113,8 @@ def make_tools(
         """Execute Python code in a persistent sandboxed session.
 
         Variables, imports, and DataFrames persist across calls.
-        Use for data analysis, computation, and coding tasks.
-        For saving files use write_file or write_binary_artifact instead.
+        Use for data analysis, computation, and coding tasks. Save generated
+        outputs such as plots with simple relative paths; they are staged for approval.
         """
         if execution_service:
             result = await execution_service.run_python(code, description)

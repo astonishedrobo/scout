@@ -14,6 +14,7 @@ from ..retriever import BM25Retriever, RetrieverProxy
 from ..permissions import ProfileConfig, profile_from_user, resolve_profile
 from ..memories import ensure_memory_layout, load_memory_summary
 from .memory_prompt import build_memory_instructions
+from ..path_display import redact_paths
 from ..skills import load_layered_instructions, load_skills, resolve_focus_path
 from .exceptions import ProviderRateLimitError
 from .graph import ApprovalFn, CapabilityApprovalFn, PromotionApprovalFn, build_graph
@@ -108,6 +109,7 @@ class ScoutAgent:
         self._user_id = user_id
         self._session_id = session_id
         self._server_mode = server_mode
+        self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
         if config:
             self._config = config
         else:
@@ -255,6 +257,7 @@ class ScoutAgent:
             execution_service=self._execution,
             hooks_enabled=self._config.hooks.enabled,
             personal_dir=self._cwd,
+            shared_dir=self._shared_dir,
             server_mode=self._server_mode,
         )
 
@@ -318,7 +321,7 @@ class ScoutAgent:
         self._messages = result["messages"]
         for msg in reversed(self._messages):
             if isinstance(msg, AIMessage) and not msg.tool_calls:
-                return msg.content or ""
+                return redact_paths(msg.content or "", self._cwd, self._shared_dir)
         return ""
 
     async def stream(self, user_message: str, attachments: list[str] | None = None) -> AsyncIterator[dict[str, Any]]:
@@ -368,10 +371,11 @@ class ScoutAgent:
                                     "tool_call_id": tc["id"],
                                 })
                         if msg.content and not msg.tool_calls:
-                            last_ai_content = msg.content
+                            safe_content = redact_paths(msg.content, self._cwd, self._shared_dir)
+                            last_ai_content = safe_content
                             response_emitted = True
-                            self._record_memory_citations(msg.content)
-                            events.append({"type": "response", "content": msg.content})
+                            self._record_memory_citations(safe_content)
+                            events.append({"type": "response", "content": safe_content})
                     elif isinstance(msg, ToolMessage):
                         output = (msg.content or "")[:500]
                         name = msg.name or ""
