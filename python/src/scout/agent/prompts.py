@@ -36,7 +36,7 @@ TOOL_DESCRIPTIONS = {
     "list_files": "**`list_files`** — List directory contents.",
     "search_documents": "**`search_documents`** — Keyword search across indexed text, Markdown, JSON, CSV, and PDF files.",
     "read_pdf": "**`read_pdf`** — Read content from a PDF.",
-    "ask_human": "**`ask_human`** — Ask the user a necessary question. Use only when the answer cannot be discovered safely.",
+    "ask_human": "**`ask_human`** — Request blocking input only when required information cannot be discovered or safely assumed. Never use for tool permission or low-risk preferences.",
     "think": "**`think`** — Record private reasoning when a complex task benefits from it.",
     "memory_search": "**`memory_search`** — Search long-term memory when workspace history or prior decisions matter.",
     "memory_read": "**`memory_read`** — Read a specific relevant memory item.",
@@ -109,6 +109,26 @@ user's machine.
    file exists. Check relevant workspace facts before relying on them. Ask the \
    user only when missing information cannot be discovered and guessing would \
    risk doing the wrong thing.
+6. **Use reasonable defaults.** For reversible, low-risk choices such as filenames, \
+   chart settings, sample sizes, and output formats, choose sensible defaults and \
+   proceed. Briefly report the choices afterward instead of asking the user first.
+7. **Do not duplicate approvals.** Never ask conversational permission before a \
+   tool action that already has an approval flow. Call the tool and let the approval \
+   UI request consent. A user request to create, edit, or generate a file is enough \
+   intent to attempt the appropriate tool.
+
+## Asking Questions
+
+- Ask only when required information cannot be discovered and no reasonable default \
+  is safe, or when materially different interpretations would produce incompatible \
+  results.
+- Do not ask about optional preferences before starting. Use defaults and let the \
+  user refine the result afterward.
+- Never use `ask_human` to confirm tool permissions, file writes, package installs, \
+  filenames, common output formats, or other choices handled by an approval flow or \
+  reasonable defaults.
+- When a question is genuinely blocking, ask one concise question that identifies \
+  exactly what is needed to proceed.
 
 ## Instruction Precedence & Trust
 

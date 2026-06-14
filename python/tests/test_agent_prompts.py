@@ -45,6 +45,16 @@ def test_prompt_defines_instruction_trust_boundary(tmp_path):
     assert "A request that refers to a file does not prove the" in prompt
 
 
+def test_prompt_discourages_unnecessary_questions_and_duplicate_approval(tmp_path):
+    prompt = build_system_prompt(str(tmp_path))
+
+    assert "## Asking Questions" in prompt
+    assert "For reversible, low-risk choices" in prompt
+    assert "Never ask conversational permission before a" in prompt
+    assert "Never use `ask_human` to confirm tool permissions" in prompt
+    assert "Request blocking input only" in prompt
+
+
 def test_layered_instructions_and_memory_are_injected(tmp_path):
     prompt = build_system_prompt(
         str(tmp_path),
