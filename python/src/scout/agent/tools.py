@@ -51,6 +51,35 @@ def make_tools(
     def _write_denied(p: Path) -> bool:
         return guard.is_write_denied(p) if guard else is_path_denied(p)
 
+    def _resolve_workspace_path(path: str) -> Path:
+        """Map server-visible workspace paths into this tool's workspace roots."""
+        p = Path(path)
+        if not p.is_absolute():
+            if p.parts[:2] == ("users", user_id):
+                return Path(data_dir) / Path(*p.parts[2:])
+            if p.parts[:1] == ("workspace",):
+                return Path(data_dir) / Path(*p.parts[1:])
+            if p.parts[:1] == ("shared",):
+                shared_dir = getattr(guard, "_shared", None)
+                if shared_dir is not None:
+                    return Path(shared_dir) / Path(*p.parts[1:])
+            return Path(data_dir) / p
+
+        parts = p.parts
+        try:
+            workspace_idx = parts.index("workspace")
+        except ValueError:
+            return p
+
+        relative = Path(*parts[workspace_idx + 1:])
+        if relative.parts[:2] == ("users", user_id):
+            return Path(data_dir) / Path(*relative.parts[2:])
+        if relative.parts[:1] == ("shared",):
+            shared_dir = getattr(guard, "_shared", None)
+            if shared_dir is not None:
+                return Path(shared_dir) / Path(*relative.parts[1:])
+        return p
+
     def _fallback_search_documents(query: str, top_k: int) -> str:
         root = Path(data_dir)
         q = query.strip().lower()
@@ -207,9 +236,7 @@ def make_tools(
     @tool
     def read_file(path: str, max_lines: int = 200) -> str:
         """Read a file and return its first *max_lines* lines as text."""
-        p = Path(path)
-        if not p.is_absolute():
-            p = Path(data_dir) / p
+        p = _resolve_workspace_path(path)
         if _read_denied(p):
             return f"[Access denied: {p.name} is a protected file]"
         if not p.exists():
@@ -242,9 +269,7 @@ def make_tools(
     @tool
     def list_files(directory: str = ".") -> str:
         """List files and sub-directories in a directory."""
-        p = Path(directory)
-        if not p.is_absolute():
-            p = Path(data_dir) / p
+        p = _resolve_workspace_path(directory)
         if _read_denied(p):
             return f"[Access denied: {p.name} is a protected directory]"
         if not p.is_dir():
@@ -312,9 +337,7 @@ def make_tools(
         """Extract and search PDF content (in-memory, nothing saved to disk)."""
         from ..pdf_reader import extract_pdf_text, search_pdf_text
 
-        p = Path(path)
-        if not p.is_absolute():
-            p = Path(data_dir) / p
+        p = _resolve_workspace_path(path)
 
         if _read_denied(p):
             return f"[Access denied: {p.name} is a protected file]"
