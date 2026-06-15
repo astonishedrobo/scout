@@ -1,6 +1,6 @@
 # Configuration
 
-This page explains where Scout settings live and how model configuration works. Start with [Local setup](local-setup.md) or [Server deployment](deployment.md) if you have not launched Scout yet.
+This page explains where Scout settings live and how model configuration works. Follow [Local setup](local-setup.md) or [Server deployment](deployment.md) for the complete setup process, including which configuration files to edit before launching Scout.
 
 ## Where settings live
 
