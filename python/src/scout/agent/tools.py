@@ -54,15 +54,28 @@ def make_tools(
     def _resolve_workspace_path(path: str) -> Path:
         """Map server-visible workspace paths into this tool's workspace roots."""
         p = Path(path)
+        def _shared_path(parts: tuple[str, ...]) -> Path | None:
+            shared_dir = getattr(guard, "_shared", None)
+            if shared_dir is None:
+                return None
+            return Path(shared_dir) / (Path(*parts) if parts else Path("."))
+
         if not p.is_absolute():
             if p.parts[:2] == ("users", user_id):
                 return Path(data_dir) / Path(*p.parts[2:])
             if p.parts[:1] == ("workspace",):
-                return Path(data_dir) / Path(*p.parts[1:])
+                relative = p.parts[1:]
+                if relative[:2] == ("users", user_id):
+                    return Path(data_dir) / (Path(*relative[2:]) if relative[2:] else Path("."))
+                if relative[:1] == ("shared",):
+                    shared = _shared_path(relative[1:])
+                    if shared is not None:
+                        return shared
+                return Path(data_dir) / (Path(*relative) if relative else Path("."))
             if p.parts[:1] == ("shared",):
-                shared_dir = getattr(guard, "_shared", None)
-                if shared_dir is not None:
-                    return Path(shared_dir) / Path(*p.parts[1:])
+                shared = _shared_path(p.parts[1:])
+                if shared is not None:
+                    return shared
             return Path(data_dir) / p
 
         parts = p.parts
@@ -73,11 +86,11 @@ def make_tools(
 
         relative = Path(*parts[workspace_idx + 1:])
         if relative.parts[:2] == ("users", user_id):
-            return Path(data_dir) / Path(*relative.parts[2:])
+            return Path(data_dir) / (Path(*relative.parts[2:]) if relative.parts[2:] else Path("."))
         if relative.parts[:1] == ("shared",):
-            shared_dir = getattr(guard, "_shared", None)
-            if shared_dir is not None:
-                return Path(shared_dir) / Path(*relative.parts[1:])
+            shared = _shared_path(relative.parts[1:])
+            if shared is not None:
+                return shared
         return p
 
     def _fallback_search_documents(query: str, top_k: int) -> str:
