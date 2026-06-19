@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ── Static template ──────────────────────────────────────────────────────
 
 TOOL_DESCRIPTIONS = {
-    "run_python": "**`run_python`** — Execute Python in a persistent sandboxed session. Variables and imports persist across calls. Use for computation and data analysis.",
+    "run_python": "**`run_python`** — Execute a small Python snippet in a persistent sandboxed session. Variables and imports persist across calls, so avoid it for large or multi-step data analysis when terminal execution is available.",
     "run_code": "**`run_code`** — Alias for `run_python` (backwards compatible).",
     "exec_command": "**`exec_command`** — Run a command in a PTY. Returns output or a session ID for long-running commands. Network and sensitive operations may require approval.",
     "write_stdin": "**`write_stdin`** — Send input to or poll a running `exec_command` session. Poll required sessions until they finish before responding.",
@@ -47,7 +47,7 @@ TOOL_DESCRIPTIONS = {
     "request_permissions": "**`request_permissions`** — Request permission for a blocked operation when it is necessary to complete the task.",
 }
 
-DEFAULT_TOOLS = frozenset(TOOL_DESCRIPTIONS)
+DEFAULT_TOOLS = frozenset(TOOL_DESCRIPTIONS) - {"run_python", "run_code"}
 WRITE_TOOLS = frozenset({"apply_patch", "write_file", "write_binary_artifact"})
 
 
@@ -67,14 +67,21 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         "- **Keep output small.** Preview large tables and files instead of printing them in full.",
         "- **Recover from failures.** Read tool errors, correct the approach, and retry when reasonable. Never claim success after a failed or incomplete operation.",
     ]
-    if "run_python" in enabled_tools or "run_code" in enabled_tools:
+    if "exec_command" in enabled_tools:
+        tips.append("- **Use uv-managed Python for data work.** For non-trivial analysis, create or generate a `.py` script and run it through `exec_command` with `uv run script.py`; add missing dependencies with `uv run --with <package> script.py` for one-off runs or `uv init --bare` plus `uv add <package>` for a workspace project.")
+    if ("run_python" in enabled_tools or "run_code" in enabled_tools) and "exec_command" not in enabled_tools:
         tips.extend([
             "- **Python variables persist.** Import once and reuse state. Print expected results explicitly.",
             "- **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.",
             "- **Use simple relative paths for generated Python outputs.** For example, save a plot as `histogram.png`, not an absolute workspace path. Relative outputs are staged and surfaced for approval automatically.",
         ])
+    elif "run_python" in enabled_tools or "run_code" in enabled_tools:
+        tips.extend([
+            "- **Use `run_python` only for quick checks.** For large files, joins, plotting, model fitting, or iterative debugging, use a Python script run through `exec_command` so memory is reclaimed after each run.",
+            "- **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.",
+        ])
     if "exec_command" in enabled_tools:
-        tips.append("- **Install packages via the shell.** Use `python -m pip install <package>` or `npm install <package>`; request narrow network permission when required.")
+        tips.append("- **Install packages via uv.** Prefer `uv add <package>` for project dependencies or `uv run --with <package> ...` for one-off scripts; request narrow network permission when required.")
     if "exec_command" in enabled_tools and "write_stdin" in enabled_tools:
         tips.append("- **Finish command sessions.** Poll required long-running commands with `write_stdin` until they finish before responding.")
     if enabled_tools & WRITE_TOOLS:
@@ -82,8 +89,8 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
     if "write_file" in enabled_tools or "write_binary_artifact" in enabled_tools:
         tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts. When asked to embed an image, inline its bytes as a `data:image/...;base64,...` URI; a relative `<img src=\"file.png\">` only references the image and is not embedded.")
         tips.append("- **Markdown artifacts may reference sibling workspace images.** Use normal relative Markdown image syntax such as `![Plot](plot.png)`; external image URLs and path traversal are blocked.")
-    if ("run_python" in enabled_tools or "run_node" in enabled_tools) and "write_binary_artifact" in enabled_tools:
-        tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from `run_python` or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
+    if "run_node" in enabled_tools and "write_binary_artifact" in enabled_tools:
+        tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from scripts or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
     return "\n".join(tips)
 
 
@@ -447,8 +454,8 @@ def build_system_prompt(
 - All persistent file writes require user approval.
 - If the user suggests changes, revise and try again. If they decline, acknowledge it.
 - Use dedicated write tools for existing workspace files. Generated outputs may be
-  created by execution tools when the sandbox can attribute and surface them.
-- Never overwrite existing workspace files from `run_python`.
+  created by terminal scripts when the sandbox can attribute and surface them.
+- Never overwrite existing workspace files from generated scripts unless the user asked for that overwrite.
 """
 
     # Use .replace() instead of .format() to avoid braces in injected content.

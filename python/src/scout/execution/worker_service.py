@@ -385,6 +385,26 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
     def _unified_mgr():
         return getattr(backend, "_unified_exec", None)
 
+    def _map_rpc_workspace_path(path: str | None, layout) -> Path | None:
+        """Map server-visible /app/workspace paths to worker-visible roots."""
+        if not path:
+            return None
+        p = Path(path)
+        parts = p.parts
+        try:
+            workspace_idx = parts.index("workspace")
+        except ValueError:
+            return p
+
+        rel = Path(*parts[workspace_idx + 1:])
+        if rel.parts[:2] == ("users", layout.personal_root.name):
+            tail = rel.parts[2:]
+            return layout.personal_root / (Path(*tail) if tail else Path("."))
+        if rel.parts[:1] == ("shared",):
+            tail = rel.parts[1:]
+            return layout.shared_root / (Path(*tail) if tail else Path("."))
+        return p
+
     @app.post("/exec/command")
     async def exec_command(
         request: Request,
@@ -397,11 +417,12 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         _auth_request(request, authorization, body, payload.user_id)
         validate_user_id(payload.user_id)
         layout = derive_user_roots(payload.user_id)
-        staging_path = Path(payload.staging_dir) if payload.staging_dir else None
+        staging_path = _map_rpc_workspace_path(payload.staging_dir, layout)
+        cwd = _map_rpc_workspace_path(payload.cwd, layout) or layout.personal_root
         policy = _build_policy(
             payload.user_id,
             payload.session_id,
-            staging_dir=staging_path / "work" if staging_path else None,
+            staging_dir=None,
             persistent=False,
             domains=payload.network_domains,
             personal_write=payload.personal_write,
@@ -417,13 +438,10 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                 user_id=payload.user_id,
                 session_id=payload.session_id,
                 command=payload.command,
-                # Use the worker's own namespace root, not the server's
-                # /app/workspace/... path (which does not exist here or in the
-                # sandbox container). Mirrors the /execute handler.
-                cwd=layout.personal_root,
+                cwd=cwd,
                 policy=policy,
                 staging_dir=staging_path,
-                work_dir=Path(payload.work_dir) if payload.work_dir else None,
+                work_dir=_map_rpc_workspace_path(payload.work_dir, layout),
                 yield_time_ms=payload.yield_time_ms,
                 max_output_tokens=payload.max_output_tokens,
                 tty=payload.tty,
@@ -444,6 +462,11 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             "chunk_id": resp.chunk_id,
             "error": resp.error,
             "alive": resp.alive,
+            "changed_files": [
+                {"path": c.path, "status": c.status, "old_hash": c.old_hash, "new_hash": c.new_hash}
+                for c in resp.changed_files
+            ],
+            "artifacts": resp.artifacts,
         }
 
     @app.post("/exec/stdin")
@@ -478,6 +501,11 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             "chunk_id": resp.chunk_id,
             "error": resp.error,
             "alive": resp.alive,
+            "changed_files": [
+                {"path": c.path, "status": c.status, "old_hash": c.old_hash, "new_hash": c.new_hash}
+                for c in resp.changed_files
+            ],
+            "artifacts": resp.artifacts,
         }
 
     @app.get("/exec/stream/{execution_id}")

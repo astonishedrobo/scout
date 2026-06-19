@@ -208,6 +208,16 @@ class WorkerExecutionBackend:
             chunk_id=data.get("chunk_id", ""),
             error=data.get("error"),
             alive=data.get("alive", False),
+            changed_files=[
+                ExecutionFileChange(
+                    path=c["path"],
+                    status=c["status"],
+                    old_hash=c.get("old_hash"),
+                    new_hash=c.get("new_hash"),
+                )
+                for c in data.get("changed_files", [])
+            ],
+            artifacts=data.get("artifacts", []),
         )
 
     async def write_stdin(self, request: UnifiedExecStdinRequest) -> UnifiedExecResponse:
@@ -243,6 +253,16 @@ class WorkerExecutionBackend:
             chunk_id=data.get("chunk_id", ""),
             error=data.get("error"),
             alive=data.get("alive", False),
+            changed_files=[
+                ExecutionFileChange(
+                    path=c["path"],
+                    status=c["status"],
+                    old_hash=c.get("old_hash"),
+                    new_hash=c.get("new_hash"),
+                )
+                for c in data.get("changed_files", [])
+            ],
+            artifacts=data.get("artifacts", []),
         )
 
     async def close_session(self, session_id: str) -> None:

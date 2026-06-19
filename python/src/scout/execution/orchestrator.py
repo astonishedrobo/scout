@@ -34,6 +34,20 @@ from .unified_exec import UnifiedExecCommandRequest, UnifiedExecStdinRequest
 
 logger = logging.getLogger(__name__)
 
+
+def _replace_symlink(link: Path, target: Path) -> None:
+    if link.is_symlink() or link.exists():
+        try:
+            if link.is_symlink() and link.resolve() == target.resolve():
+                return
+            link.unlink()
+        except OSError:
+            return
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError:
+        return
+
 CapabilityApprovalFn = Callable[[CapabilityRequest], Awaitable[tuple[str, str]]]
 PromotionApprovalFn = Callable[[str, list[FileDiff], dict], Awaitable[tuple[str, str]]]
 
@@ -114,6 +128,7 @@ class ExecutionOrchestrator:
 
         scratch = self._personal / ".scout-cache" / "session-scratch" / self._session_id
         scratch.mkdir(parents=True, exist_ok=True)
+        self._prepare_python_workspace_aliases(scratch)
         before = snapshot_writable_roots((scratch,))
         scratch_relative = scratch.relative_to(self._personal)
         wrapped_code = (
@@ -121,6 +136,7 @@ class ExecutionOrchestrator:
             "if '_SCOUT_PYTHON_WORKDIR' not in globals():\n"
             f"    _SCOUT_PYTHON_WORKDIR = _scout_os.path.abspath({str(scratch_relative)!r})\n"
             "_scout_os.chdir(_SCOUT_PYTHON_WORKDIR)\n"
+            + self._python_workspace_path_preamble()
             + code
         )
         staging = create_staging(self._personal)
@@ -139,8 +155,149 @@ class ExecutionOrchestrator:
             shutil.copy2(source, target)
         return await self._finalize(result, staging, description or "run_python")
 
+    def _prepare_python_workspace_aliases(self, scratch: Path) -> None:
+        """Expose the prompt's `workspace/` path from the Python scratch cwd."""
+        workspace = scratch / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        users = workspace / "users"
+        users.mkdir(exist_ok=True)
+        _replace_symlink(users / self._user_id, self._personal)
+
+        if self._shared is not None:
+            _replace_symlink(workspace / "shared", self._shared)
+
+        for entry in self._personal.iterdir():
+            if entry.name in {".scout-cache", ".scout-executions", "workspace"}:
+                continue
+            alias = workspace / entry.name
+            if alias.exists() or alias.is_symlink():
+                continue
+            try:
+                alias.symlink_to(entry, target_is_directory=entry.is_dir())
+            except OSError:
+                # The Python preamble still translates these paths for libraries
+                # that call open/stat directly, so aliases are best-effort.
+                continue
+
+    def _python_workspace_path_preamble(self) -> str:
+        shared = str(self._shared) if self._shared is not None else ""
+        return f"""
+import builtins as _scout_builtins
+import io as _scout_io
+import os as _scout_path_os
+import os.path as _scout_path_op
+if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
+    _SCOUT_WORKSPACE_PATH_ALIASES_READY = True
+    _SCOUT_PERSONAL_ROOT = {str(self._personal)!r}
+    _SCOUT_SHARED_ROOT = {shared!r}
+    _SCOUT_USER_ID = {self._user_id!r}
+    def _scout_translate_workspace_path(_p):
+        try:
+            _s = _scout_path_os.fspath(_p)
+        except TypeError:
+            return _p
+        if not isinstance(_s, str):
+            return _p
+        _prefixes = ('/app/workspace/', '/workspace/', 'workspace/')
+        _rest = None
+        for _prefix in _prefixes:
+            if _s == _prefix.rstrip('/'):
+                _rest = ''
+                break
+            if _s.startswith(_prefix):
+                _rest = _s[len(_prefix):]
+                break
+        if _rest is None:
+            _user_prefix = 'users/' + _SCOUT_USER_ID + '/'
+            if _s == 'users/' + _SCOUT_USER_ID:
+                return _SCOUT_PERSONAL_ROOT
+            if _s.startswith(_user_prefix):
+                return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, _s[len(_user_prefix):])
+            return _p
+        if not _rest:
+            return _SCOUT_PERSONAL_ROOT
+        _parts = _rest.split('/')
+        if len(_parts) >= 2 and _parts[0] == 'users' and _parts[1] == _SCOUT_USER_ID:
+            return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, *_parts[2:])
+        if _parts[0] == 'shared' and _SCOUT_SHARED_ROOT:
+            return _scout_path_op.join(_SCOUT_SHARED_ROOT, *_parts[1:])
+        return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, *_parts)
+    _scout_open_prev = _scout_builtins.open
+    _scout_io_open_prev = _scout_io.open
+    def _scout_open_workspace_alias(_file, *args, **kwargs):
+        return _scout_open_prev(_scout_translate_workspace_path(_file), *args, **kwargs)
+    def _scout_io_open_workspace_alias(_file, *args, **kwargs):
+        return _scout_io_open_prev(_scout_translate_workspace_path(_file), *args, **kwargs)
+    _scout_builtins.open = _scout_open_workspace_alias
+    _scout_io.open = _scout_io_open_workspace_alias
+    _scout_stat_prev = _scout_path_os.stat
+    _scout_lstat_prev = _scout_path_os.lstat
+    _scout_listdir_prev = _scout_path_os.listdir
+    _scout_scandir_prev = _scout_path_os.scandir
+    def _scout_stat_workspace_alias(_path, *args, **kwargs):
+        return _scout_stat_prev(_scout_translate_workspace_path(_path), *args, **kwargs)
+    def _scout_lstat_workspace_alias(_path, *args, **kwargs):
+        return _scout_lstat_prev(_scout_translate_workspace_path(_path), *args, **kwargs)
+    def _scout_listdir_workspace_alias(_path='.'):
+        return _scout_listdir_prev(_scout_translate_workspace_path(_path))
+    def _scout_scandir_workspace_alias(_path='.'):
+        return _scout_scandir_prev(_scout_translate_workspace_path(_path))
+    _scout_path_os.stat = _scout_stat_workspace_alias
+    _scout_path_os.lstat = _scout_lstat_workspace_alias
+    _scout_path_os.listdir = _scout_listdir_workspace_alias
+    _scout_path_os.scandir = _scout_scandir_workspace_alias
+"""
+
     def set_active_tool_call_id(self, tool_call_id: str) -> None:
         self._active_tool_call_id = tool_call_id
+
+    def _resolve_workdir(self, workdir: str) -> Path:
+        """Resolve a tool-supplied workdir into a real cwd under the workspace.
+
+        The file tools and system prompt present the personal workspace as
+        ``workspace/`` (and the shared repo as ``workspace/shared/``), so the
+        model naturally passes ``workdir="workspace"``. Without alias handling
+        that joins to ``<personal>/workspace`` — a nested directory — and any
+        file written there is described as an artifact but lives one level
+        below where the artifact endpoint serves from, yielding
+        "Artifact is unavailable". Mirror ``_resolve_workspace_path`` from the
+        agent tools so shell and file tools agree on where ``workspace`` is.
+        """
+        if not workdir:
+            return self._personal
+
+        candidate = Path(workdir)
+        if candidate.is_absolute():
+            parts = candidate.parts
+            if "workspace" in parts:
+                parts = parts[parts.index("workspace") + 1:]
+            else:
+                parts = ()
+        else:
+            parts = candidate.parts
+            if parts[:1] == ("workspace",):
+                parts = parts[1:]
+
+        uid = str(self._user_id)
+        target: Path
+        if parts[:2] == ("users", uid):
+            target = self._personal.joinpath(*parts[2:])
+        elif parts[:1] == ("shared",) and self._shared is not None:
+            target = self._shared.joinpath(*parts[1:])
+        else:
+            target = self._personal.joinpath(*parts)
+
+        target = target.resolve()
+        for root in (self._personal, self._shared):
+            if root is None:
+                continue
+            try:
+                target.relative_to(root.resolve())
+                return target
+            except ValueError:
+                continue
+        return self._personal
 
     async def exec_command(
         self,
@@ -161,16 +318,7 @@ class ExecutionOrchestrator:
 
         staging = create_staging(self._personal)
         snapshot_pre_promotion_hashes(staging, self._personal)
-        cwd = staging.work_dir
-        if workdir:
-            candidate = Path(workdir)
-            if not candidate.is_absolute():
-                candidate = self._personal / candidate
-            try:
-                candidate.resolve().relative_to(self._personal.resolve())
-                cwd = candidate.resolve()
-            except ValueError:
-                pass
+        cwd = self._resolve_workdir(workdir)
 
         req = UnifiedExecCommandRequest(
             execution_id=staging.execution_id,
@@ -243,6 +391,8 @@ class ExecutionOrchestrator:
             stdout=resp.output,
             stderr="",
             error_category=None if (resp.exit_code == 0) else ExecutionErrorCategory.COMMAND_FAILED.value,
+            changed_files=resp.changed_files,
+            artifacts=resp.artifacts,
         )
         return await self._finalize(result, staging, summary)
 
@@ -282,7 +432,7 @@ class ExecutionOrchestrator:
             allow_shared_write=self._allow_shared_write,
             personal_write=self._personal_write,
             network_domains=domains,
-            staging_dir=None if persistent else staging.work_dir,
+            staging_dir=None,
         )
 
     async def run_shell(self, command: str, description: str = "") -> ToolExecutionResult:
@@ -496,7 +646,7 @@ class ExecutionOrchestrator:
 
     @staticmethod
     def _needs_network(command: str) -> bool:
-        network_cmds = {"curl", "wget", "pip", "npm", "npx", "git", "ssh"}
+        network_cmds = {"curl", "wget", "pip", "uv", "npm", "npx", "git", "ssh"}
         try:
             tokens = shlex.split(command)
         except ValueError:
@@ -513,7 +663,7 @@ class ExecutionOrchestrator:
     @staticmethod
     def _infer_domains(command: str) -> list[str]:
         lower = command.lower()
-        if "pip" in lower:
+        if "pip" in lower or "uv " in lower:
             return ["pypi.org", "files.pythonhosted.org"]
         if "npm" in lower or "npx" in lower:
             return ["registry.npmjs.org"]

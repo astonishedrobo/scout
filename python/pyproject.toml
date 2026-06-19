@@ -21,6 +21,7 @@ dependencies = [
     "langchain-litellm>=0.2",
     "fastapi>=0.115",
     "uvicorn>=0.32",
+    "uv>=0.5",
     "sse-starlette>=2.0",
     "pyjwt>=2.8",
     "passlib[bcrypt]>=1.7.4",

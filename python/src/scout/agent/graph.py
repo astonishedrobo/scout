@@ -411,7 +411,7 @@ def build_graph(
                     if tool_name == "write_binary_artifact":
                         output += (
                             " Do not retry by printing or reconstructing base64. "
-                            "Generate and save the binary directly with run_python or run_node."
+                            "Generate and save the binary directly from a terminal script or run_node."
                         )
                 else:
                     if agent_config.disable_write_tools:

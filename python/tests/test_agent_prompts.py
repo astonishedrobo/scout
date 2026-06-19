@@ -12,12 +12,13 @@ def test_prompt_lists_only_enabled_tools(tmp_path):
     )
 
     assert "**`read_file`**" in prompt
-    assert "**`run_python`**" in prompt
+    assert "**`run_python`**" not in prompt
+    assert "**`run_code`**" not in prompt
     assert "**`write_file`**" not in prompt
     assert "**`exec_command`**" not in prompt
     assert "## Read-Only Mode" in prompt
     assert "## File Writing" not in prompt
-    assert "Install packages via the shell" not in prompt
+    assert "Install packages via uv" not in prompt
     assert "Save requested visualizations as artifacts" not in prompt
 
 
@@ -34,8 +35,11 @@ def test_writable_prompt_contains_writing_and_failure_guidance(tmp_path):
     assert "## File Writing" in prompt
     assert "**Recover from failures.**" in prompt
     assert "**Verify changes.**" in prompt
+    assert "**Use uv-managed Python for data work.**" in prompt
+    assert "uv run script.py" in prompt
+    assert "uv init --bare" in prompt
+    assert "**Use `run_python` only for quick checks.**" not in prompt
     assert "never print base64 for reuse in `write_binary_artifact`" in prompt
-    assert "save a plot as `histogram.png`, not an absolute workspace path" in prompt
     assert "only references the image and is not embedded" in prompt
     assert "`![Plot](plot.png)`" in prompt
 

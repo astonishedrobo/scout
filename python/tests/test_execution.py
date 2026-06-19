@@ -1,6 +1,9 @@
 """Unit tests for execution policy, env, grants, and change detection."""
 
 import os
+import builtins
+import contextlib
+import io
 import time
 from pathlib import Path
 
@@ -13,6 +16,7 @@ from scout.execution.grants import CapabilityGrantStore
 from scout.execution.models import ExecutionResult
 from scout.execution.orchestrator import ExecutionOrchestrator
 from scout.execution.policy import build_execution_policy, is_ignored_execution_path, safe_read_bind_paths
+from scout.execution.unified_exec import UnifiedExecResponse
 
 
 def test_policy_builder_user_workspace(tmp_path: Path):
@@ -104,6 +108,145 @@ async def test_run_python_promotes_relative_output_from_stable_scratch(tmp_path:
     assert result.text == "ok"
     assert (personal / "plot.png").read_bytes() == b"png"
     assert any(artifact["name"] == "plot.png" for artifact in result.artifacts)
+
+
+@pytest.mark.asyncio
+async def test_run_python_translates_workspace_paths_from_scratch(tmp_path: Path):
+    personal = tmp_path / "users" / "7"
+    shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    (personal / "data.txt").write_text("personal-data")
+    (shared / "shared.txt").write_text("shared-data")
+
+    class FakeBackend:
+        async def execute(self, request, *, proxy_url=None):
+            original_cwd = Path.cwd()
+            original_open = builtins.open
+            original_io_open = io.open
+            original_stat = os.stat
+            original_lstat = os.lstat
+            original_listdir = os.listdir
+            original_scandir = os.scandir
+            stdout = io.StringIO()
+            try:
+                os.chdir(request.cwd)
+                with contextlib.redirect_stdout(stdout):
+                    exec(request.code, {})
+            finally:
+                os.chdir(original_cwd)
+                builtins.open = original_open
+                io.open = original_io_open
+                os.stat = original_stat
+                os.lstat = original_lstat
+                os.listdir = original_listdir
+                os.scandir = original_scandir
+            return ExecutionResult(
+                exit_code=0,
+                stdout=stdout.getvalue().strip(),
+                stderr="",
+                persistent=True,
+            )
+
+    orchestrator = ExecutionOrchestrator(
+        backend=FakeBackend(),
+        config=ExecutionConfig(),
+        personal_dir=personal,
+        shared_dir=shared,
+        user_id="7",
+        session_id="s1",
+        grant_store=CapabilityGrantStore(),
+    )
+
+    result = await orchestrator.run_python(
+        "\n".join([
+            "from pathlib import Path",
+            "print(Path('workspace/data.txt').exists())",
+            "print(open('/app/workspace/users/7/data.txt').read())",
+            "print(Path('/workspace/shared/shared.txt').read_text())",
+        ])
+    )
+
+    assert result.text.splitlines() == ["True", "personal-data", "shared-data"]
+
+
+@pytest.mark.asyncio
+async def test_exec_command_builds_shell_policy_without_persistent_name_error(tmp_path: Path):
+    personal = tmp_path / "users" / "1"
+    personal.mkdir(parents=True)
+
+    class FakeBackend:
+        async def exec_command(self, request):
+            assert request.command == "python3 histogram_generate.py --n 1000 --seed 42 --bins 30"
+            assert request.policy.write_roots
+            return UnifiedExecResponse(
+                output="ok",
+                wall_time_seconds=0.01,
+                exit_code=0,
+                alive=False,
+            )
+
+    orchestrator = ExecutionOrchestrator(
+        backend=FakeBackend(),
+        config=ExecutionConfig(),
+        personal_dir=personal,
+        shared_dir=None,
+        user_id="1",
+        session_id="s1",
+        grant_store=CapabilityGrantStore(),
+        personal_write=True,
+    )
+
+    result = await orchestrator.exec_command(
+        "python3 histogram_generate.py --n 1000 --seed 42 --bins 30"
+    )
+
+    assert result.text == "ok"
+
+
+@pytest.mark.asyncio
+async def test_exec_command_workdir_workspace_alias_resolves_to_personal_root(tmp_path: Path):
+    """workdir="workspace" must map to the personal root, not a nested dir.
+
+    The file tools and prompt present the workspace as ``workspace/``, so the
+    model passes ``workdir="workspace"``. If that joins to ``<personal>/workspace``
+    outputs land one level too deep and the artifact endpoint 404s.
+    """
+    personal = tmp_path / "users" / "1"
+    personal.mkdir(parents=True)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+
+    seen: dict[str, Path] = {}
+
+    class FakeBackend:
+        async def exec_command(self, request):
+            seen["cwd"] = Path(request.cwd)
+            return UnifiedExecResponse(output="ok", wall_time_seconds=0.01, exit_code=0, alive=False)
+
+    orchestrator = ExecutionOrchestrator(
+        backend=FakeBackend(),
+        config=ExecutionConfig(),
+        personal_dir=personal,
+        shared_dir=shared,
+        user_id="1",
+        session_id="s1",
+        grant_store=CapabilityGrantStore(),
+        personal_write=True,
+    )
+
+    await orchestrator.exec_command("ls", workdir="workspace")
+    assert seen["cwd"] == personal.resolve()
+
+    await orchestrator.exec_command("ls", workdir="workspace/users/1/sub")
+    assert seen["cwd"] == (personal / "sub").resolve()
+
+    await orchestrator.exec_command("ls", workdir="shared")
+    assert seen["cwd"] == shared.resolve()
+
+    # A bare subdirectory name still resolves under the personal root.
+    await orchestrator.exec_command("ls", workdir="data")
+    assert seen["cwd"] == (personal / "data").resolve()
 
 
 def test_env_allowlist_removes_secrets(monkeypatch):

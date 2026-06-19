@@ -1,5 +1,9 @@
 """Tests for permission profiles."""
 
+from types import SimpleNamespace
+
+import pytest
+
 from scout.permissions import resolve_profile
 from scout.agent.tools import make_tools
 from scout.retriever import BM25Retriever
@@ -12,7 +16,8 @@ def test_analyst_profile_disables_writes_and_shell():
     assert not profile.shell_enabled
     assert "write_file" not in profile.allowed_tools
     assert "exec_command" not in profile.allowed_tools
-    assert "run_python" in profile.allowed_tools
+    assert "run_python" not in profile.allowed_tools
+    assert "run_code" not in profile.allowed_tools
 
 
 def test_admin_profile_allows_shared_write():
@@ -20,6 +25,8 @@ def test_admin_profile_allows_shared_write():
     assert profile.allow_shared_write
     assert "write_file" in profile.allowed_tools
     assert "exec_command" in profile.allowed_tools
+    assert "run_python" not in profile.allowed_tools
+    assert "run_code" not in profile.allowed_tools
     assert "install_python_package" not in profile.allowed_tools
     assert "install_node_package" not in profile.allowed_tools
 
@@ -27,6 +34,8 @@ def test_admin_profile_allows_shared_write():
 def test_contributor_profile_has_shell_not_install_tools():
     profile = resolve_profile("contributor")
     assert "exec_command" in profile.allowed_tools
+    assert "run_python" not in profile.allowed_tools
+    assert "run_code" not in profile.allowed_tools
     assert "install_python_package" not in profile.allowed_tools
     assert "install_node_package" not in profile.allowed_tools
 
@@ -43,5 +52,41 @@ def test_make_tools_filters_by_profile():
     names = {t.name for t in tools}
     assert "write_file" not in names
     assert "exec_command" not in names
+    assert "run_python" not in names
+    assert "run_code" not in names
     assert "install_python_package" not in names
     assert "read_file" in names
+
+
+@pytest.mark.asyncio
+async def test_exec_command_delegates_before_enabled_health_is_warm():
+    class FakeExecutionService:
+        enabled = False
+        _exec_cfg = SimpleNamespace(unified_shell=True)
+
+        def __init__(self):
+            self.called = False
+
+        async def exec_command(self, cmd, *, workdir="", yield_time_ms=None, description=""):
+            self.called = True
+            assert cmd == "python3 histogram_generate.py --n 1000 --seed 42 --bins 30"
+            return SimpleNamespace(text="ran")
+
+    config = AppConfig()
+    retriever = BM25Retriever(config)
+    service = FakeExecutionService()
+    tools = {
+        t.name: t for t in make_tools(
+            retriever,
+            "/tmp",
+            execution_service=service,
+            allowed_tools=frozenset({"exec_command"}),
+        )
+    }
+
+    result = await tools["exec_command"].ainvoke({
+        "cmd": "python3 histogram_generate.py --n 1000 --seed 42 --bins 30",
+    })
+
+    assert result == "ran"
+    assert service.called

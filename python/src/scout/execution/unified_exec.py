@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
+from ..artifacts import describe_artifact
 from ..config import ExecutionConfig
+from .changes import diff_snapshots, snapshot_writable_roots
 from .env import build_execution_env
 from .launcher import IO_DRAIN_TIMEOUT, bwrap_available, build_bwrap_command, drain_process_io, kill_process_tree
 from .runtime import enrich_execution_env, resolve_sandbox_python
@@ -141,6 +143,7 @@ class _ProcessEntry:
     proxy_url: str | None = None
     net: IsolatedNetwork | None = None
     net_mgr: IsolatedNetworkManager | None = None
+    before_snapshot: dict[str, str] = field(default_factory=dict)
 
 
 class UnifiedExecManager:
@@ -453,6 +456,10 @@ class UnifiedExecManager:
 
         process_id = self._allocate_id()
         start = time.time()
+        before = snapshot_writable_roots(
+            tuple(request.policy.write_roots),
+            workspace_root=request.cwd,
+        )
         try:
             entry = self._spawn(request, process_id)
         except Exception as exc:
@@ -461,6 +468,7 @@ class UnifiedExecManager:
                 wall_time_seconds=time.time() - start,
                 error=str(exc),
             )
+        entry.before_snapshot = before
 
         with self._lock:
             self._processes[process_id] = entry
@@ -476,6 +484,7 @@ class UnifiedExecManager:
 
         if exit_code is not None:
             entry.reader_thread.join(timeout=1.0)
+            changed_files, artifacts = _changes_and_artifacts(entry)
             self._finish_entry(entry)
             if stream_q is not None:
                 stream_q.put(None)
@@ -490,6 +499,8 @@ class UnifiedExecManager:
                 exit_code=exit_code,
                 chunk_id=str(uuid.uuid4())[:8],
                 alive=False,
+                changed_files=changed_files,
+                artifacts=artifacts,
             )
 
         return UnifiedExecResponse(
@@ -549,6 +560,7 @@ class UnifiedExecManager:
         if exit_code is not None:
             entry.reader_thread.join(timeout=1.0)
             exec_id = entry.execution_id
+            changed_files, artifacts = _changes_and_artifacts(entry)
             self._finish_entry(entry)
             stream_q = self._stream_queues.get(exec_id)
             if stream_q is not None:
@@ -564,6 +576,8 @@ class UnifiedExecManager:
                 exit_code=exit_code,
                 chunk_id=str(uuid.uuid4())[:8],
                 alive=False,
+                changed_files=changed_files,
+                artifacts=artifacts,
             )
 
         return UnifiedExecResponse(
@@ -617,6 +631,25 @@ def format_tool_response(
     sections.append("Output:")
     sections.append(truncate_text(output, max_output_tokens))
     return "\n".join(sections)
+
+
+def _changes_and_artifacts(entry: _ProcessEntry) -> tuple[list, list[dict]]:
+    write_roots = tuple(entry.policy.write_roots)
+    after = snapshot_writable_roots(write_roots, workspace_root=entry.cwd)
+    changes = diff_snapshots(
+        entry.before_snapshot,
+        after,
+        write_roots,
+        workspace_root=entry.cwd,
+    )
+    artifacts: list[dict] = []
+    for change in changes:
+        if change.status == "deleted":
+            continue
+        artifact = describe_artifact(Path(change.path), entry.cwd)
+        if artifact:
+            artifacts.append(artifact)
+    return changes, artifacts
 
 
 async def run_in_executor(fn, *args):

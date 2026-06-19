@@ -181,7 +181,7 @@ def make_tools(
         Long-running commands return a session ID — poll with write_stdin(session_id, "").
         File writes are staged for approval. Network access requires approval.
         """
-        if not execution_service or not execution_service.enabled:
+        if not execution_service:
             return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
         result = await execution_service.exec_command(
             cmd,
@@ -201,7 +201,7 @@ def make_tools(
 
         Use empty chars to poll a running process. Session ID comes from exec_command.
         """
-        if not execution_service or not execution_service.enabled:
+        if not execution_service:
             return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
         result = await execution_service.write_stdin(
             session_id,
@@ -213,7 +213,7 @@ def make_tools(
     @tool
     async def run_shell(command: str, description: str = "") -> str:
         """Legacy one-shot shell (used when unified_shell is disabled)."""
-        if not execution_service or not execution_service.enabled:
+        if not execution_service:
             return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
         result = await execution_service.run_shell(command, description)
         return result.text
@@ -221,7 +221,7 @@ def make_tools(
     @tool
     async def run_node(code: str, description: str = "") -> str:
         """Execute JavaScript/Node.js code in an isolated sandbox."""
-        if not execution_service or not execution_service.enabled:
+        if not execution_service:
             return "[SANDBOX UNAVAILABLE] Node execution requires an active execution sandbox."
         result = await execution_service.run_node(code, description)
         return result.text
@@ -474,8 +474,13 @@ def make_tools(
     memory_tools = [memory_search, memory_read, memory_list, memory_add_note] if use_memories else []
     skill_tools = [skill_list, skill_read]
     perm_tools = [request_permissions] if allow_request_permissions and request_permissions_fn else []
+    python_tools = (
+        [run_python, run_code]
+        if allowed_tools is not None and {"run_python", "run_code"} & allowed_tools
+        else []
+    )
     tools = [
-        run_python, run_code, *shell_tools, run_node,
+        *python_tools, *shell_tools, run_node,
         *memory_tools, *skill_tools, *perm_tools,
         read_file, list_files, search_documents, think, ask_human, read_pdf,
     ]
