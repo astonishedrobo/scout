@@ -340,6 +340,8 @@ class ScoutAgent:
         if self._execution:
             self._execution.set_output_sink(output_q)
 
+        yield {"type": "status", "message": "Thinking through the request"}
+
         async def _drain_graph() -> None:
             try:
                 async for chunk in self._graph.astream(
