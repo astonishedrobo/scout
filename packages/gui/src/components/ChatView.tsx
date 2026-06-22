@@ -112,6 +112,8 @@ export function ChatView({
   token,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeTool =
+    currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -156,7 +158,12 @@ export function ChatView({
                 />
               </div>
             ) : null}
-            <StreamingIndicator currentTool={currentTool} text={streamingText} statusMessage={statusMessage} />
+            <StreamingIndicator
+              currentTool={activeTool}
+              text={streamingText}
+              statusMessage={statusMessage}
+              hasToolSteps={streamingSteps.length > 0}
+            />
           </div>
         )}
       </div>

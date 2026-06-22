@@ -10,4 +10,7 @@ def test_memory_search_and_jail(tmp_path):
     hits = backend.search("tabs")
     assert "MEMORY.md" in hits
     assert "[Invalid memory path" in backend.read("../escape.md")
-    assert backend.add_ad_hoc_note("test-note", "hello").startswith("Wrote ad-hoc note")
+    assert backend.add_ad_hoc_note("test-note", "hello").startswith(
+        "Wrote memory note to MEMORY.md"
+    )
+    assert "- hello" in (root / "MEMORY.md").read_text(encoding="utf-8")

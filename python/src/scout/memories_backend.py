@@ -6,7 +6,7 @@ import re
 import time
 from pathlib import Path
 
-from .memories import ensure_memory_layout, memories_root, resolve_memory_path
+from .memories import add_memory_entry, ensure_memory_layout, memories_root, resolve_memory_path
 
 
 class MemoriesBackend:
@@ -80,11 +80,13 @@ class MemoriesBackend:
         return "\n".join(lines) or "(empty)"
 
     def add_ad_hoc_note(self, slug: str, content: str) -> str:
+        content = content.strip()
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", slug.strip())[:40] or "note"
         ts = time.strftime("%Y-%m-%dT%H-%M-%S")
         notes_dir = self.root / "extensions" / "ad_hoc" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
         path = notes_dir / f"{ts}-{slug}.md"
-        path.write_text(content.strip() + "\n", encoding="utf-8")
+        path.write_text(content + "\n", encoding="utf-8")
+        add_memory_entry(content, self._user_id, self._personal, self._server_mode)
         rel = path.relative_to(self.root)
-        return f"Wrote ad-hoc note: {rel}"
+        return f"Wrote memory note to MEMORY.md and ad-hoc note: {rel}"

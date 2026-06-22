@@ -2,13 +2,27 @@ interface StreamingIndicatorProps {
   currentTool: string | undefined;
   text: string;
   statusMessage?: string;
+  hasToolSteps?: boolean;
 }
 
 export function StreamingIndicator({
   currentTool,
   text,
   statusMessage,
+  hasToolSteps,
 }: StreamingIndicatorProps) {
+  const label = text
+    ? currentTool
+      ? `Running ${currentTool}...`
+      : "Writing..."
+    : currentTool
+      ? `Running ${currentTool}...`
+      : statusMessage
+        ? `${statusMessage}...`
+        : hasToolSteps
+          ? "Preparing response..."
+          : "Thinking...";
+
   return (
     <div className="flex items-center gap-2 py-2">
       <div className="flex space-x-1">
@@ -16,17 +30,7 @@ export function StreamingIndicator({
         <div className="w-1.5 h-1.5 rounded-full bg-scout-text thinking-dot" />
         <div className="w-1.5 h-1.5 rounded-full bg-scout-text thinking-dot" />
       </div>
-      <span className="text-sm text-scout-muted">
-        {text
-          ? currentTool
-            ? `Running ${currentTool}...`
-            : "Writing..."
-          : currentTool
-            ? `Running ${currentTool}...`
-            : statusMessage
-              ? `${statusMessage}...`
-              : "Thinking..."}
-      </span>
+      <span className="text-sm text-scout-muted">{label}</span>
     </div>
   );
 }
