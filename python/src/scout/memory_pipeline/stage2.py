@@ -14,7 +14,16 @@ from .guard import redact_secrets
 logger = logging.getLogger(__name__)
 
 _CONSOLIDATION_SYSTEM = """You maintain MEMORY.md and memory_summary.md from new session memories.
-Return JSON: registry (full MEMORY.md markdown), summary (truncated bullets for prompt inject)."""
+Return JSON: registry (full MEMORY.md markdown), summary (truncated bullets for prompt inject).
+
+Apply a strict minimum-signal gate. Promote only memory that should change future agent behavior:
+- stable user preferences or repeated steering,
+- durable workspace/repo conventions,
+- validated procedures, commands, paths, or failure shields.
+
+Do not promote one-off document summaries, PDF metadata, page counts, titles, authors, dataset lists,
+temporary analysis results, assistant follow-up suggestions, or generic task recaps. If new raw input
+contains only those low-signal facts, keep existing registry/summary unchanged."""
 
 
 async def _llm_consolidate(

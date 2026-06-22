@@ -11,11 +11,12 @@ interface MessageBubbleProps {
   onRetry?: () => void;
   onFork?: () => void;
   onOpenArtifact?: (artifact: Artifact) => void;
+  onOpenMemories?: () => void;
   baseUrl?: string;
   token?: string | null;
 }
 
-export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, baseUrl = "", token = null }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpenMemories, baseUrl = "", token = null }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -71,7 +72,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, baseUr
         </div>
       </div>
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
-        <ArtifactCards artifacts={message.artifacts} onOpen={onOpenArtifact} />
+        <ArtifactCards artifacts={message.artifacts} onOpen={onOpenArtifact} onOpenMemories={onOpenMemories} />
       )}
 
       <div className="flex items-center gap-0.5 mt-2">

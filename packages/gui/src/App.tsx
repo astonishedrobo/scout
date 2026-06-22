@@ -82,6 +82,7 @@ export function App() {
     streamingSteps,
     currentTool,
     streamingText,
+    statusMessage,
     isLoading,
     error: chatError,
     pendingApproval,
@@ -118,6 +119,11 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+
+  const openMemories = useCallback(() => {
+    setSettingsTab("memories");
+    setSettingsOpen(true);
+  }, []);
 
   useEffect(() => {
     if (!activeArtifact) return;
@@ -437,10 +443,12 @@ export function App() {
               streamingSteps={streamingSteps}
               streamingText={streamingText}
               currentTool={currentTool}
+              statusMessage={statusMessage}
               isLoading={isLoading}
               onRetry={retryAt}
               onFork={isMultiUser ? handleFork : undefined}
               onOpenArtifact={setActiveArtifact}
+              onOpenMemories={openMemories}
               baseUrl={baseUrl}
               token={token}
             />

@@ -24,13 +24,14 @@ interface ChatState {
   streamingSteps: ToolStep[];
   streamingText: string;
   currentTool?: string;
+  statusMessage?: string;
   isLoading: boolean;
   error: string | null;
   pendingApproval: ApprovalRequest | null;
 }
 
 const emptyState = (): ChatState => ({
-  messages: [], streamingSteps: [], streamingText: "", currentTool: undefined,
+  messages: [], streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
   isLoading: false, error: null, pendingApproval: null,
 });
 
@@ -128,7 +129,7 @@ export function useChat({
 
     if (statesRef.current[requestSessionId]?.isLoading) return false;
     update(requestSessionId, (state) => ({
-      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined,
+      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
     }));
 
     const controller = new AbortController();
@@ -197,9 +198,13 @@ export function useChat({
               onSessionTitle?.(requestSessionId, event.title);
               continue;
             }
+            if (event.type === "status") {
+              update(requestSessionId, (state) => ({ ...state, statusMessage: event.message }));
+              continue;
+            }
             if (event.type === "response") {
               finalContent = event.content ?? "";
-              update(requestSessionId, (state) => ({ ...state, streamingText: finalContent }));
+              update(requestSessionId, (state) => ({ ...state, streamingText: finalContent, statusMessage: undefined }));
               continue;
             }
             if (event.artifacts?.length) {
@@ -210,6 +215,7 @@ export function useChat({
             steps = applyEvent(steps, event);
             update(requestSessionId, (state) => ({
               ...state, streamingSteps: [...steps],
+              statusMessage: undefined,
               currentTool: event.type === "tool_call" ? event.name : steps.find((step) => step.status === "executing")?.name,
             }));
           } catch { /* skip malformed event */ }
@@ -229,7 +235,7 @@ export function useChat({
     } finally {
       abortRefs.current.delete(requestSessionId);
       update(requestSessionId, (state) => ({
-        ...state, isLoading: false, streamingSteps: [], streamingText: "", currentTool: undefined,
+        ...state, isLoading: false, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
       }));
     }
     return accepted;
@@ -272,7 +278,7 @@ export function useChat({
   return {
     messages: active.messages, setMessages, setMessagesForSession,
     streamingSteps: active.streamingSteps, currentTool: active.currentTool,
-    streamingText: active.streamingText, isLoading: active.isLoading,
+    streamingText: active.streamingText, statusMessage: active.statusMessage, isLoading: active.isLoading,
     error: active.error, pendingApproval: active.pendingApproval,
     clearApproval, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
   };

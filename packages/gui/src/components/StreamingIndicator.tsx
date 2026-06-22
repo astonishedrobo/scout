@@ -1,11 +1,13 @@
 interface StreamingIndicatorProps {
   currentTool: string | undefined;
   text: string;
+  statusMessage?: string;
 }
 
 export function StreamingIndicator({
   currentTool,
   text,
+  statusMessage,
 }: StreamingIndicatorProps) {
   return (
     <div className="flex items-center gap-2 py-2">
@@ -21,7 +23,9 @@ export function StreamingIndicator({
             : "Writing..."
           : currentTool
             ? `Running ${currentTool}...`
-            : "Thinking..."}
+            : statusMessage
+              ? `${statusMessage}...`
+              : "Thinking..."}
       </span>
     </div>
   );

@@ -31,6 +31,8 @@ interface MessageListProps {
   isLoading?: boolean;
   /** Current tool being executed. */
   currentTool?: string;
+  /** Current non-tool status from the server. */
+  statusMessage?: string;
   /** Index of the assistant message whose tool output is expanded. */
   expandedIndex: number | null;
   /** Terminal width for responsive layout. */
@@ -48,6 +50,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   streamingSteps,
   isLoading = false,
   currentTool,
+  statusMessage,
   expandedIndex,
   width,
 }) => {
@@ -136,7 +139,7 @@ export const MessageList: React.FC<MessageListProps> = ({
               </Text>
             </Box>
             <Text color={theme.text.primary} italic>
-              {currentTool ? `Running ${currentTool}` : "Thinking"}…
+              {currentTool ? `Running ${currentTool}` : statusMessage ?? "Thinking"}…
             </Text>
           </Box>
         </Box>

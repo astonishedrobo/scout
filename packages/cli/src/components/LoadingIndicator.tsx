@@ -16,6 +16,8 @@ interface LoadingIndicatorProps {
   active: boolean;
   /** Optional current tool name. */
   currentTool?: string;
+  /** Optional non-tool status from the server. */
+  statusMessage?: string;
 }
 
 function formatElapsed(seconds: number): string {
@@ -28,6 +30,7 @@ function formatElapsed(seconds: number): string {
 export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
   active,
   currentTool,
+  statusMessage,
 }) => {
   const [elapsed, setElapsed] = useState(0);
 
@@ -45,7 +48,7 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
 
   if (!active) return null;
 
-  const label = currentTool ? `Running ${currentTool}` : "Thinking";
+  const label = currentTool ? `Running ${currentTool}` : statusMessage ?? "Thinking";
 
   return (
     <Box>

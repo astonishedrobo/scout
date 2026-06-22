@@ -93,7 +93,7 @@ export interface CapabilityRequestPayload {
 }
 
 export interface ChatEvent {
-  type: "accepted" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
+  type: "accepted" | "status" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
   session_id?: string;
   name?: string;
   args?: Record<string, unknown>;

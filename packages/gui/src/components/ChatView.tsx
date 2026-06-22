@@ -11,11 +11,13 @@ interface ChatViewProps {
   streamingSteps: ToolStep[];
   streamingText: string;
   currentTool: string | undefined;
+  statusMessage?: string;
   isLoading: boolean;
   onSuggestionClick?: (text: string) => void;
   onRetry?: (assistantIndex: number) => void;
   onFork?: (messageIndex: number) => void;
   onOpenArtifact?: (artifact: Artifact) => void;
+  onOpenMemories?: () => void;
   baseUrl: string;
   token: string | null;
 }
@@ -100,10 +102,12 @@ export function ChatView({
   streamingSteps,
   streamingText,
   currentTool,
+  statusMessage,
   isLoading,
   onRetry,
   onFork,
   onOpenArtifact,
+  onOpenMemories,
   baseUrl,
   token,
 }: ChatViewProps) {
@@ -131,6 +135,7 @@ export function ChatView({
               onRetry={msg.role === "assistant" && onRetry ? () => onRetry(i) : undefined}
               onFork={onFork ? () => onFork(i) : undefined}
               onOpenArtifact={onOpenArtifact}
+              onOpenMemories={onOpenMemories}
               baseUrl={baseUrl}
               token={token}
             />
@@ -151,7 +156,7 @@ export function ChatView({
                 />
               </div>
             ) : null}
-            <StreamingIndicator currentTool={currentTool} text={streamingText} />
+            <StreamingIndicator currentTool={currentTool} text={streamingText} statusMessage={statusMessage} />
           </div>
         )}
       </div>

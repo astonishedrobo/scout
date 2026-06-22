@@ -14,8 +14,66 @@ from .guard import redact_secrets
 
 logger = logging.getLogger(__name__)
 
-_STAGE1_SYSTEM = """You extract durable user preferences and workspace facts from a session transcript.
-Output JSON with keys: raw_memory (bullet list), rollout_summary (2-4 sentences), rollout_slug (short-kebab)."""
+_STAGE1_SYSTEM = """You are a memory extraction agent. Convert session transcripts into durable memories only when they will make a future agent behave better.
+
+Return exactly one JSON object with keys: raw_memory, rollout_summary, rollout_slug.
+Use empty strings for all three keys when there is no high-signal reusable memory.
+
+Minimum-signal gate:
+Before writing anything, ask: "Will a future agent plausibly act better because of this memory?"
+If no, return {"raw_memory":"","rollout_summary":"","rollout_slug":""}.
+
+High-signal memory is limited to:
+- Stable user operating preferences, repeated corrections, or explicit "remember this" instructions.
+- Durable workspace/repo conventions, commands, paths, or failure shields that save substantial future exploration time.
+- Validated procedures, decision triggers, or environment facts that should change future agent defaults.
+
+Do NOT store:
+- One-off document summaries, PDF metadata, page counts, titles, authors, publishers, dates, dataset lists, or facts extracted from a file.
+- Temporary analysis results, random outputs, generated charts, assistant follow-up suggestions, or generic task recaps.
+- Assistant proposals unless the user clearly accepted or implemented them.
+- Secrets, credentials, or large verbatim tool outputs.
+
+Evidence priority:
+1. User messages, corrections, repeated steering, and explicit memory requests.
+2. Tool/test/log evidence for durable repo or workflow facts.
+3. Assistant messages only as secondary context.
+
+raw_memory format:
+- Use concise "- " bullets.
+- Each bullet should be actionable for future agents.
+- Preserve short user wording when it is evidence of a preference.
+
+rollout_summary may briefly describe why the transcript was useful, but if raw_memory is empty, rollout_summary must also be empty."""
+
+_LOW_SIGNAL_MEMORY_PATTERNS = (
+    "pdf title",
+    "title:",
+    "authors:",
+    "publisher:",
+    "date:",
+    "file size",
+    "pages",
+    "words",
+    "content type:",
+    "dataset categories",
+    "example dataset",
+    "assistant offered",
+    "follow-up actions",
+)
+
+
+def _looks_low_signal_memory(text: str) -> bool:
+    lowered = text.lower()
+    return any(pattern in lowered for pattern in _LOW_SIGNAL_MEMORY_PATTERNS)
+
+
+def _filter_extracted_memory(extracted: dict[str, str]) -> dict[str, str]:
+    """Drop common one-off document-summary memories missed by the model."""
+    raw = str(extracted.get("raw_memory", "")).strip()
+    if raw and all(_looks_low_signal_memory(line) for line in raw.splitlines() if line.strip()):
+        return {"raw_memory": "", "rollout_summary": "", "rollout_slug": ""}
+    return extracted
 
 
 def _session_mtime(path: Path) -> int:
@@ -88,20 +146,23 @@ async def _llm_extract(transcript: str, config) -> dict[str, str]:
         )
         text = resp.choices[0].message.content or "{}"
         data = json.loads(text)
-        return {
+        return _filter_extracted_memory({
             "raw_memory": str(data.get("raw_memory", "")),
             "rollout_summary": str(data.get("rollout_summary", "")),
             "rollout_slug": str(data.get("rollout_slug", ""))[:40],
-        }
+        })
     except Exception as exc:
         logger.warning("Stage-1 LLM failed, using heuristic: %s", exc)
         bullets = []
         for line in transcript.splitlines()[:10]:
             if line.startswith("user:"):
-                bullets.append(f"- {line[5:].strip()[:120]}")
+                text = line[5:].strip()
+                lowered = text.lower()
+                if any(marker in lowered for marker in ("remember", "prefer", "always", "don't", "do not")):
+                    bullets.append(f"- User said: {text[:120]}")
         return {
             "raw_memory": "\n".join(bullets),
-            "rollout_summary": transcript.splitlines()[-1][:200] if transcript else "",
+            "rollout_summary": transcript.splitlines()[-1][:200] if bullets and transcript else "",
             "rollout_slug": session_path_slug(transcript),
         }
 
@@ -133,7 +194,7 @@ async def run_stage1_for_session(
 
     try:
         transcript = redact_secrets(_extract_messages(session_path))
-        extracted = await _llm_extract(transcript, app_config)
+        extracted = _filter_extracted_memory(await _llm_extract(transcript, app_config))
         raw = redact_secrets(extracted["raw_memory"])
         summary = redact_secrets(extracted["rollout_summary"])
         if not raw and not summary:

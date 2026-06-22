@@ -202,6 +202,7 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
     setMessages,
     streamingSteps,
     currentTool,
+    statusMessage,
     isLoading,
     error: chatError,
     pendingApproval,
@@ -735,6 +736,7 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
           streamingSteps={streamingSteps}
           isLoading={isLoading}
           currentTool={currentTool}
+          statusMessage={statusMessage}
           expandedIndex={expandedIndex}
           width={terminalWidth}
         />

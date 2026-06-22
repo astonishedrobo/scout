@@ -35,7 +35,7 @@ def test_redact_paths_rewrites_relative_user_directory(tmp_path):
     assert redact_paths("saved at users/1/plot.png", personal) == "saved at workspace/plot.png"
 
 
-def test_sanitize_artifacts_removes_user_directory_prefix(tmp_path):
+def test_sanitize_artifacts_preserves_workspace_artifact_path(tmp_path):
     personal = tmp_path / "users" / "1"
     artifacts = [{"id": "x", "path": "users/1/plot.png", "name": "plot.png"}]
-    assert sanitize_artifacts(artifacts, personal)[0]["path"] == "plot.png"
+    assert sanitize_artifacts(artifacts, personal)[0]["path"] == "workspace/plot.png"

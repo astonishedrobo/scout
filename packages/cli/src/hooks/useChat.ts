@@ -33,6 +33,8 @@ interface UseChatReturn {
   streamingSteps: ToolStep[];
   /** Current tool being executed (for ThinkingBar). */
   currentTool: string | undefined;
+  /** Current non-tool status from the server. */
+  statusMessage: string | undefined;
   isLoading: boolean;
   error: string | null;
   /** Pending write-approval request (null if none). */
@@ -84,6 +86,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingSteps, setStreamingSteps] = useState<ToolStep[]>([]);
   const [currentTool, setCurrentTool] = useState<string | undefined>();
+  const [statusMessage, setStatusMessage] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequest | null>(null);
@@ -100,6 +103,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
       setIsLoading(true);
       setStreamingSteps([]);
       setCurrentTool(undefined);
+      setStatusMessage(undefined);
 
       const { cleanedMessage, attachments } = parseFileRefs(text);
       const displayMessage = text;
@@ -156,11 +160,18 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
             continue;
           }
 
+          if (event.type === "status") {
+            setStatusMessage(event.message);
+            continue;
+          }
+
           if (event.type === "response") {
             finalContent = event.content ?? "";
+            setStatusMessage(undefined);
           } else {
             steps = applyEvent(steps, event);
             setStreamingSteps([...steps]);
+            setStatusMessage(undefined);
 
             if (event.type === "tool_call") {
               setCurrentTool(event.name);
@@ -212,6 +223,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
         setIsLoading(false);
         setStreamingSteps([]);
         setCurrentTool(undefined);
+        setStatusMessage(undefined);
       }
     },
     [baseUrl, cwd, sessionId, model]
@@ -230,6 +242,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
     setMessages,
     streamingSteps,
     currentTool,
+    statusMessage,
     isLoading,
     error,
     pendingApproval,

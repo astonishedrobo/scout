@@ -46,8 +46,6 @@ def sanitize_artifacts(
     for artifact in artifacts:
         item = dict(artifact)
         path = redact_paths(str(item.get("path", "")), personal_root, shared_root)
-        if path.startswith("workspace/"):
-            path = path.removeprefix("workspace/")
         item["path"] = path
         sanitized.append(item)
     return sanitized

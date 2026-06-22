@@ -22,6 +22,41 @@ def _write_session(path: Path, content: str = "remember this") -> None:
     os.utime(path, (old, old))
 
 
+def test_filter_extracted_memory_drops_document_metadata_only():
+    extracted = {
+        "raw_memory": "\n".join([
+            "- PDF title: Mapping India’s Climate Vulnerability",
+            "- Authors: Abinash Mohanty and Shreya Wadhawan",
+            "- File size/length: 40 pages, ~13,476 words",
+        ]),
+        "rollout_summary": "The user asked about a PDF.",
+        "rollout_slug": "pdf-summary",
+    }
+
+    assert stage1._filter_extracted_memory(extracted) == {
+        "raw_memory": "",
+        "rollout_summary": "",
+        "rollout_slug": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_fallback_extract_keeps_only_explicit_memory_signals(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "litellm", None)
+    transcript = "\n".join([
+        "user: summarize this PDF",
+        "assistant: The PDF title is Example.",
+        "user: remember that I prefer concise answers",
+    ])
+
+    extracted = await stage1._llm_extract(transcript, AppConfig())
+
+    assert "summarize this PDF" not in extracted["raw_memory"]
+    assert "prefer concise answers" in extracted["raw_memory"]
+
+
 @pytest.mark.asyncio
 async def test_batch_excludes_trigger_and_bounds_model_calls(tmp_path: Path, monkeypatch):
     sessions = tmp_path / "sessions"
