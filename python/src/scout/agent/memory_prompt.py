@@ -4,24 +4,23 @@ from __future__ import annotations
 
 READ_PATH_TEMPLATE = """## Memory
 
-You have access to a memory folder with guidance from prior runs. Use it when it helps.
+You have one user memory file. Use it when it helps.
 
 Decision boundary:
 - Skip memory for self-contained requests (time/date, trivial rewrite, one-line command).
-- Use memory when the query references workspace history, conventions, prior decisions, or items in MEMORY_SUMMARY below.
+- Use memory when the query references user preferences, workspace history, conventions, or prior decisions.
+- Do not say memory is unknown if the answer is present in MEMORY.md below.
 
-Memory layout:
-- {base_path}/memory_summary.md (provided below — do NOT re-open)
-- {base_path}/MEMORY.md (search with memory_search)
-- {base_path}/rollout_summaries/
-- {base_path}/skills/
-- {base_path}/extensions/ad_hoc/notes/ (user-requested updates only)
+Memory file:
+- {base_path}/MEMORY.md
 
-Quick memory pass:
-1. Skim MEMORY_SUMMARY below.
-2. memory_search keywords in MEMORY.md.
-3. memory_read only the 1-2 most relevant files.
-4. Keep lookup lightweight (<= 6 steps).
+Current MEMORY.md:
+{memory_content}
+
+Lookup guidance:
+- The MEMORY.md content above is authoritative.
+- If the user asks about remembered information, answer from it directly.
+- Use memory_search or memory_read only if you need to inspect the file again.
 
 Memory citations: if memory files were used, append exactly one block at the VERY END:
 
@@ -34,18 +33,22 @@ session-uuid-here
 </rollout_ids>
 </scout-mem-citation>
 
-Updating memories: only when the user explicitly asks — use memory_add_note.
-
-========= MEMORY_SUMMARY BEGINS =========
-{memory_summary}
-========= MEMORY_SUMMARY ENDS =========
+Updating memories: only when the user explicitly asks — use memory_add_note. It writes to MEMORY.md.
 """
 
 
-def build_memory_instructions(base_path: str, memory_summary: str) -> str:
-    if not memory_summary.strip():
+def _has_memory_entries(memory_content: str) -> bool:
+    for line in memory_content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            return True
+    return False
+
+
+def build_memory_instructions(base_path: str, memory_content: str) -> str:
+    if not _has_memory_entries(memory_content):
         return ""
     return READ_PATH_TEMPLATE.format(
         base_path=base_path,
-        memory_summary=memory_summary.strip(),
+        memory_content=memory_content.strip(),
     )

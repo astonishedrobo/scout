@@ -11,6 +11,7 @@ function summarize(step: ToolStep): string {
   const { name, args } = step;
   const MAX = 60;
 
+  if (name === "memory_add_note") return "Updated MEMORY.md";
   if (name === "run_code") {
     const desc = String(args?.description ?? "").trim();
     if (desc) return desc.substring(0, MAX);
@@ -47,6 +48,9 @@ export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
 
   const completedCount = steps.filter((s) => s.status === "complete").length;
   const isRunning = steps.some((s) => s.status === "executing");
+  const showOutput = (step: ToolStep) => {
+    return step.name !== "memory_add_note" && step.output && (step.status === "complete" || step.status === "executing");
+  };
 
   return (
     <div className="mb-3">
@@ -85,7 +89,7 @@ export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
                 </span>
               </div>
 
-              {step.output && (step.status === "complete" || step.status === "executing") && (
+              {showOutput(step) && (
                 <div className="px-3 pb-2">
                   <pre className="text-xs text-scout-muted bg-scout-canvas rounded-btn p-2 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
                     {step.output}

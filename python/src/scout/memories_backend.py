@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import re
-import time
 from pathlib import Path
 
-from .memories import add_memory_entry, ensure_memory_layout, memories_root, resolve_memory_path
+from .memories import add_memory_entry, ensure_memory_layout, list_memory_entries, resolve_memory_path
 
 
 class MemoriesBackend:
@@ -30,63 +29,55 @@ class MemoriesBackend:
             return "(empty query)"
         pattern = re.compile(re.escape(query), re.IGNORECASE)
         hits: list[str] = []
-        for path in sorted(self.root.rglob("*")):
-            if not path.is_file() or path.suffix not in {".md", ".txt", ".jsonl"}:
-                continue
-            if "extensions" in path.parts and "ad_hoc" not in path.parts:
-                continue
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            for i, line in enumerate(text.splitlines(), 1):
-                if pattern.search(line):
-                    rel = path.relative_to(self.root)
-                    hits.append(f"{rel}:{i}: {line.strip()[:200]}")
-                    if len(hits) >= max_results:
-                        break
-            if len(hits) >= max_results:
-                break
-        return "\n".join(hits) if hits else f"(no matches for '{query}')"
+        path = self.root / "MEMORY.md"
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for i, line in enumerate(lines, 1):
+            if pattern.search(line):
+                hits.append(f"MEMORY.md:{i}: {line.strip()[:200]}")
+                if len(hits) >= max_results:
+                    break
+        if hits:
+            return "\n".join(hits)
 
-    def read(self, path: str, *, offset: int = 1, limit: int = 200) -> str:
-        target = resolve_memory_path(self.root, path)
-        if target is None:
+        entries = list_memory_entries(self._user_id, self._personal, self._server_mode)
+        if entries:
+            fallback = [
+                f"MEMORY.md:{i + 1}: {entry[:200]}"
+                for i, entry in enumerate(entries[:max_results])
+            ]
+            return "No exact matches. Current MEMORY.md entries:\n" + "\n".join(fallback)
+        return f"(no memories for '{query}')"
+
+    def read(self, path: str = "MEMORY.md", *, offset: int = 1, limit: int = 200) -> str:
+        normalized = path.strip().strip("/") or "MEMORY.md"
+        if normalized != "MEMORY.md":
             return f"[Invalid memory path: {path}]"
+        target = resolve_memory_path(self.root, "MEMORY.md")
+        if target is None:
+            return "[Invalid memory path: MEMORY.md]"
         if not target.exists():
-            return f"[Not found: {path}]"
+            return "[Not found: MEMORY.md]"
         try:
             lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError as exc:
             return f"[Read error: {exc}]"
         start = max(0, offset - 1)
         chunk = lines[start : start + limit]
-        header = f"--- {path} (lines {offset}-{offset + len(chunk) - 1}) ---\n"
+        header = f"--- MEMORY.md (lines {offset}-{offset + len(chunk) - 1}) ---\n"
         return header + "\n".join(chunk)
 
     def list_dir(self, path: str = ".") -> str:
-        target = resolve_memory_path(self.root, path) if path != "." else self.root
-        if target is None or not target.is_dir():
-            return f"[Not a directory: {path}]"
-        entries = sorted(target.iterdir())
-        lines: list[str] = []
-        for e in entries[:100]:
-            prefix = "d " if e.is_dir() else "f "
-            try:
-                rel = e.relative_to(self.root)
-            except ValueError:
-                rel = e.name
-            lines.append(f"{prefix}{rel}")
-        return "\n".join(lines) or "(empty)"
+        entries = list_memory_entries(self._user_id, self._personal, self._server_mode)
+        if entries:
+            return "f MEMORY.md"
+        return "(empty)"
 
-    def add_ad_hoc_note(self, slug: str, content: str) -> str:
+    def add_memory(self, slug: str, content: str) -> str:
         content = content.strip()
-        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", slug.strip())[:40] or "note"
-        ts = time.strftime("%Y-%m-%dT%H-%M-%S")
-        notes_dir = self.root / "extensions" / "ad_hoc" / "notes"
-        notes_dir.mkdir(parents=True, exist_ok=True)
-        path = notes_dir / f"{ts}-{slug}.md"
-        path.write_text(content + "\n", encoding="utf-8")
+        if not content:
+            return "No memory written: empty content"
         add_memory_entry(content, self._user_id, self._personal, self._server_mode)
-        rel = path.relative_to(self.root)
-        return f"Wrote memory note to MEMORY.md and ad-hoc note: {rel}"
+        return "Wrote memory to MEMORY.md"

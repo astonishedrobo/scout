@@ -445,8 +445,8 @@ def make_tools(
 
     @tool
     def memory_add_note(slug: str, content: str) -> str:
-        """Add an ad-hoc memory note (only when user explicitly requested)."""
-        return _mem_backend.add_ad_hoc_note(slug, content)
+        """Add a memory to MEMORY.md (only when user explicitly requested)."""
+        return _mem_backend.add_memory(slug, content)
 
     @tool
     def skill_list() -> str:

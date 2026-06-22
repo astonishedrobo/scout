@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from ..config import AppConfig, load_config
 from ..retriever import BM25Retriever, RetrieverProxy
 from ..permissions import ProfileConfig, profile_from_user, resolve_profile
-from ..memories import ensure_memory_layout, load_memory_summary
+from ..memories import ensure_memory_layout, load_memory_registry
 from .memory_prompt import build_memory_instructions
 from ..path_display import redact_paths
 from ..skills import load_layered_instructions, load_skills, resolve_focus_path
@@ -217,11 +217,13 @@ class ScoutAgent:
             root = ensure_memory_layout(
                 self._user_id, personal_dir=self._cwd, server_mode=self._server_mode,
             )
-            summary = load_memory_summary(
+            memory_content = load_memory_registry(
                 self._user_id, personal_dir=self._cwd, server_mode=self._server_mode,
-                max_chars=self._config.memories.max_summary_tokens * 4,
             )
-            memory_instructions = build_memory_instructions(str(root), summary)
+            max_chars = self._config.memories.max_summary_tokens * 4
+            if len(memory_content) > max_chars:
+                memory_content = memory_content[:max_chars]
+            memory_instructions = build_memory_instructions(str(root), memory_content)
         tools = make_tools(
             self._retriever,
             self._data_dir,

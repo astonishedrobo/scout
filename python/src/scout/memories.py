@@ -10,7 +10,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _XDG_CONFIG = Path.home() / ".config" / "scout"
-_MAX_SUMMARY_CHARS = 16_000  # ~4000 tokens rough
+_MAX_MEMORY_CHARS = 16_000  # ~4000 tokens rough
 
 
 def memories_root(
@@ -36,9 +36,7 @@ def legacy_memories_path(
 def _ensure_dirs(root: Path) -> None:
     (root / "rollout_summaries").mkdir(parents=True, exist_ok=True)
     (root / "skills").mkdir(parents=True, exist_ok=True)
-    (root / "extensions" / "ad_hoc" / "notes").mkdir(parents=True, exist_ok=True)
     for name, default in (
-        ("memory_summary.md", "# Memory summary\n\n_No memories yet._\n"),
         ("MEMORY.md", "# Memory registry\n\n"),
         ("raw_memories.md", ""),
     ):
@@ -88,13 +86,6 @@ def migrate_legacy_memories(
             registry_lines.append(e if e.startswith("- ") else f"- {e}")
     memory_md.write_text("\n".join(registry_lines) + "\n", encoding="utf-8")
 
-    summary = root / "memory_summary.md"
-    bullets = [e.strip().lstrip("- ").strip() for e in entries if e.strip()][:20]
-    summary_body = "\n".join(f"- {b}" for b in bullets if b)
-    summary.write_text(
-        f"# Memory summary\n\n{summary_body or '_No memories yet._'}\n",
-        encoding="utf-8",
-    )
     marker.write_text(str(int(time.time())), encoding="utf-8")
     logger.info("Migrated legacy memories from %s", legacy)
     return True
@@ -105,14 +96,9 @@ def load_memory_summary(
     personal_dir: Path | str | None = None,
     server_mode: bool = False,
     *,
-    max_chars: int = _MAX_SUMMARY_CHARS,
+    max_chars: int = _MAX_MEMORY_CHARS,
 ) -> str:
-    root = ensure_memory_layout(user_id, personal_dir, server_mode)
-    path = root / "memory_summary.md"
-    try:
-        content = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    content = load_memory_registry(user_id, personal_dir, server_mode).strip()
     if len(content) > max_chars:
         content = content[: max_chars // 2] + "\n… [truncated] …\n" + content[-max_chars // 4 :]
     return content
@@ -138,7 +124,8 @@ def save_memory_registry(
     server_mode: bool = False,
 ) -> None:
     root = ensure_memory_layout(user_id, personal_dir, server_mode)
-    (root / "MEMORY.md").write_text(content.strip() + "\n", encoding="utf-8")
+    content = content.strip() + "\n"
+    (root / "MEMORY.md").write_text(content, encoding="utf-8")
 
 
 def save_memory_summary(
@@ -147,8 +134,29 @@ def save_memory_summary(
     personal_dir: Path | str | None = None,
     server_mode: bool = False,
 ) -> None:
-    root = ensure_memory_layout(user_id, personal_dir, server_mode)
-    (root / "memory_summary.md").write_text(content.strip() + "\n", encoding="utf-8")
+    # Compatibility no-op: MEMORY.md is the only memory source of truth.
+    _ = (content, user_id, personal_dir, server_mode)
+
+
+def _entries_from_registry_text(text: str) -> list[str]:
+    entries = re.split(r"\n(?=- )", text)
+    cleaned: list[str] = []
+    for entry in entries:
+        value = entry.strip()
+        if not value or value.startswith("#") or value.startswith("_"):
+            continue
+        if value.startswith("- "):
+            cleaned.append(value)
+    return cleaned
+
+
+def refresh_memory_summary(
+    user_id: str | int = "default",
+    personal_dir: Path | str | None = None,
+    server_mode: bool = False,
+) -> str:
+    # Compatibility alias for older callers.
+    return load_memory_registry(user_id, personal_dir, server_mode)
 
 
 def list_memory_entries(
@@ -159,8 +167,7 @@ def list_memory_entries(
     text = load_memory_registry(user_id, personal_dir, server_mode)
     if not text:
         return []
-    entries = re.split(r"\n(?=- )", text)
-    return [e.strip() for e in entries if e.strip() and not e.strip().startswith("#")]
+    return _entries_from_registry_text(text)
 
 
 def add_memory_entry(
@@ -210,13 +217,13 @@ def resolve_memory_path(root: Path, relative: str) -> Path | None:
     return target
 
 
-# Deprecated: full-file inject — use load_memory_summary + memory tools instead.
+# Deprecated aliases — MEMORY.md is the only source of truth.
 def load_memories(
     user_id: str | int = "default",
     personal_dir: Path | str | None = None,
     server_mode: bool = False,
 ) -> str:
-    return load_memory_summary(user_id, personal_dir, server_mode)
+    return load_memory_registry(user_id, personal_dir, server_mode)
 
 
 def save_memories(

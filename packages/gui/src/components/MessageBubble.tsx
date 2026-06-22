@@ -23,7 +23,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
     (step) =>
       step.name === "memory_add_note" &&
       step.status === "complete" &&
-      /wrote memory to memory\.md/i.test(step.output ?? ""),
+      !/no memory written/i.test(step.output ?? ""),
   );
 
   const handleCopy = useCallback(() => {

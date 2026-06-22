@@ -7,14 +7,14 @@ import time
 from pathlib import Path
 
 from ..config import MemoriesConfig
-from ..memories import ensure_memory_layout, load_memory_registry, save_memory_registry, save_memory_summary
+from ..memories import ensure_memory_layout, load_memory_registry, save_memory_registry
 from ..memory_store import JOB_KIND_PHASE2, open_memory_store
 from .guard import redact_secrets
 
 logger = logging.getLogger(__name__)
 
-_CONSOLIDATION_SYSTEM = """You maintain MEMORY.md and memory_summary.md from new session memories.
-Return JSON: registry (full MEMORY.md markdown), summary (truncated bullets for prompt inject).
+_CONSOLIDATION_SYSTEM = """You maintain MEMORY.md from new session memories.
+Return JSON: registry (full MEMORY.md markdown).
 
 Apply a strict minimum-signal gate. Promote only memory that should change future agent behavior:
 - stable user preferences or repeated steering,
@@ -23,7 +23,7 @@ Apply a strict minimum-signal gate. Promote only memory that should change futur
 
 Do not promote one-off document summaries, PDF metadata, page counts, titles, authors, dataset lists,
 temporary analysis results, assistant follow-up suggestions, or generic task recaps. If new raw input
-contains only those low-signal facts, keep existing registry/summary unchanged."""
+contains only those low-signal facts, keep the existing registry unchanged."""
 
 
 async def _llm_consolidate(
@@ -49,14 +49,11 @@ async def _llm_consolidate(
         data = json.loads(resp.choices[0].message.content or "{}")
         return {
             "registry": str(data.get("registry", registry)),
-            "summary": str(data.get("summary", "")),
         }
     except Exception as exc:
         logger.warning("Stage-2 LLM failed, sync-only: %s", exc)
         merged = registry.rstrip() + "\n\n" + raw_memories.strip()
-        bullets = [l for l in raw_memories.splitlines() if l.strip().startswith("-")][:15]
-        summary = "# Memory summary\n\n" + ("\n".join(bullets) if bullets else "_No memories yet._")
-        return {"registry": merged, "summary": summary}
+        return {"registry": merged}
 
 
 def _sync_artifacts(root: Path, outputs) -> tuple[str, str]:
@@ -108,8 +105,6 @@ async def run_stage2(
         registry = load_memory_registry(user_id, personal_dir, server_mode)
         consolidated = await _llm_consolidate(registry, raw_text, summaries_blob, app_config)
         save_memory_registry(redact_secrets(consolidated["registry"]), user_id, personal_dir, server_mode)
-        if consolidated["summary"].strip():
-            save_memory_summary(redact_secrets(consolidated["summary"]), user_id, personal_dir, server_mode)
 
         store.mark_selected_phase2([o.thread_id for o in outputs])
         store.finish_job(JOB_KIND_PHASE2, "global", token, success=True, watermark=int(time.time()))
