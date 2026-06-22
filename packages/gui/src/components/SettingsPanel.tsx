@@ -29,8 +29,6 @@ interface DesktopEnvOption {
 
 export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, onClose }: SettingsPanelProps) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
-  const [memories, setMemories] = useState("");
-  const [memorySummary, setMemorySummary] = useState("");
   const [newMemory, setNewMemory] = useState("");
   const [memoryEntries, setMemoryEntries] = useState<string[]>([]);
   const [memoriesLoading, setMemoriesLoading] = useState(false);
@@ -201,8 +199,6 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
     fetch(`${baseUrl}/memories`, { headers: authHeaders })
       .then((r) => r.json())
       .then((d) => {
-        setMemories(d.content ?? "");
-        setMemorySummary(d.summary ?? "");
         setMemoryEntries(d.entries ?? []);
       })
       .catch(() => {})
@@ -217,7 +213,6 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
       body: JSON.stringify({ entry: newMemory.trim() }),
     });
     const d = await r.json();
-    setMemories(d.content ?? "");
     setMemoryEntries(d.entries ?? []);
     setNewMemory("");
   };
@@ -229,7 +224,6 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
       body: JSON.stringify({ remove_index: index }),
     });
     const d = await r.json();
-    setMemories(d.content ?? "");
     setMemoryEntries(d.entries ?? []);
   };
 
@@ -293,7 +287,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
               <section className="max-w-2xl">
                 <h2 className="text-[15px] font-semibold text-scout-text mb-1">Memories</h2>
                 <p className="text-[13px] text-scout-muted mb-4">
-                  Summary is injected into prompts; full registry is searchable via memory tools.
+                  MEMORY.md is the single memory file used by the agent.
                 </p>
                 <div className="flex flex-wrap gap-5 mb-5">
                   <label className="flex items-center gap-2 text-sm font-medium text-scout-text cursor-pointer">
@@ -320,11 +314,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                     {memoryPreferenceStatus}
                   </p>
                 )}
-                <h3 className="text-sm font-semibold text-scout-text mb-1.5">Summary preview</h3>
-                <pre className="text-xs font-mono bg-scout-input-bg border border-scout-hairline-faint rounded-xl p-3 mb-5 max-h-32 overflow-y-auto whitespace-pre-wrap text-scout-muted">
-                  {memorySummary || "(empty)"}
-                </pre>
-                <h3 className="text-sm font-semibold text-scout-text mb-1.5">MEMORY.md registry</h3>
+                <h3 className="text-sm font-semibold text-scout-text mb-1.5">MEMORY.md</h3>
                 {memoriesLoading ? (
                   <p className="text-[13px] text-scout-muted">Loading…</p>
                 ) : memoryEntries.length === 0 ? (

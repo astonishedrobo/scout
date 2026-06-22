@@ -5,6 +5,7 @@ import { Copy, Check, RotateCcw, GitBranch } from "lucide-react";
 import type { Artifact } from "scout-core";
 import { ArtifactCards } from "./ArtifactCards";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+import { MemoryUpdateChip } from "./MemoryUpdateChip";
 
 interface MessageBubbleProps {
   message: Message;
@@ -18,6 +19,12 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpenMemories, baseUrl = "", token = null }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
+  const hasMemoryUpdate = message.steps?.some(
+    (step) =>
+      step.name === "memory_add_note" &&
+      step.status === "complete" &&
+      /wrote memory to memory\.md/i.test(step.output ?? ""),
+  );
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(message.content).then(() => {
@@ -74,6 +81,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
         <ArtifactCards artifacts={message.artifacts} onOpen={onOpenArtifact} onOpenMemories={onOpenMemories} />
       )}
+      {hasMemoryUpdate && <MemoryUpdateChip onOpenMemories={onOpenMemories} className="mt-3" />}
 
       <div className="flex items-center gap-0.5 mt-2">
         <button
