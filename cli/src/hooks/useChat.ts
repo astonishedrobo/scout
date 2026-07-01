@@ -72,7 +72,7 @@ function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
         updated[i] = {
           ...updated[i],
           status: "complete",
-          output: event.output,
+          output: event.output_preview ?? event.output,
         };
         break;
       }

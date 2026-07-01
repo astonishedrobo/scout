@@ -98,6 +98,8 @@ export interface ChatEvent {
   name?: string;
   args?: Record<string, unknown>;
   output?: string;
+  /** Bounded terminal-safe version of output; GUI clients should use output. */
+  output_preview?: string;
   tool_call_id?: string;
   process_id?: number;
   chunk?: string;

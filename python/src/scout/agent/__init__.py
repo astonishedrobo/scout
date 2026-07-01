@@ -25,6 +25,24 @@ from .tools import make_tools
 
 logger = logging.getLogger(__name__)
 
+_TOOL_OUTPUT_PREVIEW_CHARS = 500
+
+
+def preview_tool_output(content: object, max_chars: int = _TOOL_OUTPUT_PREVIEW_CHARS) -> str:
+    """Return a bounded UI preview that makes omitted output explicit."""
+    text = content if isinstance(content, str) else str(content or "")
+    if len(text) <= max_chars:
+        return text
+
+    hidden = text[max_chars:]
+    hidden_lines = max(1, len(hidden.splitlines()))
+    line_label = "line" if hidden_lines == 1 else "lines"
+    return (
+        f"{text[:max_chars]}\n\n"
+        f"… +{hidden_lines} more {line_label} "
+        f"({len(hidden):,} characters hidden)"
+    )
+
 __all__ = ["ScoutAgent", "ProviderRateLimitError"]
 
 
@@ -389,14 +407,16 @@ class ScoutAgent:
                             self._record_memory_citations(safe_content)
                             events.append({"type": "response", "content": safe_content})
                     elif isinstance(msg, ToolMessage):
-                        output = (msg.content or "")[:500]
+                        full_output = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+                        output_preview = preview_tool_output(full_output)
                         name = msg.name or ""
                         args = _pending_calls.pop(msg.tool_call_id, {})
-                        tool_steps.append((name, args, output))
+                        tool_steps.append((name, args, output_preview))
                         events.append({
                             "type": "tool_result",
                             "name": name,
-                            "output": output,
+                            "output": full_output,
+                            "output_preview": output_preview,
                             "artifacts": msg.additional_kwargs.get("artifacts", []),
                             "tool_call_id": msg.tool_call_id,
                         })
