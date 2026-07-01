@@ -249,6 +249,41 @@ async def test_exec_command_workdir_workspace_alias_resolves_to_personal_root(tm
     assert seen["cwd"] == (personal / "data").resolve()
 
 
+@pytest.mark.asyncio
+async def test_exec_command_translates_file_tool_paths_in_command(tmp_path: Path):
+    personal = tmp_path / "users" / "7"
+    shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    seen: dict[str, str] = {}
+
+    class FakeBackend:
+        async def exec_command(self, request):
+            seen["command"] = request.command
+            return UnifiedExecResponse(output="ok", wall_time_seconds=0.01, exit_code=0, alive=False)
+
+    orchestrator = ExecutionOrchestrator(
+        backend=FakeBackend(),
+        config=ExecutionConfig(),
+        personal_dir=personal,
+        shared_dir=shared,
+        user_id="7",
+        session_id="s1",
+        grant_store=CapabilityGrantStore(),
+        personal_write=True,
+    )
+
+    await orchestrator.exec_command(
+        "python3 analyze.py workspace/shared/data/climate.csv "
+        "shared/other.csv workspace/input.csv /workspace/users/7/report.csv"
+    )
+
+    assert seen["command"] == (
+        f"python3 analyze.py {shared}/data/climate.csv "
+        f"{shared}/other.csv {personal}/input.csv {personal}/report.csv"
+    )
+
+
 def test_env_allowlist_removes_secrets(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
     monkeypatch.setenv("SCOUT_SECRET_KEY", "secret")

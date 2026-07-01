@@ -18,6 +18,7 @@ from .backend import ExecutionBackend
 from .errors import ExecutionErrorCategory
 from .grants import CapabilityGrantStore
 from .models import CapabilityRequest, ExecutionRequest, ExecutionResult
+from .path_aliases import translate_workspace_paths
 from .execpolicy import PolicyMatch, match_policy
 from .policy import build_execution_environment, build_execution_policy
 from .runtime import resolve_sandbox_python
@@ -299,6 +300,26 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
                 continue
         return self._personal
 
+    def _translate_shell_workspace_paths(self, command: str) -> str:
+        """Make file-tool workspace paths usable inside shell commands.
+
+        File tools intentionally show stable paths such as
+        ``workspace/shared/data.csv``. Shell commands, however, run with the
+        personal directory as their cwd and historically interpreted that as
+        ``<personal>/workspace/shared/data.csv``. Translate the stable aliases
+        at the execution boundary so models do not need backend-specific path
+        knowledge or retries.
+
+        The worker repeats this translation after RPC because its mount roots
+        can differ from the API server's roots.
+        """
+        return translate_workspace_paths(
+            command,
+            personal_root=self._personal,
+            shared_root=self._shared,
+            user_id=self._user_id,
+        )
+
     async def exec_command(
         self,
         command: str,
@@ -319,12 +340,13 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
         staging = create_staging(self._personal)
         snapshot_pre_promotion_hashes(staging, self._personal)
         cwd = self._resolve_workdir(workdir)
+        executable_command = self._translate_shell_workspace_paths(command)
 
         req = UnifiedExecCommandRequest(
             execution_id=staging.execution_id,
             user_id=self._user_id,
             session_id=self._session_id,
-            command=command,
+            command=executable_command,
             cwd=cwd,
             policy=self._shell_policy(staging),
             staging_dir=staging.root,
