@@ -11,6 +11,7 @@ langchain-text-splitters>=0.2
 langgraph>=0.5
 langchain>=0.3
 langchain-litellm>=0.2
+langsmith>=0.1.95
 fastapi>=0.115
 uvicorn>=0.32
 uv>=0.5

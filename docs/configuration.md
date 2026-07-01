@@ -37,6 +37,35 @@ Use each location for a different purpose:
 
 Do not commit a populated `.env` file.
 
+## LangSmith tracing
+
+Scout's LangGraph agent can send traces to LangSmith without additional code.
+Tracing is disabled by default. For a local launch, export:
+
+```bash
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY="your-langsmith-api-key"
+export LANGSMITH_PROJECT="scout"
+```
+
+For Docker, add the same values to `.env`, then recreate the server container:
+
+```dotenv
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your-langsmith-api-key
+LANGSMITH_PROJECT=scout
+```
+
+```bash
+docker compose up -d --force-recreate scout-server
+```
+
+`LANGSMITH_ENDPOINT` defaults to the US endpoint. Set it for another LangSmith
+region or a self-hosted deployment. Set `LANGSMITH_WORKSPACE_ID` only when the
+API key can access multiple workspaces. Traces include Scout's user ID, session
+ID, selected model, and local/server mode as searchable metadata. Disable tracing
+at any time with `LANGSMITH_TRACING=false`.
+
 ## Understanding model names
 
 Each configured model has three related names. They are easy to confuse:

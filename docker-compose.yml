@@ -133,6 +133,13 @@ services:
       - OPENAI_API_KEY_FILE=${OPENAI_API_KEY_FILE:-/run/secrets/openai_api_key}
       - ANTHROPIC_API_KEY_FILE=${ANTHROPIC_API_KEY_FILE:-/run/secrets/anthropic_api_key}
 
+      # ── LangSmith tracing (optional) ─────────────────────────────────────────
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY:-}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-scout}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_WORKSPACE_ID=${LANGSMITH_WORKSPACE_ID:-}
+
       # ── Security ─────────────────────────────────────────────────────────────
       # Change SCOUT_SECRET_KEY to a long random string before deploying.
       - SCOUT_SECRET_KEY=${SCOUT_SECRET_KEY:-my-super-secret-jwt-key-change-me}

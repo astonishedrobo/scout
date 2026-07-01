@@ -200,6 +200,14 @@ class ScoutAgent:
 
         self._run_config = {
             "recursion_limit": max(cfg.max_iterations * 3, 50),
+            "run_name": "scout-agent",
+            "tags": ["scout", "server" if server_mode else "local"],
+            "metadata": {
+                "scout_user_id": str(user_id),
+                "scout_session_id": str(session_id),
+                "scout_model": cfg.model,
+                "scout_server_mode": server_mode,
+            },
         }
         self._messages: list = []
         self._focus_path = None
