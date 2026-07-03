@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 COPY packages/ ./packages/
 
 RUN npm install
-RUN npm run build:gui
+RUN npm run build:core && npm run build:gui
 
 # Stage 2: Serve the Python backend with the GUI
 FROM python:3.11-slim
