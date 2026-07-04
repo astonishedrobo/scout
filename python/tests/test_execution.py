@@ -250,7 +250,7 @@ async def test_exec_command_workdir_workspace_alias_resolves_to_personal_root(tm
 
 
 @pytest.mark.asyncio
-async def test_exec_command_translates_file_tool_paths_in_command(tmp_path: Path):
+async def test_exec_command_preserves_paths_in_command(tmp_path: Path):
     personal = tmp_path / "users" / "7"
     shared = tmp_path / "shared"
     personal.mkdir(parents=True)
@@ -272,16 +272,11 @@ async def test_exec_command_translates_file_tool_paths_in_command(tmp_path: Path
         grant_store=CapabilityGrantStore(),
         personal_write=True,
     )
+    command = "python3 analyze.py /app/workspace/shared/data/climate.csv"
 
-    await orchestrator.exec_command(
-        "python3 analyze.py workspace/shared/data/climate.csv "
-        "shared/other.csv workspace/input.csv /workspace/users/7/report.csv"
-    )
+    await orchestrator.exec_command(command)
 
-    assert seen["command"] == (
-        f"python3 analyze.py {shared}/data/climate.csv "
-        f"{shared}/other.csv {personal}/input.csv {personal}/report.csv"
-    )
+    assert seen["command"] == command
 
 
 def test_env_allowlist_removes_secrets(monkeypatch):

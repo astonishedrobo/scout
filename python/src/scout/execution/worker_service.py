@@ -23,7 +23,6 @@ from .container_backend import (
 from .env import build_execution_env
 from .local_backend import LocalSandboxBackend
 from .models import ExecutionPolicy, ExecutionRequest, NetworkPolicy
-from .path_aliases import translate_workspace_paths
 from .persistent_sandbox import PersistentSandboxSession
 from .policy import build_execution_policy, build_execution_environment
 from .runtime import resolve_sandbox_python
@@ -406,15 +405,6 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             return layout.shared_root / (Path(*tail) if tail else Path("."))
         return p
 
-    def _map_rpc_command_paths(command: str, layout) -> str:
-        """Map display/server workspace aliases to worker-visible mounts."""
-        return translate_workspace_paths(
-            command,
-            personal_root=layout.personal_root,
-            shared_root=layout.shared_root,
-            user_id=layout.personal_root.name,
-        )
-
     @app.post("/exec/command")
     async def exec_command(
         request: Request,
@@ -447,7 +437,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                 execution_id=payload.execution_id,
                 user_id=payload.user_id,
                 session_id=payload.session_id,
-                command=_map_rpc_command_paths(payload.command, layout),
+                command=payload.command,
                 cwd=cwd,
                 policy=policy,
                 staging_dir=staging_path,
