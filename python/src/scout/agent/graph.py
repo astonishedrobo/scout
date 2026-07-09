@@ -47,7 +47,12 @@ _EXECUTION_TOOLS = frozenset({
 logger = logging.getLogger(__name__)
 
 
-def _init_chat_model(model: str, temperature: float) -> BaseChatModel:
+def _init_chat_model(
+    model: str,
+    temperature: float,
+    *,
+    client_kwargs: dict[str, str] | None = None,
+) -> BaseChatModel:
     """Initialise a LangChain chat model from a LiteLLM-style model string.
 
     Uses ``ChatLiteLLM`` which is provider-agnostic — it accepts any
@@ -55,7 +60,7 @@ def _init_chat_model(model: str, temperature: float) -> BaseChatModel:
     ``openai/gpt-4o``, ``anthropic/claude-3.5-sonnet``).
     """
     from langchain_litellm import ChatLiteLLM
-    return ChatLiteLLM(model=model, temperature=temperature)
+    return ChatLiteLLM(model=model, temperature=temperature, **(client_kwargs or {}))
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -261,6 +266,7 @@ def build_graph(
     execution_service: object | None = None,
     *,
     hooks_enabled: bool = True,
+    llm_client_kwargs: dict[str, str] | None = None,
     personal_dir: str | None = None,
     shared_dir: str | None = None,
     server_mode: bool = False,
@@ -290,7 +296,11 @@ def build_graph(
     max_iter = agent_config.max_iterations
     bad_req_retries = agent_config.bad_request_retries
 
-    llm = _init_chat_model(model_name, agent_config.temperature)
+    llm = _init_chat_model(
+        model_name,
+        agent_config.temperature,
+        client_kwargs=llm_client_kwargs,
+    )
     llm_with_tools = llm.bind_tools(tools)
 
     _tools_by_name = {t.name: t for t in tools}

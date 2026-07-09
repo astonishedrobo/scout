@@ -107,45 +107,88 @@ docker compose exec ollama ollama pull llama3.2
 
 The URL uses `ollama`, the Docker service name. Do not use `localhost` here because `localhost` inside the Scout container refers to Scout itself.
 
-## vLLM
+## vLLM: Docker multi-user deployment
 
-This example serves `mistralai/Mistral-7B-Instruct-v0.2` with vLLM:
+Scout can launch and manage vLLM as part of the same Compose application. The
+user does not need to create a separate vLLM instance. This example serves
+`Qwen/Qwen3-0.6B`.
 
-```bash
-vllm serve mistralai/Mistral-7B-Instruct-v0.2
+Add the service to `docker-compose.yml`:
+
+```yaml
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: scout-vllm
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    volumes:
+      - vllm-cache:/root/.cache/huggingface
+    command:
+      - --model
+      - Qwen/Qwen3-0.6B
+      - --served-model-name
+      - Qwen/Qwen3-0.6B
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
+    networks:
+      - default
+
+  scout-server:
+    depends_on:
+      - vllm
+    environment:
+      - VLLM_API_KEY=${VLLM_API_KEY:-local-vllm}
+      - VLLM_API_BASE=${VLLM_API_BASE:-http://vllm:8000/v1}
+
+volumes:
+  vllm-cache:
 ```
 
-Set a placeholder API key and the service URL:
+The host must have an NVIDIA GPU, NVIDIA drivers, and NVIDIA Container Toolkit.
+The cache volume keeps the downloaded model across container replacements.
 
-```bash
-export VLLM_API_KEY=not-needed
-export VLLM_API_BASE=http://localhost:8000/v1
-```
-
-Configure Scout:
+Configure Scout in `config/scout.yaml`:
 
 ```yaml
 agent:
-  model: hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2
+  model: hosted_vllm/Qwen/Qwen3-0.6B
 
 llm:
   providers:
     vllm:
       models:
-        - hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2
+        - hosted_vllm/Qwen/Qwen3-0.6B
 
 model_capabilities:
-  hosted_vllm/mistralai/Mistral-7B-Instruct-v0.2:
+  hosted_vllm/Qwen/Qwen3-0.6B:
     vision: unsupported
 ```
 
 The names differ for a reason:
 
 - `vllm` is the provider label, so Scout reads `VLLM_API_KEY` and `VLLM_API_BASE`.
-- `mistralai/Mistral-7B-Instruct-v0.2` is the name served by vLLM.
-- Scout adds `hosted_vllm/` to the model ID so its model library knows to use a vLLM-compatible server.
+- `Qwen/Qwen3-0.6B` is the name served by vLLM.
+- `hosted_vllm/Qwen/Qwen3-0.6B` tells LiteLLM to use a hosted vLLM endpoint.
+- The non-empty placeholder key makes the model visible in Scout's model picker.
 
-For Docker, put `VLLM_API_KEY` and `VLLM_API_BASE` in `.env`. If vLLM runs as another Docker Compose service, use that service name in the URL instead of `localhost`.
+Start the application:
+
+```bash
+docker compose up -d --build
+```
+
+The first start downloads the model and can take several minutes. Verify vLLM
+from inside the Scout container, then verify Scout's model catalog:
+
+```bash
+docker compose exec scout-server curl http://vllm:8000/v1/models
+curl http://localhost:4200/config/models
+```
+
+The second response should include `hosted_vllm/Qwen/Qwen3-0.6B`.
 
 ## Models that accept images
 
@@ -177,6 +220,7 @@ Check all of the following:
 - A local Scout launch normally reaches a local model service through `localhost`.
 - A Docker Scout deployment must use a Docker service name or a network address reachable from the container.
 - Include `/v1` in the vLLM URL when its OpenAI-compatible endpoint expects it.
+- If a `hosted_vllm/...` request goes to `https://api.openai.com/chat/completions`, Scout did not pass the vLLM API base to LiteLLM. Check that `VLLM_API_BASE` is set for `scout-server` or set `api_base` under the `vllm` provider.
 
 ### Images are unavailable
 

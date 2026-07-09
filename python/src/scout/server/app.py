@@ -217,6 +217,7 @@ async def _run_title_job(
     assistant_response: str | None = None,
     timeout_seconds: int = 60,
     max_attempts: int = 2,
+    client_kwargs: dict[str, str] | None = None,
 ) -> None:
     try:
         header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
@@ -234,6 +235,7 @@ async def _run_title_job(
                 context["message"], model=model,
                 assistant_response=context["assistant_response"],
                 timeout_seconds=timeout_seconds,
+                client_kwargs=client_kwargs,
             )
             if title not in LEGACY_DEFAULT_TITLES:
                 break
@@ -407,6 +409,7 @@ def create_app(
             session_path, title_model, assistant_response,
             timeout_seconds=config.session_titles.timeout_seconds,
             max_attempts=config.session_titles.max_attempts,
+            client_kwargs=config.llm.get_model_client_kwargs(title_model),
         ))
         _state["title_tasks"][key] = task
         task.add_done_callback(lambda _task: _state["title_tasks"].pop(key, None))

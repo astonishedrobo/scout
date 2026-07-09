@@ -77,6 +77,7 @@ async def generate_session_title(
     model: str,
     assistant_response: str | None = None,
     timeout_seconds: int = 60,
+    client_kwargs: dict[str, str] | None = None,
 ) -> str:
     """Generate a 3–5 word title from the opening conversation."""
     user_text = " ".join(message.split()).strip()
@@ -91,7 +92,10 @@ async def generate_session_title(
         from langchain_litellm import ChatLiteLLM
 
         llm = ChatLiteLLM(
-            model=model, temperature=0.2, request_timeout=timeout_seconds,
+            model=model,
+            temperature=0.2,
+            request_timeout=timeout_seconds,
+            **(client_kwargs or {}),
         )
         structured_llm = llm.with_structured_output(SessionTitleOutput)
         result = await structured_llm.ainvoke([

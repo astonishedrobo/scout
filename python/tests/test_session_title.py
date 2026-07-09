@@ -88,6 +88,26 @@ async def test_generate_session_title_uses_configured_timeout():
 
 
 @pytest.mark.asyncio
+async def test_generate_session_title_passes_client_kwargs():
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(return_value=SessionTitleOutput(title="Local Model Title"))
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    with patch("langchain_litellm.ChatLiteLLM", return_value=llm) as chat_model:
+        await generate_session_title(
+            "hello",
+            model="hosted_vllm/Qwen/Qwen3-0.6B",
+            client_kwargs={
+                "api_key": "local-vllm",
+                "api_base": "http://vllm:8000/v1",
+            },
+        )
+
+    assert chat_model.call_args.kwargs["api_key"] == "local-vllm"
+    assert chat_model.call_args.kwargs["api_base"] == "http://vllm:8000/v1"
+
+
+@pytest.mark.asyncio
 async def test_generate_session_title_falls_back_on_error():
     with patch("langchain_litellm.ChatLiteLLM", side_effect=RuntimeError("boom")):
         title = await generate_session_title("hello", model="groq/test-model")

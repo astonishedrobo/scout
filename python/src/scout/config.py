@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -228,6 +228,14 @@ class LLMConfig(BaseModel):
 
     providers: dict[str, LLMProviderConfig] = Field(default_factory=dict)
 
+    def _provider_models(self, name: str, prov: LLMProviderConfig) -> list[str]:
+        import os
+
+        env_models = os.environ.get(f"{name.upper()}_MODELS")
+        if env_models:
+            return [m.strip() for m in env_models.split(",") if m.strip()]
+        return prov.models
+
     def get_all_models(self) -> list[str]:
         """Return all models from every provider that has an api_key."""
         import os
@@ -243,14 +251,33 @@ class LLMConfig(BaseModel):
             prov = self.providers.get(name, LLMProviderConfig())
             api_key = prov.api_key or load_secret(f"{name.upper()}_API_KEY")
             if api_key:
-                env_models = os.environ.get(f"{name.upper()}_MODELS")
-                if env_models:
-                    models.extend([m.strip() for m in env_models.split(",") if m.strip()])
-                else:
-                    models.extend(prov.models)
+                models.extend(self._provider_models(name, prov))
         
         # Remove duplicates while preserving order
         return list(dict.fromkeys(models))
+
+    def get_model_client_kwargs(self, model: str) -> dict[str, str]:
+        """Return provider connection kwargs for a configured model."""
+        import os
+
+        provider_names = set(self.providers.keys())
+        for env_var in os.environ:
+            if env_var.endswith("_MODELS"):
+                provider_names.add(env_var[:-7].lower())
+
+        for name in provider_names:
+            prov = self.providers.get(name, LLMProviderConfig())
+            if model not in self._provider_models(name, prov):
+                continue
+            kwargs: dict[str, str] = {}
+            api_key = prov.api_key or load_secret(f"{name.upper()}_API_KEY")
+            api_base = prov.api_base or os.environ.get(f"{name.upper()}_API_BASE")
+            if api_key:
+                kwargs["api_key"] = api_key
+            if api_base:
+                kwargs["api_base"] = api_base
+            return kwargs
+        return {}
 
     def inject_env_vars(self) -> None:
         """Inject provider API keys / bases into ``os.environ``."""
@@ -265,6 +292,8 @@ class LLMConfig(BaseModel):
 
 
 # ── Top-level config ────────────────────────────────────────────────────────
+
+VisionCapability = Literal["supported", "unsupported", "unverified"] | bool
 
 
 class AppConfig(BaseModel):
@@ -293,6 +322,9 @@ class AppConfig(BaseModel):
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     session_titles: SessionTitlesConfig = Field(default_factory=SessionTitlesConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    model_capabilities: dict[str, dict[str, VisionCapability]] = Field(
+        default_factory=dict
+    )
 
     # Resolved absolute paths (populated after validation)
     _resolved_paths: dict[str, Path] = {}

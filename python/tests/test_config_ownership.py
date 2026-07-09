@@ -19,6 +19,51 @@ def test_deployment_config_is_strict_and_hashes(tmp_path: Path):
         load_deployment_config(path)
 
 
+def test_deployment_config_accepts_model_capabilities(tmp_path: Path):
+    path = tmp_path / "scout.yaml"
+    path.write_text(
+        "model_capabilities:\n"
+        "  hosted_vllm/Qwen/Qwen3-0.6B:\n"
+        "    vision: unsupported\n",
+        encoding="utf-8",
+    )
+
+    config = load_deployment_config(path)
+
+    assert config.model_capabilities == {
+        "hosted_vllm/Qwen/Qwen3-0.6B": {"vision": "unsupported"}
+    }
+
+
+def test_model_client_kwargs_use_provider_env(monkeypatch):
+    monkeypatch.setenv("VLLM_API_KEY", "local-vllm")
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm:8000/v1")
+    config = AppConfig(
+        llm={
+            "providers": {
+                "vllm": {"models": ["hosted_vllm/Qwen/Qwen3-0.6B"]}
+            }
+        }
+    )
+
+    assert config.llm.get_model_client_kwargs("hosted_vllm/Qwen/Qwen3-0.6B") == {
+        "api_key": "local-vllm",
+        "api_base": "http://vllm:8000/v1",
+    }
+
+
+def test_model_client_kwargs_match_env_models(monkeypatch):
+    monkeypatch.setenv("VLLM_API_KEY", "local-vllm")
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm:8000/v1")
+    monkeypatch.setenv("VLLM_MODELS", "hosted_vllm/Qwen/Qwen3-0.6B")
+    config = AppConfig()
+
+    assert config.llm.get_model_client_kwargs("hosted_vllm/Qwen/Qwen3-0.6B") == {
+        "api_key": "local-vllm",
+        "api_base": "http://vllm:8000/v1",
+    }
+
+
 def test_redacted_config_hides_provider_keys():
     config = AppConfig(llm={"providers": {"openai": {"api_key": "secret", "models": ["openai/x"]}}})
     assert redacted_config(config)["llm"]["providers"]["openai"]["api_key"] == "[REDACTED]"

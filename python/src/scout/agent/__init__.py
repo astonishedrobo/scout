@@ -284,6 +284,7 @@ class ScoutAgent:
             data_dir=self._data_dir,
             execution_service=self._execution,
             hooks_enabled=self._config.hooks.enabled,
+            llm_client_kwargs=self._config.llm.get_model_client_kwargs(cfg.model),
             personal_dir=self._cwd,
             shared_dir=self._shared_dir,
             server_mode=self._server_mode,
