@@ -1,11 +1,7 @@
 /**
- * Bordered tool-step group — Gemini ToolGroupMessage style.
+ * Integrated activity timeline: concise public reflections plus tool steps.
  *
- * Each step is a compact one-liner:
- *   ✓  run_code  import pandas as pd…
- *
- * Collapsed by default; pass `expanded={true}` to reveal
- * truncated output for completed steps.
+ * Reflections are always visible. Tool output previews are shown when expanded.
  */
 
 import React from "react";
@@ -18,7 +14,6 @@ import { theme, STATUS_ICONS } from "../theme.js";
 
 const MAX_OUTPUT_LINES = 15;
 const MAX_ARGS_WIDTH = 60;
-const TOOL_PADDING_X = 1;
 
 /* ── Props ───────────────────────────────────────────────────────── */
 
@@ -70,6 +65,14 @@ function truncateOutput(output: string): string {
   return `${shown}\n  … (${hidden} more lines)`;
 }
 
+function reflectionText(step: ToolStep): string {
+  return (step.reflection ?? step.output ?? "").trim();
+}
+
+function outputLines(output: string): string[] {
+  return truncateOutput(output).split("\n");
+}
+
 /* ── Component ───────────────────────────────────────────────────── */
 
 export const ActivityLog: React.FC<ActivityLogProps> = ({
@@ -82,49 +85,77 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
   return (
     <Box
       flexDirection="column"
-      borderStyle="round"
-      borderColor={theme.border.default}
-      paddingX={TOOL_PADDING_X}
       {...(width ? { width } : {})}
     >
-      {steps.map((step, i) => (
-        <Box key={i} flexDirection="column">
-          {/* ── Header: icon + name + args ────────────────── */}
-          <Box>
-            <Box width={2} flexShrink={0}>
-              {step.status === "executing" ? (
-                <Text color={theme.status.active}>
-                  <Spinner type="dots" />
+      {steps.map((step, i) => {
+        if (step.kind === "reflection") {
+          return (
+            <Box key={i} flexDirection="column" marginBottom={i === steps.length - 1 ? 0 : 1}>
+              <Box>
+                <Box width={3} flexShrink={0}>
+                  <Text color={theme.text.secondary}>◷</Text>
+                </Box>
+                <Text color={theme.text.secondary} italic wrap="wrap">
+                  {reflectionText(step)}
                 </Text>
-              ) : step.status === "complete" ? (
-                <Text color={theme.status.success}>
-                  {STATUS_ICONS.complete}
-                </Text>
-              ) : (
-                <Text color={theme.status.error}>
-                  {STATUS_ICONS.error}
-                </Text>
-              )}
+              </Box>
+              <Box>
+                <Box width={3} flexShrink={0}>
+                  <Text color={theme.status.success}>{STATUS_ICONS.complete}</Text>
+                </Box>
+                <Text color={theme.text.secondary}>Done</Text>
+              </Box>
             </Box>
-            <Text color={theme.tool.name} bold>
-              {step.name}
-            </Text>
-            <Text color={theme.tool.args}>
-              {" "}
-              {summarize(step)}
-            </Text>
-          </Box>
+          );
+        }
 
-          {/* ── Expanded output ───────────────────────────── */}
-          {expanded && step.status === "complete" && step.output && (
-            <Box paddingLeft={3}>
-              <Text color={theme.tool.output} dimColor>
-                {truncateOutput(step.output)}
+        return (
+          <Box key={i} flexDirection="column" marginBottom={i === steps.length - 1 ? 0 : 1}>
+            <Box>
+              <Box width={3} flexShrink={0}>
+                {step.status === "executing" ? (
+                  <Text color={theme.status.active}>
+                    <Spinner type="dots" />
+                  </Text>
+                ) : (
+                  <Text color={theme.text.secondary}>◎</Text>
+                )}
+              </Box>
+              <Text color={theme.tool.name} bold>
+                {step.name}
+              </Text>
+              <Text color={theme.tool.args}>
+                {" "}
+                {summarize(step)}
               </Text>
             </Box>
-          )}
-        </Box>
-      ))}
+
+            {expanded && step.status === "complete" && step.output && (
+              <Box flexDirection="column">
+                {outputLines(step.output).map((line, lineIndex) => (
+                  <Box key={lineIndex}>
+                    <Box width={3} flexShrink={0}>
+                      <Text color={theme.text.secondary}>│</Text>
+                    </Box>
+                    <Text color={theme.tool.output} dimColor wrap="wrap">
+                      {line}
+                    </Text>
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            {step.status === "complete" && (
+              <Box>
+                <Box width={3} flexShrink={0}>
+                  <Text color={theme.status.success}>{STATUS_ICONS.complete}</Text>
+                </Box>
+                <Text color={theme.text.secondary}>Done</Text>
+              </Box>
+            )}
+          </Box>
+        );
+      })}
     </Box>
   );
 };

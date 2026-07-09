@@ -56,6 +56,14 @@ export const MessageList: React.FC<MessageListProps> = ({
 }) => {
   const termWidth = width ?? (process.stdout.columns || 80);
   const contentWidth = Math.max(termWidth - PREFIX_WIDTH - 2, 20);
+  const activityLabel = (steps: ToolStep[]): string => {
+    const toolCount = steps.filter((step) => step.kind !== "reflection").length;
+    const reflectionCount = steps.length - toolCount;
+    const parts = [];
+    if (reflectionCount) parts.push(`${reflectionCount} reflection${reflectionCount > 1 ? "s" : ""}`);
+    if (toolCount) parts.push(`${toolCount} tool step${toolCount > 1 ? "s" : ""}`);
+    return parts.join(", ") || "activity";
+  };
 
   return (
     <Box flexDirection="column" width={termWidth}>
@@ -97,7 +105,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                   <Text color={theme.text.secondary} dimColor>
                     {expandedIndex === i
                       ? "press Tab to collapse"
-                      : `${msg.steps.length} tool step${msg.steps.length > 1 ? "s" : ""} — press Tab to expand`}
+                      : `${activityLabel(msg.steps)} — press Tab to expand`}
                   </Text>
                 </Box>
               )}

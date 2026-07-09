@@ -55,7 +55,7 @@ export function CenterModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -64,11 +64,11 @@ export function CenterModal({
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
+        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel/95 backdrop-blur-xl border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         {(title || showClose) && (
-          <div className="flex items-center justify-between px-5 py-3 border-b border-scout-hairline shrink-0">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-scout-hairline-faint shrink-0">
             {title ? (
               <h2 className="text-sm font-medium text-scout-text">{title}</h2>
             ) : (
@@ -77,7 +77,7 @@ export function CenterModal({
             {showClose && (
               <button
                 onClick={onClose}
-                className="p-1 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift transition-colors"
+                className="p-1 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 transition-colors"
                 aria-label="Close"
               >
                 <X size={18} />

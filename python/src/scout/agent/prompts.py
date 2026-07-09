@@ -31,13 +31,13 @@ TOOL_DESCRIPTIONS = {
     "run_node": "**`run_node`** — Execute JavaScript/Node.js in an isolated sandbox.",
     "apply_patch": "**`apply_patch`** — Apply unified-diff patches to one or more files in a single approval.",
     "write_file": "**`write_file`** — Create or overwrite a text file with a clear approval preview.",
-    "write_binary_artifact": "**`write_binary_artifact`** — Save base64-encoded binary output such as PNG files.",
+    "write_binary_artifact": "**`write_binary_artifact`** — Save valid base64-encoded binary output supplied by a trusted source. For generated images, prefer writing the file directly from a script or execution tool.",
     "read_file": "**`read_file`** — Read file contents.",
     "list_files": "**`list_files`** — List directory contents.",
     "search_documents": "**`search_documents`** — Keyword search across indexed text, Markdown, JSON, CSV, and PDF files.",
     "read_pdf": "**`read_pdf`** — Read content from a PDF.",
     "ask_human": "**`ask_human`** — Request blocking input only when required information cannot be discovered or safely assumed. Never use for tool permission or low-risk preferences.",
-    "think": "**`think`** — Record private reasoning when a complex task benefits from it.",
+    "think": "**`think`** — Emit a short user-facing reflection before or after tool use. Use it to explain what you are checking, what a result implies, or why the next action follows. Keep it concise; do not reveal hidden chain-of-thought.",
     "memory_search": "**`memory_search`** — Search long-term memory when workspace history or prior decisions matter.",
     "memory_read": "**`memory_read`** — Read a specific relevant memory item.",
     "memory_list": "**`memory_list`** — List available memory items.",
@@ -67,6 +67,8 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         "- **Keep output small.** Preview large tables and files instead of printing them in full.",
         "- **Recover from failures.** Read tool errors, correct the approach, and retry when reasonable. Never claim success after a failed or incomplete operation.",
     ]
+    if "think" in enabled_tools:
+        tips.append("- **Make tool-driven work traceable.** For multi-step tasks, use `think` before tool groups and after surprising or decision-changing results. Write concise public status like `I'll inspect the file before editing it` or `That output shows the headings are plain text, so I'll patch them as Markdown headings.` Do not expose private chain-of-thought.")
     if "exec_command" in enabled_tools:
         tips.append("- **Use uv-managed Python for data work.** For non-trivial analysis, create or generate a `.py` script and run it through `exec_command` with `uv run script.py`; add missing dependencies with `uv run --with <package> script.py` for one-off runs or `uv init --bare` plus `uv add <package>` for a workspace project.")
     if ("run_python" in enabled_tools or "run_code" in enabled_tools) and "exec_command" not in enabled_tools:
@@ -87,7 +89,8 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
     if enabled_tools & WRITE_TOOLS:
         tips.append("- **Verify changes.** After edits, run the smallest relevant checks or inspect the resulting file. Report clearly when verification could not be run.")
     if "write_file" in enabled_tools or "write_binary_artifact" in enabled_tools:
-        tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts. When asked to embed an image, inline its bytes as a `data:image/...;base64,...` URI; a relative `<img src=\"file.png\">` only references the image and is not embedded.")
+        tips.append("- **Deliver generated files through artifacts.** When the user asks for an image, chart, markdown document, HTML page, CSV, or other generated file, create/save a real workspace-relative file so the UI can surface it as an artifact. Do not print binary bytes, raw image bytes, or model-invented base64 in the final answer.")
+        tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts. When asked to embed an image inside HTML, inline its bytes as a `data:image/...;base64,...` URI from an actual saved/read file; a relative `<img src=\"file.png\">` only references the image and is not embedded.")
         tips.append("- **Markdown artifacts may reference sibling workspace images.** Use normal relative Markdown image syntax such as `![Plot](plot.png)`; external image URLs and path traversal are blocked.")
     if "run_node" in enabled_tools and "write_binary_artifact" in enabled_tools:
         tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from scripts or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
@@ -160,6 +163,29 @@ user's machine.
 ## Tool Usage Tips
 
 {tool_tips_section}
+
+## Artifact Workflow
+
+Scout has a UI artifact panel for generated files. Use it deliberately:
+
+- If the user asks you to create or show a file, document, chart, generated image, web page, report, or dataset export, save it to a simple workspace-relative path with the appropriate extension (`.md`, `.png`, `.svg`, `.html`, `.csv`, `.json`, etc.).
+- For Markdown documents, write actual Markdown structure: one `# Title`, `## Section` headings, lists/tables where appropriate, and blank lines between blocks. Do not use bare section labels without heading markers.
+- After saving, rely on the artifact system to present the file. In your response, briefly say what you created and reference the relative filename.
+- For generated images, charts, and other binary assets, write the file directly from Python/Node/shell code. Never dump raw bytes, byte arrays, or invented base64 into the chat.
+- Use `write_binary_artifact` only when you already have valid base64 from a real trusted source. Do not ask the model to synthesize base64 for an image.
+- Prefer self-contained HTML artifacts. If HTML needs embedded images/assets, create them from actual files and inline them as data URIs; otherwise keep sibling asset references explicit.
+
+## Visible Reasoning
+
+For tool-heavy or investigative work, make the chain of action easy to follow:
+
+- You can do **interleaved thinking**: alternate between short public reflections, tool calls, tool results, and updated reflections as the task unfolds.
+- When a tool call follows from a decision, include a short user-facing progress note with that tool request when the model/provider supports it. Use the `think` tool only when a separate visible reflection is useful.
+- Before a meaningful tool group, briefly state what you are about to inspect or change.
+- After a tool result changes the plan, briefly state what changed and what you will do next.
+- Phrase visible reflections as status updates, not final-answer prose. Good: "I'll check the existing file before patching it." Bad: "Reflection before tool:".
+- Keep these reflections short and user-facing. Do not expose hidden chain-of-thought, exhaustive deliberation, or private scratchpad reasoning.
+- Skip visible reflections for trivial one-step tasks where they would add noise.
 
 {write_section}
 

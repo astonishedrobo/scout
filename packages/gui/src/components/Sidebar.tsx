@@ -100,13 +100,16 @@ export function Sidebar({
   };
 
   return (
-    <div className="flex flex-col h-full w-[260px] bg-transparent border-r border-scout-hairline overflow-hidden">
+    <div className="flex flex-col h-full w-[260px] bg-transparent border-r border-scout-hairline-faint overflow-hidden">
       <div className="px-4 pb-3">
         <div className="flex items-center justify-between h-12 mb-3">
-          <span className="font-semibold text-scout-text text-[15px]">Scout</span>
+          <span className="inline-flex items-center gap-2 font-semibold text-scout-text text-[15px] tracking-[-0.02em]">
+            <span className="h-2 w-2 rounded-full bg-scout-text/80" />
+            Scout
+          </span>
           <button
             onClick={onToggleTheme}
-            className="p-2 rounded-btn hover:bg-scout-lift text-scout-muted transition-colors"
+            className="p-2 rounded-btn hover:bg-scout-lift/80 text-scout-muted hover:text-scout-text transition-colors"
             title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
           >
             {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
@@ -127,7 +130,7 @@ export function Sidebar({
       </div>
 
       {!hasModels && isConnected && !isMultiUser && (
-        <div className="mx-4 mb-3 p-3 rounded-xl bg-scout-warning-muted">
+        <div className="mx-4 mb-3 p-3 rounded-2xl bg-scout-warning-muted border border-scout-warning/15">
           <div className="flex items-start gap-2">
             <AlertTriangle size={14} className="text-scout-warning mt-0.5 shrink-0" />
             <div>
@@ -146,7 +149,7 @@ export function Sidebar({
 
       <div className="flex-1 overflow-y-auto px-4 pt-1">
         {sessions.length > 0 && (
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted px-1 py-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-scout-muted/80 px-1 py-2">
             Recents
           </p>
         )}
@@ -159,10 +162,10 @@ export function Sidebar({
             {sessions.map((s) => (
               <div
                 key={s.sessionId}
-                className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-sm
+                className={`group flex items-center gap-2 px-3 py-2.5 rounded-2xl cursor-pointer transition-all text-sm border
                   ${s.sessionId === currentSessionId
-                    ? "bg-scout-input-bg ring-1 ring-scout-hairline"
-                    : "bg-transparent hover:bg-scout-input-bg"
+                    ? "bg-scout-lift/70 border-scout-hairline-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+                    : "bg-transparent border-transparent hover:bg-scout-input-bg/70 hover:border-scout-hairline-faint"
                   }`}
                 onClick={() => onResumeSession(s.sessionId)}
               >
@@ -185,7 +188,7 @@ export function Sidebar({
                       }}
                     />
                   ) : (
-                    <span className="block truncate text-[13px] font-medium text-scout-text">{s.title}</span>
+                    <span className="block truncate text-[13px] font-medium text-scout-text/95">{s.title}</span>
                   )}
                   <span className="text-caption text-scout-muted">{timeAgo(s.updatedAt)}</span>
                   {s.parentSessionId && (
@@ -207,7 +210,7 @@ export function Sidebar({
                     setEditingId(s.sessionId);
                     setEditingTitle(s.title);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text"
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift"
                   title="Edit title"
                 >
                   <Pencil size={13} />
@@ -217,7 +220,7 @@ export function Sidebar({
                     e.stopPropagation();
                     setDeleteTarget(s);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error"
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error hover:bg-scout-lift"
                   title="Delete session"
                 >
                   <Trash2 size={13} />
@@ -282,10 +285,10 @@ export function Sidebar({
 
         <button
           onClick={() => setBottomExpanded((p) => !p)}
-          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm text-scout-text hover:bg-scout-input-bg transition-colors"
+          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-2xl text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
           title="Account & app menu"
         >
-          <div className="w-7 h-7 rounded-pill bg-scout-input-bg flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-pill bg-scout-input-bg border border-scout-hairline-faint flex items-center justify-center shrink-0">
             {username ? (
               <span className="text-caption font-semibold text-scout-text uppercase">
                 {username.charAt(0)}
@@ -340,7 +343,7 @@ function BottomNavItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-btn text-sm font-medium text-scout-text hover:bg-scout-lift transition-colors"
+      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-scout-text hover:bg-scout-lift/80 transition-colors"
     >
       {icon}
       {label}

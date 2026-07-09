@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 COPY packages/ ./packages/
+COPY python/ ./python/
 
 RUN npm install
 RUN npm run build:core && npm run build:gui

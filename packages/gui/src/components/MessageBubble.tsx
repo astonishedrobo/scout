@@ -37,7 +37,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
     return (
       <div className="flex justify-end group w-full">
         <div className="max-w-[min(75%,34rem)]">
-          <div className="bg-scout-input-bg rounded-2xl px-4 py-2.5 shadow-none">
+          <div className="bg-scout-input-bg/90 border border-scout-hairline-faint rounded-2xl px-4 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
             {!!message.chatImages?.length && (
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {message.chatImages.map((image) => (
@@ -59,8 +59,8 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
           <div className="mt-1 flex justify-end">
             <button
               onClick={handleCopy}
-              className="hover-reveal p-2 rounded-btn text-scout-muted hover:text-scout-text
-                       hover:bg-scout-lift"
+            className="hover-reveal p-2 rounded-btn text-scout-muted hover:text-scout-text
+                       hover:bg-scout-lift/80"
               title="Copy message"
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -79,15 +79,21 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
         </div>
       </div>
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
-        <ArtifactCards artifacts={message.artifacts} onOpen={onOpenArtifact} onOpenMemories={onOpenMemories} />
+        <ArtifactCards
+          artifacts={message.artifacts}
+          onOpen={onOpenArtifact}
+          onOpenMemories={onOpenMemories}
+          baseUrl={baseUrl}
+          token={token}
+        />
       )}
       {hasMemoryUpdate && <MemoryUpdateChip onOpenMemories={onOpenMemories} className="mt-3" />}
 
-      <div className="flex items-center gap-0.5 mt-2">
+      <div className="flex items-center gap-0.5 mt-2 -ml-1">
         <button
           onClick={handleCopy}
           className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                     hover:bg-scout-lift transition-colors"
+                     hover:bg-scout-lift/80 transition-colors"
           title="Copy response"
         >
           {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -96,7 +102,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
           <button
             onClick={onRetry}
             className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                       hover:bg-scout-lift transition-colors"
+                       hover:bg-scout-lift/80 transition-colors"
             title="Retry"
           >
             <RotateCcw size={16} />
@@ -106,7 +112,7 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
           <button
             onClick={onFork}
             className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                       hover:bg-scout-lift transition-colors"
+                       hover:bg-scout-lift/80 transition-colors"
             title="Fork from here"
           >
             <GitBranch size={16} />

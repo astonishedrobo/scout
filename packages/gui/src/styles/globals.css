@@ -11,34 +11,32 @@
    * mapped plainly in the config.
    */
 
-  /* Light mode — Pika paper: warm cream canvas, confident ink, vivid pastels */
+  /* Light mode — warm neutral canvas with quiet, modern surfaces. */
   :root.light {
-    --scout-canvas: 251 249 244;
+    --scout-canvas: 250 249 246;
     --scout-panel: 255 255 255;
     --scout-void: 13 13 13;
     --scout-charcoal: 31 31 31;
     --scout-text: 13 13 13;
     --scout-text-inverse: 255 255 255;
-    --scout-muted: 97 92 84;
-    --scout-hairline: 234 230 221;
-    --scout-hairline-faint: rgba(13, 13, 13, 0.06);
-    --scout-lift: 243 240 233;
-    --scout-input-bg: 243 240 233;
-    --scout-code-bg: 246 243 236;
+    --scout-muted: 107 103 96;
+    --scout-hairline: 226 222 213;
+    --scout-hairline-faint: rgba(13, 13, 13, 0.055);
+    --scout-lift: 244 242 237;
+    --scout-input-bg: 246 244 239;
+    --scout-code-bg: 246 244 239;
     --scout-peach: 240 168 104;
     --scout-peach-muted: rgba(240, 168, 104, 0.18);
     --scout-lavender: 185 164 247;
     --scout-lavender-muted: rgba(185, 164, 247, 0.2);
     --scout-amber: 240 193 79;
     --scout-amber-muted: rgba(240, 193, 79, 0.2);
-    /* Pika-style card blocks — vivid but soft pastel tints */
-    --scout-card-lavender: 214 199 250;
-    --scout-card-lavender-hover: 202 184 247;
-    --scout-card-peach: 249 206 165;
-    --scout-card-peach-hover: 246 192 142;
-    --scout-card-amber: 250 222 140;
-    --scout-card-amber-hover: 247 211 110;
-    /* Brand action yellow — the Pika CTA accent */
+    --scout-card-lavender: 246 244 250;
+    --scout-card-lavender-hover: 241 238 248;
+    --scout-card-peach: 250 245 239;
+    --scout-card-peach-hover: 247 240 232;
+    --scout-card-amber: 250 247 239;
+    --scout-card-amber-hover: 247 243 232;
     --scout-action: 245 197 24;
     --scout-action-muted: rgba(245, 197, 24, 0.18);
     --scout-accent-cta: var(--scout-action);
@@ -58,9 +56,9 @@
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
     --shadow-pop:
-      0 12px 32px rgba(30, 24, 10, 0.12),
-      0 2px 8px rgba(30, 24, 10, 0.06);
-    --shadow-card-hover: 0 8px 24px rgba(30, 24, 10, 0.1);
+      0 24px 80px rgba(30, 24, 10, 0.12),
+      0 2px 12px rgba(30, 24, 10, 0.06);
+    --shadow-card-hover: 0 12px 36px rgba(30, 24, 10, 0.09);
     --radius-pill: 9999px;
     --radius-hero: 24px;
     --radius-card: 20px;
@@ -70,35 +68,33 @@
     --text-caption: 12px;
   }
 
-  /* Dark mode — neutral near-black (no warm cast); color lives in the accents */
+  /* Dark mode — near-black with subtle lifted surfaces and restrained color. */
   :root.dark,
   :root {
-    --scout-canvas: 17 17 17;
-    --scout-panel: 28 28 28;
+    --scout-canvas: 16 16 16;
+    --scout-panel: 25 25 25;
     --scout-void: 13 13 13;
     --scout-charcoal: 40 40 40;
     --scout-text: 255 255 255;
     --scout-text-inverse: 13 13 13;
-    --scout-muted: 172 172 172;
-    --scout-hairline: 54 54 54;
-    --scout-hairline-faint: rgba(255, 255, 255, 0.08);
-    --scout-lift: 40 40 40;
-    --scout-input-bg: 34 34 34;
-    --scout-code-bg: 22 22 22;
+    --scout-muted: 165 165 165;
+    --scout-hairline: 48 48 48;
+    --scout-hairline-faint: rgba(255, 255, 255, 0.065);
+    --scout-lift: 33 33 33;
+    --scout-input-bg: 29 29 29;
+    --scout-code-bg: 21 21 21;
     --scout-peach: 224 151 90;
     --scout-peach-muted: rgba(224, 151, 90, 0.22);
     --scout-lavender: 178 156 247;
     --scout-lavender-muted: rgba(178, 156, 247, 0.2);
     --scout-amber: 232 181 62;
     --scout-amber-muted: rgba(232, 181, 62, 0.2);
-    /* Card blocks — deep chromatic tints on the warm void */
-    --scout-card-lavender: 52 44 90;
-    --scout-card-lavender-hover: 64 55 106;
-    --scout-card-peach: 74 49 28;
-    --scout-card-peach-hover: 90 61 38;
-    --scout-card-amber: 76 60 22;
-    --scout-card-amber-hover: 92 74 30;
-    /* Brand action yellow — the Pika CTA accent */
+    --scout-card-lavender: 31 30 35;
+    --scout-card-lavender-hover: 38 36 44;
+    --scout-card-peach: 34 31 28;
+    --scout-card-peach-hover: 43 38 33;
+    --scout-card-amber: 34 32 27;
+    --scout-card-amber-hover: 43 40 32;
     --scout-action: 250 204 21;
     --scout-action-muted: rgba(250, 204, 21, 0.16);
     --scout-accent-cta: var(--scout-action);
@@ -118,9 +114,9 @@
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
     --shadow-pop:
-      0 12px 32px rgba(0, 0, 0, 0.55),
-      0 2px 8px rgba(0, 0, 0, 0.4);
-    --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.45);
+      0 28px 90px rgba(0, 0, 0, 0.5),
+      0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    --shadow-card-hover: 0 18px 48px rgba(0, 0, 0, 0.36);
     --radius-pill: 9999px;
     --radius-hero: 24px;
     --radius-card: 20px;
@@ -162,17 +158,17 @@
 
 @layer components {
   .font-display {
-    font-family: "Archivo Black", ui-sans-serif, system-ui, sans-serif;
-    font-weight: 900;
-    letter-spacing: -0.02em;
-    line-height: 0.92;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-weight: 650;
+    letter-spacing: -0.045em;
+    line-height: 1;
     text-wrap: balance;
   }
 
   .text-display {
     font-size: var(--text-display);
-    line-height: 0.92;
-    letter-spacing: -0.02em;
+    line-height: 1;
+    letter-spacing: -0.045em;
   }
 
   .text-body {
@@ -204,7 +200,7 @@
   }
 
   .prose-scout pre {
-    @apply bg-scout-code-bg border border-scout-border rounded-card p-4 overflow-x-auto;
+    @apply bg-scout-code-bg border border-scout-hairline-faint rounded-2xl p-4 overflow-x-auto;
   }
 
   /* CodeBlock shell already has border/radius — inner pre must stay flush with the header */
@@ -213,7 +209,7 @@
   }
 
   .prose-scout code:not(pre code) {
-    @apply text-scout-text bg-scout-code-bg px-1.5 py-0.5 rounded-btn text-sm font-mono border border-scout-border;
+    @apply text-scout-text bg-scout-code-bg px-1.5 py-0.5 rounded-lg text-sm font-mono border border-scout-hairline-faint;
   }
 
   .prose-scout table {
@@ -265,6 +261,53 @@
   }
   .prose-scout hr {
     @apply border-scout-border my-4;
+  }
+
+  .artifact-document {
+    font-family: Georgia, "Times New Roman", ui-serif, serif;
+    color: rgb(var(--scout-text));
+  }
+
+  .artifact-document.prose-scout {
+    font-size: 16.5px;
+    line-height: 1.68;
+    letter-spacing: -0.012em;
+  }
+
+  .artifact-document.prose-scout h1,
+  .artifact-document.prose-scout h2,
+  .artifact-document.prose-scout h3 {
+    font-family: Georgia, "Times New Roman", ui-serif, serif;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    color: rgb(var(--scout-text));
+  }
+
+  .artifact-document.prose-scout h1 {
+    font-size: 2.05rem;
+    line-height: 1.12;
+    margin-top: 0;
+    margin-bottom: 1.1rem;
+  }
+
+  .artifact-document.prose-scout h2 {
+    font-size: 1.28rem;
+    line-height: 1.25;
+    margin-top: 1.8rem;
+    margin-bottom: 0.55rem;
+    padding-top: 0.2rem;
+  }
+
+  .artifact-document.prose-scout h3 {
+    font-size: 1.08rem;
+    line-height: 1.3;
+    margin-top: 1.4rem;
+    margin-bottom: 0.45rem;
+  }
+
+  .artifact-document.prose-scout p {
+    margin-top: 0.65rem;
+    margin-bottom: 0.65rem;
   }
 }
 

@@ -1,5 +1,15 @@
 import { useState } from "react";
-import { ChevronDown, Check, Loader2 } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  CircleDashed,
+  FileText,
+  FolderOpen,
+  Loader2,
+  PencilLine,
+  Search,
+  Terminal,
+} from "lucide-react";
 import type { ToolStep } from "scout-core";
 
 interface ToolCardProps {
@@ -7,99 +17,207 @@ interface ToolCardProps {
   defaultExpanded?: boolean;
 }
 
-function summarize(step: ToolStep): string {
-  const { name, args } = step;
-  const MAX = 60;
+type ToolGroup = {
+  key: string;
+  reflections: string[];
+  steps: ToolStep[];
+};
 
-  if (name === "memory_add_note") return "Updated MEMORY.md";
-  if (name === "run_code") {
-    const desc = String(args?.description ?? "").trim();
-    if (desc) return desc.substring(0, MAX);
-    const code = String(args?.code ?? "").split("\n");
-    let s = code[0]?.substring(0, MAX) ?? "";
-    if (code.length > 1 || (code[0]?.length ?? 0) > MAX) s += "...";
-    return s;
-  }
-  if (name === "search_documents") return String(args?.query ?? "");
-  if (name === "read_pdf") {
-    let s = String(args?.path ?? "");
-    if (args?.query) s += ` -> "${args.query}"`;
-    return s;
-  }
-  if (name === "read_file") return String(args?.path ?? "");
-  if (name === "exec_command") return String(args?.cmd ?? "").substring(0, MAX);
-  if (name === "write_stdin") {
-    const sid = args?.session_id ?? "?";
-    return args?.chars ? `session ${sid}` : `poll session ${sid}`;
-  }
-  if (name === "think") {
-    const text = String(args?.reflection ?? "");
-    return text.substring(0, 80) + (text.length > 80 ? "..." : "");
-  }
-
-  const raw = JSON.stringify(args ?? {});
-  return raw.length > MAX ? raw.substring(0, MAX) + "..." : raw;
+function pathFrom(step: ToolStep): string {
+  return String(step.args?.path ?? step.args?.file ?? step.args?.directory ?? "").trim();
 }
 
-export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+function filename(path: string): string {
+  return path.split("/").filter(Boolean).pop() || path || "";
+}
 
-  if (steps.length === 0) return null;
+function displayName(step: ToolStep, tense: "present" | "past" = "past"): string {
+  const path = pathFrom(step);
+  const file = filename(path);
+  switch (step.name) {
+    case "write_file":
+    case "write_binary_artifact":
+      return tense === "present"
+        ? `Creating ${file || "a file"}`
+        : `Created ${file || "a file"}`;
+    case "apply_patch":
+      return tense === "present" ? "Updating files" : "Updated files";
+    case "read_file":
+      return tense === "present"
+        ? `Reading ${file || "a file"}`
+        : `Read ${file || "a file"}`;
+    case "list_files":
+      return tense === "present" ? "Checking files" : "Checked files";
+    case "search_documents":
+      return tense === "present" ? "Searching documents" : "Searched documents";
+    case "read_pdf":
+      return tense === "present"
+        ? `Reading ${file || "PDF"}`
+        : `Read ${file || "PDF"}`;
+    case "exec_command":
+      return tense === "present" ? "Running command" : "Ran command";
+    case "run_node":
+      return tense === "present" ? "Running JavaScript" : "Ran JavaScript";
+    case "run_python":
+    case "run_code":
+      return tense === "present" ? "Running Python" : "Ran Python";
+    case "write_stdin":
+      return tense === "present" ? "Checking command output" : "Checked command output";
+    case "memory_add_note":
+      return tense === "present" ? "Updating memory" : "Updated memory";
+    default:
+      return tense === "present" ? "Using a tool" : "Used a tool";
+  }
+}
 
-  const completedCount = steps.filter((s) => s.status === "complete").length;
-  const isRunning = steps.some((s) => s.status === "executing");
-  const showOutput = (step: ToolStep) => {
-    return step.name !== "memory_add_note" && step.output && (step.status === "complete" || step.status === "executing");
+function detailText(step: ToolStep): string {
+  const path = pathFrom(step);
+  if (path) return path;
+  if (step.name === "search_documents") return String(step.args?.query ?? "");
+  if (step.name === "exec_command") return String(step.args?.cmd ?? "");
+  if (step.name === "run_python" || step.name === "run_code" || step.name === "run_node") {
+    return String(step.args?.description ?? step.args?.code ?? "").split("\n")[0] ?? "";
+  }
+  return "";
+}
+
+function iconFor(step: ToolStep) {
+  if (step.status === "executing") return Loader2;
+  if (step.name === "write_file" || step.name === "write_binary_artifact") return FileText;
+  if (step.name === "apply_patch") return PencilLine;
+  if (step.name === "read_file" || step.name === "read_pdf") return FileText;
+  if (step.name === "list_files") return FolderOpen;
+  if (step.name === "search_documents") return Search;
+  if (step.name === "exec_command" || step.name === "run_python" || step.name === "run_code" || step.name === "run_node") return Terminal;
+  return Check;
+}
+
+function groupTitle(group: ToolGroup): string {
+  const reflectionTitle = group.reflections.find(Boolean);
+  if (reflectionTitle) {
+    const firstSentence = reflectionTitle.split(/(?<=[.!?])\s+/)[0] ?? reflectionTitle;
+    return firstSentence.length > 86 ? `${firstSentence.slice(0, 83)}...` : firstSentence;
+  }
+
+  const running = group.steps.some((step) => step.status === "executing");
+  const names = group.steps.map((step) => displayName(step, running ? "present" : "past"));
+  const unique = names.filter((name, index) => names.indexOf(name) === index);
+  if (unique.length === 0) return running ? "Working" : "Completed work";
+  if (unique.length === 1) return unique[0] ?? "";
+  if (unique.length === 2) return `${unique[0]}, ${unique[1]}`;
+  return `${unique.slice(0, 2).join(", ")} + ${unique.length - 2} more`;
+}
+
+function buildGroups(steps: ToolStep[]): ToolGroup[] {
+  const items: ToolGroup[] = [];
+  let current: ToolGroup = { key: "group-0", reflections: [], steps: [] };
+
+  const flush = () => {
+    if (!current.reflections.length && !current.steps.length) return;
+    items.push({ ...current, key: `group-${items.length}` });
+    current = { key: `group-${items.length + 1}`, reflections: [], steps: [] };
   };
 
+  for (const step of steps) {
+    if (step.kind === "reflection") {
+      const text = (step.reflection ?? step.output ?? "").trim();
+      if (!text) continue;
+      if (current.steps.length > 0) flush();
+      current.reflections.push(text);
+    } else {
+      current.steps.push(step);
+    }
+  }
+  flush();
+  return items;
+}
+
+function hasOutput(group: ToolGroup): boolean {
+  return group.steps.some((step) => step.output && step.name !== "memory_add_note");
+}
+
+function ActivityGroup({ group, defaultExpanded }: { group: ToolGroup; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const running = group.steps.some((step) => step.status === "executing");
+  const outputAvailable = hasOutput(group);
+
   return (
-    <div className="mb-3">
+    <div className="space-y-1">
       <button
-        onClick={() => setExpanded((p) => !p)}
-        className="flex items-center gap-2 text-xs text-scout-muted hover:text-scout-text transition-colors py-1"
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="group flex items-center gap-2 text-left text-xs text-scout-muted hover:text-scout-text transition-colors"
       >
-        <ChevronDown
-          size={14}
-          className={`transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`}
+        <ChevronRight
+          size={13}
+          className={`shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
         />
-        {isRunning && (
-          <Loader2 size={12} className="animate-spin text-scout-text" />
+        {running ? (
+          <Loader2 size={13} className="animate-spin shrink-0" />
+        ) : (
+          <Check size={13} className="text-scout-success shrink-0" />
         )}
-        <span>
-          {completedCount}/{steps.length} tool step
-          {steps.length !== 1 ? "s" : ""}
-        </span>
+        <span>{groupTitle(group)}</span>
       </button>
 
       {expanded && (
-        <div className="mt-2 rounded-xl bg-scout-panel border border-scout-hairline-faint overflow-hidden">
-          {steps.map((step, i) => (
-            <div key={i} className={i > 0 ? "border-t border-scout-hairline-faint" : ""}>
-              <div className="flex items-center gap-2 px-3 py-2">
-                {step.status === "executing" ? (
-                  <Loader2 size={14} className="animate-spin text-scout-text shrink-0" />
-                ) : (
-                  <Check size={14} className="text-scout-success shrink-0" />
-                )}
-                <span className="text-xs font-mono font-normal text-scout-cyan">
-                  {step.name}
-                </span>
-                <span className="text-xs text-scout-muted truncate">
-                  {summarize(step)}
-                </span>
-              </div>
-
-              {showOutput(step) && (
-                <div className="px-3 pb-2">
-                  <pre className="text-xs text-scout-muted bg-scout-canvas rounded-btn p-2 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
-                    {step.output}
-                  </pre>
-                </div>
-              )}
+        <div className="ml-[6px] border-l border-scout-hairline-faint pl-4 pt-1 space-y-2">
+          {group.reflections.map((text, index) => (
+            <div key={`reflection-${index}`} className="flex items-start gap-2 text-xs text-scout-muted">
+              <CircleDashed size={13} className="mt-0.5 shrink-0 text-scout-muted/80" />
+              <p className="leading-relaxed">{text}</p>
             </div>
           ))}
+          {group.steps.map((step, index) => {
+            const Icon = iconFor(step);
+            const detail = detailText(step);
+            return (
+              <div key={index} className="space-y-1.5">
+                <div className="flex min-w-0 items-start gap-2 text-xs text-scout-muted">
+                  <Icon
+                    size={13}
+                    className={`${step.status === "executing" ? "animate-spin" : ""} mt-0.5 shrink-0`}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-scout-text/80">{displayName(step, step.status === "executing" ? "present" : "past")}</div>
+                    {detail && (
+                      <div className="mt-0.5 truncate font-mono text-[11px] text-scout-muted/75">
+                        {detail}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {outputAvailable && step.output && step.name !== "memory_add_note" && (
+                  <details className="ml-5">
+                    <summary className="cursor-pointer list-none text-[11px] text-scout-muted/75 hover:text-scout-text">
+                      Show output
+                    </summary>
+                    <pre className="mt-1 max-h-40 overflow-auto rounded-xl border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
+                      {step.output}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
+  if (steps.length === 0) return null;
+
+  return (
+    <div className="mb-4 space-y-3 text-scout-muted">
+      {buildGroups(steps).map((group) => (
+        <ActivityGroup
+          key={group.key}
+          group={group}
+          defaultExpanded={defaultExpanded}
+        />
+      ))}
     </div>
   );
 }

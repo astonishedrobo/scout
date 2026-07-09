@@ -1,5 +1,5 @@
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from scout.agent import ScoutAgent
 
@@ -52,3 +52,114 @@ async def test_stream_sends_full_tool_output_and_bounded_preview():
     assert result["output_preview"].endswith(
         "… +2 more lines (21 characters hidden)"
     )
+
+
+@pytest.mark.asyncio
+async def test_stream_converts_think_tool_to_reflection_event():
+    class FakeGraph:
+        async def astream(self, *_args, **_kwargs):
+            yield {
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "think",
+                                    "args": {
+                                        "reflection": "I found a mismatch, so I will inspect the narrower path next."
+                                    },
+                                    "id": "call-1",
+                                }
+                            ],
+                        )
+                    ]
+                }
+            }
+            yield {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content="[Thought recorded — continue with your plan.]",
+                            name="think",
+                            tool_call_id="call-1",
+                        )
+                    ]
+                }
+            }
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("trace it")]
+
+    assert any(
+        event == {
+            "type": "reflection",
+            "content": "I found a mismatch, so I will inspect the narrower path next.",
+            "tool_call_id": "call-1",
+        }
+        for event in events
+    )
+    assert not any(event.get("type") == "tool_call" and event.get("name") == "think" for event in events)
+    assert not any(event.get("type") == "tool_result" and event.get("name") == "think" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_stream_preserves_assistant_text_that_accompanies_tool_call():
+    class FakeGraph:
+        async def astream(self, *_args, **_kwargs):
+            yield {
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content="I’ll inspect the workspace first, then decide what to check next.",
+                            tool_calls=[
+                                {
+                                    "name": "exec_command",
+                                    "args": {"cmd": "ls -la"},
+                                    "id": "call-1",
+                                }
+                            ],
+                        )
+                    ]
+                }
+            }
+            yield {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content="total 0",
+                            name="exec_command",
+                            tool_call_id="call-1",
+                        )
+                    ]
+                }
+            }
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("demo")]
+
+    assert events[1] == {
+        "type": "reflection",
+        "content": "I’ll inspect the workspace first, then decide what to check next.",
+        "tool_call_id": "call-1",
+    }
+    assert events[2] == {
+        "type": "tool_call",
+        "name": "exec_command",
+        "args": {"cmd": "ls -la"},
+        "tool_call_id": "call-1",
+    }

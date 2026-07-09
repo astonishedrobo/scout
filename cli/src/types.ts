@@ -41,6 +41,7 @@ export interface ScoutConfig {
 // ── Chat events (server → client via SSE) ────────────────────────
 
 export type ToolStepStatus = "executing" | "complete";
+export type ActivityStepKind = "tool" | "reflection";
 
 export interface FileDiffEntry {
   path: string;
@@ -49,7 +50,16 @@ export interface FileDiffEntry {
 }
 
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "approval_request" | "session_title";
+  type:
+    | "accepted"
+    | "status"
+    | "reflection"
+    | "tool_call"
+    | "tool_result"
+    | "response"
+    | "error"
+    | "approval_request"
+    | "session_title";
   name?: string;
   args?: Record<string, unknown>;
   output?: string;
@@ -70,10 +80,12 @@ export interface ChatEvent {
  * Built from pairs of tool_call + tool_result events.
  */
 export interface ToolStep {
+  kind?: ActivityStepKind;
   name: string;
   args: Record<string, unknown>;
   status: ToolStepStatus;
   output?: string;
+  reflection?: string;
 }
 
 // ── File attachments ─────────────────────────────────────────────

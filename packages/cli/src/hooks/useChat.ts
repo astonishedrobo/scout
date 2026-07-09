@@ -55,10 +55,26 @@ interface UseChatReturn {
  * executing step with the matching name is marked "complete".
  */
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
+  if (event.type === "reflection") {
+    const reflection = (event.content ?? "").trim();
+    if (!reflection) return steps;
+    return [
+      ...steps,
+      {
+        kind: "reflection",
+        name: "reflection",
+        args: {},
+        status: "complete",
+        reflection,
+      },
+    ];
+  }
+
   if (event.type === "tool_call") {
     return [
       ...steps,
       {
+        kind: "tool",
         name: event.name ?? "unknown",
         args: event.args ?? {},
         status: "executing",
@@ -168,7 +184,7 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
           if (event.type === "response") {
             finalContent = event.content ?? "";
             setStatusMessage(undefined);
-          } else {
+          } else if (event.type === "tool_call" || event.type === "tool_result" || event.type === "reflection") {
             steps = applyEvent(steps, event);
             setStreamingSteps([...steps]);
             setStatusMessage(undefined);
@@ -178,6 +194,8 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
             } else if (event.type === "tool_result") {
               const stillRunning = steps.find((s) => s.status === "executing");
               setCurrentTool(stillRunning?.name);
+            } else if (event.type === "reflection") {
+              setCurrentTool(undefined);
             }
           }
         }

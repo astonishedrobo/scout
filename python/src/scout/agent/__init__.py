@@ -100,6 +100,22 @@ def _build_tool_summary(tool_steps: list[tuple[str, dict, str]]) -> str:
     return "\n\n".join(parts)
 
 
+def _message_text(content: object) -> str:
+    """Extract user-visible text from LangChain message content."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") in {"text", "input_text"} and item.get("text"):
+                    parts.append(str(item["text"]))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(content or "")
+
+
 class ScoutAgent:
     """Conversational data research agent backed by the execution sandbox."""
 
@@ -362,7 +378,7 @@ class ScoutAgent:
         response_emitted = False
         last_ai_content = ""
         tool_steps: list[tuple[str, dict, str]] = []
-        _pending_calls: dict[str, dict] = {}
+        _pending_calls: dict[str, dict[str, Any]] = {}
 
         output_q: asyncio.Queue = asyncio.Queue()
         graph_q: asyncio.Queue = asyncio.Queue()
@@ -392,17 +408,42 @@ class ScoutAgent:
                 for msg in state_update.get("messages", []):
                     new_messages.append(msg)
                     if isinstance(msg, AIMessage):
+                        visible_text = _message_text(msg.content).strip()
                         if msg.tool_calls:
+                            if visible_text:
+                                safe_text = redact_paths(visible_text, self._cwd, self._shared_dir)
+                                events.append({
+                                    "type": "reflection",
+                                    "content": safe_text,
+                                    "tool_call_id": msg.tool_calls[0]["id"],
+                                })
                             for tc in msg.tool_calls:
-                                _pending_calls[tc["id"]] = tc.get("args", {})
+                                args = tc.get("args", {}) or {}
+                                _pending_calls[tc["id"]] = {
+                                    "name": tc["name"],
+                                    "args": args,
+                                }
+                                if tc["name"] == "think":
+                                    reflection = str(args.get("reflection", "")).strip()
+                                    if reflection:
+                                        events.append({
+                                            "type": "reflection",
+                                            "content": redact_paths(
+                                                reflection,
+                                                self._cwd,
+                                                self._shared_dir,
+                                            ),
+                                            "tool_call_id": tc["id"],
+                                        })
+                                    continue
                                 events.append({
                                     "type": "tool_call",
                                     "name": tc["name"],
-                                    "args": tc.get("args", {}),
+                                    "args": args,
                                     "tool_call_id": tc["id"],
                                 })
-                        if msg.content and not msg.tool_calls:
-                            safe_content = redact_paths(msg.content, self._cwd, self._shared_dir)
+                        if visible_text and not msg.tool_calls:
+                            safe_content = redact_paths(visible_text, self._cwd, self._shared_dir)
                             last_ai_content = safe_content
                             response_emitted = True
                             self._record_memory_citations(safe_content)
@@ -411,7 +452,10 @@ class ScoutAgent:
                         full_output = msg.content if isinstance(msg.content, str) else str(msg.content or "")
                         output_preview = preview_tool_output(full_output)
                         name = msg.name or ""
-                        args = _pending_calls.pop(msg.tool_call_id, {})
+                        pending = _pending_calls.pop(msg.tool_call_id, {})
+                        args = pending.get("args", {})
+                        if pending.get("name") == "think" or name == "think":
+                            continue
                         tool_steps.append((name, args, output_preview))
                         events.append({
                             "type": "tool_result",

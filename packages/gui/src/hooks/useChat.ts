@@ -46,8 +46,23 @@ interface UseChatOptions {
 }
 
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
+  if (event.type === "reflection") {
+    const reflection = (event.content ?? "").trim();
+    if (!reflection) return steps;
+    return [
+      ...steps,
+      {
+        kind: "reflection",
+        name: "reflection",
+        args: {},
+        status: "complete",
+        reflection,
+      },
+    ];
+  }
+
   if (event.type === "tool_call") {
-    return [...steps, { name: event.name ?? "unknown", args: event.args ?? {}, status: "executing" }];
+    return [...steps, { kind: "tool", name: event.name ?? "unknown", args: event.args ?? {}, status: "executing" }];
   }
   if (event.type === "tool_output_chunk" && event.chunk) {
     const updated = [...steps];
@@ -212,12 +227,14 @@ export function useChat({
                 if (!artifacts.some((existing) => existing.id === artifact.id)) artifacts.push(artifact);
               }
             }
-            steps = applyEvent(steps, event);
-            update(requestSessionId, (state) => ({
-              ...state, streamingSteps: [...steps],
-              statusMessage: undefined,
-              currentTool: event.type === "tool_call" ? event.name : steps.find((step) => step.status === "executing")?.name,
-            }));
+            if (event.type === "tool_call" || event.type === "tool_output_chunk" || event.type === "tool_result" || event.type === "reflection") {
+              steps = applyEvent(steps, event);
+              update(requestSessionId, (state) => ({
+                ...state, streamingSteps: [...steps],
+                statusMessage: undefined,
+                currentTool: event.type === "tool_call" ? event.name : steps.find((step) => step.status === "executing")?.name,
+              }));
+            }
           } catch { /* skip malformed event */ }
         }
       }

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Artifact } from "scout-core";
-import { Download, RefreshCw, X } from "lucide-react";
+import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 const artifactScrollPositions = new Map<string, number>();
@@ -23,6 +23,7 @@ export function ArtifactPanel({
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestRef = useRef(0);
@@ -126,19 +127,44 @@ export function ArtifactPanel({
   }, [content, url, artifact.path]);
 
   const blocked = artifact.renderer === "html" && hasExternalAssets(content);
+  const rendererLabel = artifact.renderer === "markdown" ? "MD" : artifact.renderer.toUpperCase();
+  const canCopy = !!content && artifact.renderer !== "html";
+
+  const copyContent = () => {
+    if (!canCopy) return;
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    });
+  };
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <div className="h-11 px-3 flex items-center gap-2 shrink-0">
+      <div className="h-14 px-4 flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/85 backdrop-blur-xl">
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-normal truncate text-scout-text">{artifact.title}</div>
-          <div className="text-[10px] text-scout-muted truncate">{artifact.path}</div>
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="truncate text-sm font-medium text-scout-text">{artifact.title}</div>
+            <span className="rounded-md border border-scout-hairline-faint px-1.5 py-0.5 text-[10px] font-semibold text-scout-muted">
+              {rendererLabel}
+            </span>
+          </div>
+          <div className="text-[10px] text-scout-muted truncate">{artifact.path} · {formatSize(artifact.size)}</div>
         </div>
+        {canCopy && (
+          <button
+            onClick={copyContent}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift/80 transition-colors"
+            title="Copy artifact content"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            Copy
+          </button>
+        )}
         {url && (
           <a
             href={url}
             download={artifact.name}
-            className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift rounded-btn transition-colors"
+            className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
             title="Download"
           >
             <Download size={17} />
@@ -146,14 +172,14 @@ export function ArtifactPanel({
         )}
         <button
           onClick={() => setRefresh((value) => value + 1)}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift rounded-btn transition-colors"
+          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
           title="Refresh"
         >
           <RefreshCw size={17} className={isRefreshing ? "animate-spin" : ""} />
         </button>
         <button
           onClick={onClose}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift rounded-btn transition-colors"
+          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
           title="Close"
         >
           <X size={18} />
@@ -167,17 +193,21 @@ export function ArtifactPanel({
           preservedScrollRef.current = scrollTop;
           artifactScrollPositions.set(artifact.path, scrollTop);
         }}
-        className="flex-1 min-h-0 overflow-auto p-4 bg-scout-canvas"
+        className={`flex-1 min-h-0 overflow-auto bg-scout-canvas ${
+          artifact.renderer === "markdown" ? "px-5 py-8" : "p-4"
+        }`}
       >
         {blocked && (
-          <p className="mb-3 rounded-card border border-scout-warning/40 bg-scout-warning-muted p-2 text-xs text-scout-warning">
+          <p className="mb-3 rounded-2xl border border-scout-warning/25 bg-scout-warning-muted p-3 text-xs text-scout-warning">
             External assets were blocked. HTML previews must be self-contained.
           </p>
         )}
         {error && <p className="text-sm text-scout-error">{error}</p>}
         {!error && !url && <p className="text-sm text-scout-muted">Loading artifact...</p>}
         {artifact.renderer === "image" && url && (
-          <img src={url} alt={artifact.title} className="max-w-full mx-auto rounded-card" />
+          <div className="flex min-h-full items-start justify-center">
+            <img src={url} alt={artifact.title} className="max-w-full rounded-2xl border border-scout-hairline-faint shadow-pop" />
+          </div>
         )}
         {artifact.renderer === "html" && content && (
           <iframe
@@ -186,20 +216,20 @@ export function ArtifactPanel({
             title={artifact.title}
             srcDoc={sandboxHtml(content, artifact.path, baseUrl)}
             sandbox="allow-scripts"
-            className="w-full h-full min-h-[70vh] bg-white rounded-card border border-scout-hairline"
+            className="w-full h-full min-h-[70vh] bg-white rounded-2xl border border-scout-hairline-faint"
           />
         )}
         {artifact.renderer === "markdown" && content && (
-          <div className="prose-scout">
+          <div className="artifact-document prose-scout mx-auto max-w-[760px]">
             <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} artifactPath={artifact.path} />
           </div>
         )}
         {artifact.renderer === "json" && content && (
-          <pre className="text-xs whitespace-pre-wrap">{formatJson(content)}</pre>
+          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap">{formatJson(content)}</pre>
         )}
         {artifact.renderer === "csv" && content && <CsvPreview content={content} />}
         {(artifact.renderer === "code" || artifact.renderer === "text") && content && (
-          <pre className="text-xs whitespace-pre-wrap font-mono">{content}</pre>
+          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap font-mono">{content}</pre>
         )}
       </div>
     </div>
@@ -275,18 +305,24 @@ function formatJson(content: string) {
   }
 }
 
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function CsvPreview({ content }: { content: string }) {
   const rows = content.trim().split("\n").slice(0, 50).map((line) => line.split(","));
   if (rows.length === 0) return null;
   const headers = rows[0] ?? [];
   const body = rows.slice(1);
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-2xl border border-scout-hairline-faint bg-scout-panel/70">
       <table className="w-full text-xs border-collapse">
         <thead>
           <tr>
             {headers.map((h, i) => (
-              <th key={i} className="border border-scout-hairline px-2 py-1 text-left font-normal">
+              <th key={i} className="border-b border-r border-scout-hairline-faint bg-scout-input-bg px-2 py-1.5 text-left font-medium">
                 {h}
               </th>
             ))}
@@ -296,7 +332,7 @@ function CsvPreview({ content }: { content: string }) {
           {body.map((row, ri) => (
             <tr key={ri}>
               {row.map((cell, ci) => (
-                <td key={ci} className="border border-scout-hairline px-2 py-1">
+                <td key={ci} className="border-b border-r border-scout-hairline-faint px-2 py-1.5">
                   {cell}
                 </td>
               ))}

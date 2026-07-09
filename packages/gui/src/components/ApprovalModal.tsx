@@ -20,7 +20,7 @@ function DiffLine({ line }: { line: string }) {
 }
 
 const actionBtn =
-  "flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold transition-colors";
+  "flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold border border-transparent transition-all";
 
 export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
   const [suggestMode, setSuggestMode] = useState(false);
@@ -52,22 +52,22 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
               <p className="text-sm font-mono text-scout-muted">{pr.network_domains.join(", ")}</p>
             </div>
           )}
-          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline">
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline-faint">
             <button
               onClick={() => onRespond("allow_once")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
             >
               <Check size={16} /> Allow Once
             </button>
             <button
               onClick={() => onRespond("allow_session")}
-              className={`${actionBtn} bg-scout-lift text-scout-text`}
+              className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
             >
               <CheckCheck size={16} /> Allow for Session
             </button>
             <button
               onClick={() => onRespond("deny")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
             >
               <XCircle size={16} /> Deny
             </button>
@@ -109,7 +109,7 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
           {Object.keys(cap.scope).length > 0 && (
             <div>
               <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Scope</span>
-              <pre className="text-xs font-mono bg-scout-canvas rounded-btn p-2 mt-1 overflow-x-auto border border-scout-hairline">
+              <pre className="text-xs font-mono bg-scout-code-bg rounded-xl p-2 mt-1 overflow-x-auto border border-scout-hairline-faint">
                 {JSON.stringify(cap.scope, null, 2)}
               </pre>
             </div>
@@ -128,22 +128,22 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
               <span className="text-xs text-scout-muted">Save to execpolicy (always allow this prefix)</span>
             </label>
           )}
-          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline">
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline-faint">
             <button
               onClick={() => onRespond("allow_once")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
             >
               <Check size={16} /> Allow Once
             </button>
             <button
               onClick={() => onRespond("allow_session", undefined, saveExecpolicy)}
-              className={`${actionBtn} bg-scout-lift text-scout-text`}
+              className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
             >
               <CheckCheck size={16} /> Allow for Session
             </button>
             <button
               onClick={() => onRespond("deny")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
             >
               <XCircle size={16} /> Deny
             </button>
@@ -194,12 +194,12 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
           return (
             <div key={i}>
               <div className="flex items-center gap-2 mb-2">
-                <span className={`text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-md border border-scout-hairline ${statusColor}`}>
+                <span className={`text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-lg border border-scout-hairline-faint ${statusColor}`}>
                   {statusLabel}
                 </span>
                 <span className="text-sm text-scout-text font-mono">{entry.path}</span>
               </div>
-              <div className="bg-scout-canvas rounded-card border border-scout-hairline p-3 overflow-x-auto max-h-48 overflow-y-auto">
+              <div className="bg-scout-code-bg rounded-2xl border border-scout-hairline-faint p-3 overflow-x-auto max-h-48 overflow-y-auto">
                 {lines.slice(0, 30).map((line, j) => (
                   <DiffLine key={j} line={line} />
                 ))}
@@ -214,19 +214,19 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
         })}
       </div>
 
-      <div className="px-5 py-4 border-t border-scout-hairline">
+      <div className="px-5 py-4 border-t border-scout-hairline-faint">
         {!suggestMode ? (
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => onRespond("yes")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success`}
+              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
             >
               <Check size={16} /> {isPromotion ? "Promote" : "Approve"}
             </button>
             {!isPromotion && (
               <button
                 onClick={() => onRespond("always")}
-                className={`${actionBtn} bg-scout-lift text-scout-text`}
+                className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
               >
                 <CheckCheck size={16} /> Always Approve
               </button>
@@ -234,7 +234,7 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             {request.canShare && !isPromotion && (
               <button
                 onClick={() => onRespond("shared")}
-                className={`${actionBtn} bg-scout-lift text-scout-cyan`}
+                className={`${actionBtn} bg-scout-lift/80 text-scout-cyan border-scout-hairline-faint hover:bg-scout-lift`}
                 title="Move into the shared team repo"
               >
                 <Share2 size={16} /> Approve &amp; Save to Shared
@@ -242,13 +242,13 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             )}
             <button
               onClick={() => setSuggestMode(true)}
-              className={`${actionBtn} text-scout-muted hover:text-scout-text`}
+              className={`${actionBtn} text-scout-muted hover:text-scout-text hover:bg-scout-lift/80`}
             >
               <MessageSquare size={16} /> Suggest Changes
             </button>
             <button
               onClick={() => onRespond("no")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error ml-auto`}
+              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
             >
               <XCircle size={16} /> Reject
             </button>

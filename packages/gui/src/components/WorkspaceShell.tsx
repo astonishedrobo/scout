@@ -38,7 +38,7 @@ export function WorkspaceShell({
   const sidebarHidden = sidebarCollapsed && isDesktop;
 
   return (
-    <div className="h-screen flex overflow-hidden bg-scout-canvas">
+    <div className="h-screen flex overflow-hidden bg-scout-canvas text-scout-text">
       {showSidebarOverlay && (
         <div
           className="fixed inset-0 bg-black/50 z-20 lg:hidden"
@@ -48,7 +48,7 @@ export function WorkspaceShell({
 
       <aside
         className={`
-          fixed lg:relative z-30 h-full shrink-0 bg-scout-canvas
+          fixed lg:relative z-30 h-full shrink-0 bg-scout-canvas/95 backdrop-blur-xl
           transition-[width,transform] duration-200 ease-in-out overflow-hidden
           ${sidebarHidden ? "w-0 lg:w-0" : "w-[260px]"}
           ${isMobile ? (sidebarCollapsed ? "-translate-x-full" : "translate-x-0") : "translate-x-0"}
@@ -58,26 +58,26 @@ export function WorkspaceShell({
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="flex items-center h-12 px-4 bg-scout-canvas shrink-0 gap-3">
+        <header className="flex items-center h-14 px-4 bg-scout-canvas/85 backdrop-blur-xl border-b border-scout-hairline-faint shrink-0 gap-3">
           <button
             onClick={onToggleSidebar}
-            className="p-2 rounded-btn hover:bg-scout-lift text-scout-muted hover:text-scout-text transition-colors"
+            className="p-2 rounded-btn hover:bg-scout-lift/80 text-scout-muted hover:text-scout-text transition-colors"
             title={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
           >
             {sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
           </button>
           {sessionTitle && (
-            <span className="text-sm text-scout-text truncate flex-1 min-w-0">
+            <span className="text-sm font-medium text-scout-text/90 truncate flex-1 min-w-0">
               {sessionTitle}
             </span>
           )}
           {!sessionTitle && <div className="flex-1" />}
           {isConnected !== undefined && (
             <span
-              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-caption font-medium ${
+              className={`hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-pill text-caption font-medium border ${
                 isConnected
-                  ? "bg-scout-success-muted text-scout-success"
-                  : "bg-scout-input-bg text-scout-muted"
+                  ? "border-scout-success/20 bg-transparent text-scout-muted"
+                  : "border-scout-hairline-faint bg-transparent text-scout-muted"
               }`}
               title={
                 isConnected

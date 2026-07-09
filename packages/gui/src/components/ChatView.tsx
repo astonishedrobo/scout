@@ -52,7 +52,6 @@ const SUGGESTIONS: {
   },
 ];
 
-// Pika-style tints — theme-aware tokens, dark text in light / light text in dark.
 const tintClasses = {
   lavender: "bg-scout-card-lavender hover:bg-scout-card-lavender-hover",
   peach: "bg-scout-card-peach hover:bg-scout-card-peach-hover",
@@ -62,11 +61,11 @@ const tintClasses = {
 export function WelcomeContent() {
   return (
     <div className="w-full">
-      <h1 className="font-display text-display text-scout-text mb-5 text-center uppercase">
-        Explore your data
+      <h1 className="font-display text-display text-scout-text mb-4 text-center">
+        What should we explore?
       </h1>
-      <p className="text-body font-medium text-scout-text/80 max-w-md mx-auto text-center leading-relaxed">
-      Scout helps you analyze data, write code, and create charts, reports, and more.
+      <p className="text-[15px] text-scout-muted max-w-md mx-auto text-center leading-relaxed">
+        Ask Scout to inspect files, reason through results, run tools, and turn findings into code, charts, or reports.
       </p>
     </div>
   );
@@ -78,7 +77,7 @@ export function SuggestionChips({
   onSuggestionClick: (text: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap justify-center gap-2">
+    <div className="flex flex-wrap justify-center gap-2.5">
       {SUGGESTIONS.map((s) => {
         const Icon = s.icon;
         return (
@@ -86,7 +85,7 @@ export function SuggestionChips({
             key={s.prompt}
             onClick={() => onSuggestionClick(s.prompt)}
             title={s.description}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-pill text-[13px] font-medium text-scout-text transition-all duration-150 hover:-translate-y-0.5 hover:shadow-card-hover active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-scout-text/30 ${tintClasses[s.tint]}`}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-pill text-[13px] font-medium text-scout-text/90 border border-scout-hairline-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-card-hover active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-scout-text/20 ${tintClasses[s.tint]}`}
           >
             <Icon size={15} strokeWidth={2} className="text-scout-text/70" />
             {s.title}
@@ -124,7 +123,7 @@ export function ChatView({
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-8">
+      <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
         {messages.map((msg, i) => (
           <div key={i}>
             {/* Tool steps happen before the reply is written — show them in

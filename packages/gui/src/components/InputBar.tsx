@@ -409,7 +409,7 @@ export function InputBar({
   const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
   const popoverMenuItem =
-    "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium hover:bg-scout-lift transition-colors text-left";
+    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium hover:bg-scout-lift/80 transition-colors text-left";
 
   const sendBtnClass = welcomeMode
     ? "flex items-center gap-2 px-4 py-2 rounded-pill flex-shrink-0 transition-all text-sm font-semibold"
@@ -419,7 +419,7 @@ export function InputBar({
     <div
       ref={containerRef}
       className={`relative w-full shrink-0 ${
-        embedded ? "" : "max-w-3xl mx-auto px-4 bg-scout-canvas py-3"
+        embedded ? "" : "max-w-[46rem] mx-auto px-4 bg-scout-canvas/95 py-3"
       } ${welcomeMode && !embedded ? "pt-4 pb-6" : ""}`}
     >
       {uploadingCount > 0 && (
@@ -432,21 +432,21 @@ export function InputBar({
       )}
 
       <div
-        className={`flex flex-col bg-scout-input-bg overflow-visible border border-transparent focus-within:border-scout-hairline transition-colors ${
+        className={`flex flex-col bg-scout-panel/90 backdrop-blur-xl overflow-visible border border-scout-hairline-faint shadow-pop focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 transition-all ${
           welcomeMode ? "rounded-hero" : "rounded-card"
         } ${disabled ? "opacity-60" : ""}`}
       >
         {(imageAttachments.length > 0 || chatImages.length > 0) && (
           <div className="flex gap-2 overflow-x-auto px-3 pt-3">
             {chatImages.map((image) => (
-              <div key={image.id} className="relative shrink-0 w-20 rounded-btn border border-scout-hairline-faint bg-scout-panel overflow-hidden">
+              <div key={image.id} className="relative shrink-0 w-20 rounded-xl border border-scout-hairline-faint bg-scout-input-bg overflow-hidden">
                 <AuthenticatedImage src={`${baseUrl}${image.url}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.name} />
                 <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.name}</div>
                 <button onClick={() => setChatImages((p) => p.filter((x) => x.id !== image.id))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
               </div>
             ))}
             {imageAttachments.map((image) => (
-              <div key={image.abs_path} className="relative shrink-0 w-20 rounded-btn border border-scout-hairline-faint bg-scout-panel overflow-hidden">
+              <div key={image.abs_path} className="relative shrink-0 w-20 rounded-xl border border-scout-hairline-faint bg-scout-input-bg overflow-hidden">
                 <AuthenticatedImage src={`${baseUrl}/files/content?path=${encodeURIComponent(image.abs_path)}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.path} />
                 <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.path.split("/").pop()}</div>
                 <button onClick={() => setImageAttachments((p) => p.filter((x) => x.abs_path !== image.abs_path))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
@@ -472,7 +472,7 @@ export function InputBar({
                 : "How can I help you?"
           }
           rows={1}
-          className={`flex-1 bg-transparent text-scout-text placeholder:text-scout-muted resize-none outline-none px-5 pt-4 pb-2 ${
+          className={`flex-1 bg-transparent text-scout-text placeholder:text-scout-muted/80 resize-none outline-none px-5 pt-4 pb-2 leading-relaxed ${
             welcomeMode ? "text-base" : "text-[15px]"
           }`}
           style={{ minHeight: minH, maxHeight: maxH }}
@@ -484,7 +484,7 @@ export function InputBar({
               ref={plusBtnRef}
               onClick={() => setShowPlusMenu((p) => !p)}
               disabled={disabled}
-              className={`flex items-center justify-center rounded-xl bg-white dark:bg-scout-charcoal text-scout-text shadow-sm border border-scout-hairline-faint hover:opacity-90 transition disabled:opacity-30 ${
+              className={`flex items-center justify-center rounded-xl bg-scout-input-bg/90 text-scout-text border border-scout-hairline-faint hover:bg-scout-lift transition disabled:opacity-30 ${
                 welcomeMode ? "w-9 h-9" : "w-8 h-8"
               }`}
               aria-label="Attach files and more"
@@ -508,7 +508,7 @@ export function InputBar({
             <button
               ref={modelBtnRef}
               onClick={() => setShowModelMenu((p) => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-medium text-scout-text/70 hover:text-scout-text hover:bg-scout-lift transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-medium text-scout-text/70 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent hover:border-scout-hairline-faint transition-all"
             >
               <span className="truncate max-w-[160px]">{shortModel}</span>
               <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
@@ -530,7 +530,7 @@ export function InputBar({
                 className={`${sendBtnClass} ${
                   (hasText || imageAttachments.length > 0 || chatImages.length > 0) && !disabled && !visionBlocked
                     ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
-                    : "bg-white dark:bg-scout-charcoal text-scout-muted shadow-sm border border-scout-hairline-faint cursor-not-allowed"
+                    : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
                 }`}
                 aria-label="Send message"
               >
@@ -550,7 +550,7 @@ export function InputBar({
       )}
 
       {!welcomeMode && (
-        <p className="text-center text-caption text-scout-muted mt-3">
+        <p className="text-center text-caption text-scout-muted/75 mt-3">
           AI responses may make mistakes. Please verify responses.
         </p>
       )}

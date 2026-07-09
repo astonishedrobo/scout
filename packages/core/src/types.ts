@@ -78,6 +78,7 @@ export interface Artifact {
 // ── Chat events (server → client via SSE) ────────────────────────
 
 export type ToolStepStatus = "executing" | "complete";
+export type ActivityStepKind = "tool" | "reflection";
 
 export interface FileDiffEntry {
   path: string;
@@ -93,7 +94,7 @@ export interface CapabilityRequestPayload {
 }
 
 export interface ChatEvent {
-  type: "accepted" | "status" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
+  type: "accepted" | "status" | "reflection" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
   session_id?: string;
   name?: string;
   args?: Record<string, unknown>;
@@ -123,10 +124,12 @@ export interface ChatEvent {
  * Built from pairs of tool_call + tool_result events.
  */
 export interface ToolStep {
+  kind?: ActivityStepKind;
   name: string;
   args: Record<string, unknown>;
   status: ToolStepStatus;
   output?: string;
+  reflection?: string;
 }
 
 // ── File attachments ─────────────────────────────────────────────
