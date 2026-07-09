@@ -3,7 +3,7 @@ import { LogIn, UserPlus } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Input, Label, PasswordInput } from "./ui/Input";
 import { HairlineDivider } from "./ui/HairlineDivider";
-import loginScreenImage from "../assets/login_screen.png";
+import loginScreenImage from "../assets/login_screen.webp";
 
 interface LoginProps {
   onLogin: (u: string, p: string) => Promise<void>;
@@ -38,7 +38,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
     <div className="flex flex-1 min-h-0 w-full bg-scout-void lg:flex-row">
       {/* Left column — image (hidden when viewport is too narrow for two columns) */}
       <div className="hidden lg:flex lg:flex-1 lg:min-h-0 items-center justify-center px-10 xl:px-14 py-10">
-        <div className="h-[min(calc(100vh-5rem),920px)] w-full overflow-hidden rounded-hero">
+        <div className="h-[min(calc(100vh-5rem),920px)] w-full overflow-hidden rounded-hero border border-white/10 shadow-2xl">
           <img
             src={loginScreenImage}
             alt=""
@@ -50,7 +50,15 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
       {/* Right column — auth, vertically centered in the viewport */}
       <div className="flex flex-1 min-h-0 items-center justify-center px-8 lg:px-12 xl:px-16 py-12">
         <div className="w-full max-w-[420px] mx-auto">
-          <p className="text-4xl font-bold text-white text-center mb-8">Scout</p>
+          <div className="mb-8 text-center">
+            <div className="mb-4 text-[15px] font-semibold tracking-[-0.035em] text-white">Scout</div>
+            <h1 className="text-2xl font-semibold tracking-[-0.035em] text-white">
+              {isRegistering ? "Create your workspace" : "Welcome back"}
+            </h1>
+            <p className="mt-2 text-sm text-white/55">
+              {isRegistering ? "Set up your Scout account to get started." : "Sign in to continue to Scout."}
+            </p>
+          </div>
 
           <div className="rounded-card border border-white/10 overflow-hidden">
             <form className="p-6 space-y-4" onSubmit={handleSubmit}>
@@ -124,8 +132,8 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
             </div>
           </div>
 
-          <p className="mt-6 text-caption text-white/50 leading-relaxed">
-            By continuing, you agree to our Terms of Service and Privacy Policy.
+          <p className="mt-6 text-center text-caption text-white/40 leading-relaxed">
+            Your workspace files stay within your configured Scout environment.
           </p>
         </div>
       </div>

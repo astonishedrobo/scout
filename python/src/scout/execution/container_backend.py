@@ -8,23 +8,14 @@ deployments.  Letting the container engine provide namespace/cgroup isolation is
 portable to every Docker (or Podman) host without per-host kernel/AppArmor/sysctl
 tweaks.
 
-Key design choices
-------------------
-* The user workspace is bind-mounted into the sandbox container **at the same
-  path the worker itself sees it** (``/srv/scout-source/users/<id>``).  This keeps
-  ``ExecutionPolicy`` roots, the REPL path guard, and change-detection identical
-  to the bwrap path — the worker and the sandbox observe the same files through
-  the same host bind, so no path translation is needed.
-* Only the authenticated user's personal dir (rw) and the shared dir (ro) are
-  mounted.  No secrets, no Docker socket, no other user's files.
-* The persistent "alive Python shell" is a long-lived container running
-  ``_repl_server.py`` and driven over stdin/stdout with the existing sentinel
-  protocol — namespace state persists across calls exactly as before.
+Path contract (see ``worker_roots.ExecutionPathContext``)
+---------------------------------------------------------
+* **Sandbox** (``/workspace``, ``/shared``): agent-facing cwd/env/path-guard.
+* **Worker** (``/srv/scout-source/...``): policy, snapshots, cache mkdir.
+* **Host** (``SCOUT_WORKSPACE_*_HOST``): docker ``-v`` mount sources only.
 
-Because the worker is containerized, the bind-mount *source* must be a path on
-the Docker host, not the worker's view of it.  Those host paths are supplied via
-``SCOUT_WORKSPACE_USERS_HOST`` / ``SCOUT_WORKSPACE_SHARED_HOST`` (falling back to
-the in-worker paths for non-containerized local runs).
+Env injected into the container is built as sandbox paths directly.  Cache dirs
+are materialized on the worker-visible volume so the bind mount is real.
 """
 
 from __future__ import annotations
@@ -39,11 +30,11 @@ from pathlib import Path
 from ..config import ExecutionConfig
 from .audit import ExecutionAuditor
 from .changes import diff_snapshots, snapshot_writable_roots
-from .env import build_execution_env
+from .env import build_sandbox_execution_env
 from .errors import ExecutionErrorCategory
 from .launcher import IO_DRAIN_TIMEOUT, kill_process_tree
 from .local_backend import _classify_artifacts, _command_summary, _truncate
-from .models import ExecutionBackendHealth, ExecutionRequest, ExecutionResult
+from .models import ExecutionBackendHealth, ExecutionPolicy, ExecutionRequest, ExecutionResult
 from .unified_exec import (
     OutputChunkCallback,
     UnifiedExecCommandRequest,
@@ -52,7 +43,13 @@ from .unified_exec import (
     UnifiedExecStdinRequest,
     run_in_executor,
 )
-from .worker_roots import derive_user_roots
+from .worker_roots import (
+    SANDBOX_PERSONAL,
+    SANDBOX_SHARED,
+    ExecutionPathContext,
+    path_context_for_user,
+    worker_to_sandbox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +63,7 @@ _REPL_MODULE = "scout.agent._repl_server"
 
 
 # --------------------------------------------------------------------------- #
-# Engine / image / host-path resolution
+# Engine / image resolution
 # --------------------------------------------------------------------------- #
 def container_engine_binary() -> str | None:
     """Return the path to the configured container engine (docker/podman)."""
@@ -77,23 +74,6 @@ def container_engine_binary() -> str | None:
 def sandbox_image() -> str | None:
     """Image used for sandbox containers (defaults to the Scout image)."""
     return os.environ.get("SCOUT_SANDBOX_IMAGE") or None
-
-
-def _host_workspace_paths() -> tuple[str, str]:
-    """Host-side bind sources for the users-parent and shared dirs.
-
-    Falls back to the worker's own view when the host paths are not set
-    (correct when the worker is *not* itself containerized).
-    """
-    users = os.environ.get(
-        "SCOUT_WORKSPACE_USERS_HOST",
-        os.environ.get("SCOUT_WORKSPACE_USERS", "/srv/scout-source/users"),
-    )
-    shared = os.environ.get(
-        "SCOUT_WORKSPACE_SHARED_HOST",
-        os.environ.get("SCOUT_WORKSPACE_SHARED", "/srv/scout-source/shared"),
-    )
-    return users, shared
 
 
 def _sandbox_network() -> str:
@@ -153,29 +133,59 @@ def probe_container_isolation() -> tuple[bool, str | None]:
 
 
 # --------------------------------------------------------------------------- #
-# docker run argument builder
+# Path context + docker run argument builder
 # --------------------------------------------------------------------------- #
-def _mount_args(user_id: str) -> list[str]:
-    """Bind only this user's personal dir (rw) and shared dir (ro), mounted at
-    the SAME paths the worker sees them so policy/guard/diff stay consistent."""
-    users_host, shared_host = _host_workspace_paths()
-    personal_src = str(Path(users_host) / user_id)
-    personal_dst = f"/srv/scout-source/users/{user_id}"
-    shared_dst = "/srv/scout-source/shared"
+def _path_context(user_id: str) -> ExecutionPathContext:
+    # Container isolation always needs explicit host bind sources in nested
+    # Docker; local same-machine dev may omit *_HOST and fall back to worker.
+    require_host = bool(os.environ.get("SCOUT_WORKSPACE_USERS_HOST"))
+    return path_context_for_user(user_id, require_host=require_host)
+
+
+def _sandbox_personal(request: ExecutionRequest | UnifiedExecCommandRequest) -> Path:
+    return Path(request.sandbox_personal_dir or SANDBOX_PERSONAL)
+
+
+def _sandbox_shared(request: ExecutionRequest | UnifiedExecCommandRequest) -> Path:
+    return Path(request.sandbox_shared_dir or SANDBOX_SHARED)
+
+
+def _sandbox_cwd(request: ExecutionRequest | UnifiedExecCommandRequest) -> Path:
+    return Path(request.sandbox_cwd or _sandbox_personal(request))
+
+
+def _shared_is_writable(policy: ExecutionPolicy, ctx: ExecutionPathContext) -> bool:
+    """True when policy grants write on the *worker-visible* shared root."""
+    try:
+        worker_shared = ctx.worker_shared.resolve()
+    except OSError:
+        worker_shared = ctx.worker_shared
+    for root in policy.write_roots:
+        try:
+            if root.resolve() == worker_shared:
+                return True
+        except OSError:
+            if Path(root) == ctx.worker_shared:
+                return True
+    return False
+
+
+def _mount_args(ctx: ExecutionPathContext, *, shared_write: bool = False) -> list[str]:
+    """Bind host sources to sandbox targets (host paths for docker -v only)."""
+    shared_mode = "rw" if shared_write else "ro"
     return [
-        "-v", f"{personal_src}:{personal_dst}:rw",
-        "-v", f"{shared_host}:{shared_dst}:ro",
+        "-v", f"{ctx.host_personal}:{ctx.sandbox_personal}:rw",
+        "-v", f"{ctx.host_shared}:{ctx.sandbox_shared}:{shared_mode}",
     ]
 
 
-def _limit_args(policy) -> list[str]:
+def _limit_args(policy: ExecutionPolicy) -> list[str]:
     args: list[str] = []
     if policy.max_memory_bytes:
         args += ["--memory", str(policy.max_memory_bytes)]
     if policy.max_processes:
         args += ["--pids-limit", str(policy.max_processes)]
     if policy.cpu_seconds:
-        # Approximate a CPU ceiling; wall-clock timeout enforced by the caller.
         args += ["--cpus", "2"]
     return args
 
@@ -187,7 +197,9 @@ def _env_args(env: dict[str, str]) -> list[str]:
     return args
 
 
-def _network_args(proxy_url: str | None, domains: tuple[str, ...]) -> tuple[list[str], dict[str, str]]:
+def _network_args(
+    proxy_url: str | None, domains: tuple[str, ...],
+) -> tuple[list[str], dict[str, str]]:
     """Return (docker args, extra env). Network is OFF unless egress is approved."""
     if proxy_url and domains:
         extra = {
@@ -199,33 +211,64 @@ def _network_args(proxy_url: str | None, domains: tuple[str, ...]) -> tuple[list
     return ["--network", "none"], {}
 
 
-def _base_run_args(
-    request: ExecutionRequest, *, proxy_url: str | None, interactive: bool,
-) -> tuple[list[str], dict[str, str]]:
+def build_sandbox_container_args(
+    *,
+    user_id: str,
+    policy: ExecutionPolicy,
+    sandbox_cwd: Path | str,
+    proxy_url: str | None = None,
+    interactive: bool = False,
+    container_name: str | None = None,
+    network_domains: tuple[str, ...] | None = None,
+) -> tuple[list[str], dict[str, str], ExecutionPathContext]:
+    """Single docker argv builder for oneshot, unified exec, and persistent REPL.
+
+    Returns (args_without_image_and_cmd, sandbox_env, path_context).
+    """
     binary = container_engine_binary()
     image = sandbox_image()
-    assert binary and image
-    cache = request.cwd / ".scout-cache"
-    env = build_execution_env(home=cache / "home", cache_dir=cache)
-    net_args, net_env = _network_args(proxy_url, request.policy.network.domains)
+    if not binary or not image:
+        raise RuntimeError("container engine/image unavailable")
+
+    ctx = _path_context(user_id)
+    env = build_sandbox_execution_env(ctx)
+    domains = network_domains if network_domains is not None else policy.network.domains
+    net_args, net_env = _network_args(proxy_url, domains)
     env.update(net_env)
+
     args = [
         binary, "run", "--rm",
         *(["-i"] if interactive else []),
+        *(["--name", container_name] if container_name else []),
         *net_args,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "--read-only",
         "--tmpfs", "/tmp:rw,mode=1777",
-        *_limit_args(request.policy),
-        *_mount_args(request.user_id),
-        "-w", str(request.cwd),
+        *_limit_args(policy),
+        *_mount_args(ctx, shared_write=_shared_is_writable(policy, ctx)),
+        "-w", str(sandbox_cwd),
         *_env_args(env),
         "--label", "scout.execution=1",
-        "--label", f"scout.user={request.user_id}",
+        "--label", f"scout.user={user_id}",
     ]
+    return args, env, ctx
+
+
+def _base_run_args(
+    request: ExecutionRequest, *, proxy_url: str | None, interactive: bool,
+) -> tuple[list[str], dict[str, str]]:
+    args, env, _ctx = build_sandbox_container_args(
+        user_id=request.user_id,
+        policy=request.policy,
+        sandbox_cwd=_sandbox_cwd(request),
+        proxy_url=proxy_url,
+        interactive=interactive,
+        network_domains=request.policy.network.domains,
+    )
     return args, env
+
 
 
 # --------------------------------------------------------------------------- #
@@ -245,12 +288,18 @@ class ContainerPersistentSession:
         session_id: str,
         cwd: Path,
         policy,
+        sandbox_cwd: Path | None = None,
+        sandbox_personal_dir: Path | None = None,
+        sandbox_shared_dir: Path | None = None,
         timeout: int = 30,
     ) -> None:
         self._user_id = request_user_id
         self._session_id = session_id
         self._cwd = cwd.resolve()
         self._policy = policy
+        self._sandbox_personal = Path(sandbox_personal_dir or "/workspace")
+        self._sandbox_shared = Path(sandbox_shared_dir or "/shared")
+        self._sandbox_cwd = Path(sandbox_cwd or self._sandbox_personal)
         self._timeout = timeout
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.RLock()
@@ -258,31 +307,19 @@ class ContainerPersistentSession:
         self._start()
 
     def _start(self) -> None:
-        cache = self._cwd / ".scout-cache"
-        env = build_execution_env(home=cache / "home", cache_dir=cache)
-        binary = container_engine_binary()
         image = sandbox_image()
-        if not binary or not image:
+        if not image:
             raise RuntimeError("container engine/image unavailable")
-        net_args, _ = _network_args(None, ())
-        cmd = [
-            binary, "run", "--rm", "-i",
-            "--name", self._name,
-            *net_args,
-            "--user", f"{os.getuid()}:{os.getgid()}",
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--read-only",
-            "--tmpfs", "/tmp:rw,mode=1777",
-            *_limit_args(self._policy),
-            *_mount_args(self._user_id),
-            "-w", str(self._cwd),
-            *_env_args(env),
-            "--label", "scout.execution=1",
-            "--label", f"scout.user={self._user_id}",
-            image,
-            "python", "-u", "-m", _REPL_MODULE,
-        ]
+        args, _env, self._ctx = build_sandbox_container_args(
+            user_id=self._user_id,
+            policy=self._policy,
+            sandbox_cwd=self._sandbox_cwd,
+            proxy_url=None,
+            interactive=True,
+            container_name=self._name,
+            network_domains=(),
+        )
+        cmd = [*args, image, "python", "-u", "-m", _REPL_MODULE]
         self._proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -336,8 +373,9 @@ class ContainerPersistentSession:
     def _inject_path_guard(self) -> None:
         """Defense-in-depth open() guard inside the REPL (the container mount is
         the real boundary; this is belt-and-suspenders, identical to bwrap path)."""
-        read_paths = [str(r.resolve()) for r in self._policy.read_roots]
-        write_paths = [str(r.resolve()) for r in self._policy.write_roots]
+        ctx = getattr(self, "_ctx", None) or _path_context(self._user_id)
+        read_paths = [str(worker_to_sandbox(r, ctx)) for r in self._policy.read_roots]
+        write_paths = [str(worker_to_sandbox(r, ctx)) for r in self._policy.write_roots]
         preamble = (
             "import builtins as _b, os.path as _op, sys as _s\n"
             f"_READ_ALLOWED = {read_paths!r} + [_op.realpath(p) for p in _s.path if p]\n"
@@ -543,6 +581,9 @@ class ContainerSandboxBackend:
                     session_id=request.session_id,
                     cwd=request.cwd,
                     policy=request.policy,
+                    sandbox_cwd=request.sandbox_cwd,
+                    sandbox_personal_dir=request.sandbox_personal_dir,
+                    sandbox_shared_dir=request.sandbox_shared_dir,
                     timeout=request.policy.timeout_seconds,
                 )
                 self._sessions[key] = sess

@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   Check,
   ChevronRight,
-  CircleDashed,
   FileText,
   FolderOpen,
   Loader2,
@@ -11,17 +10,19 @@ import {
   Terminal,
 } from "lucide-react";
 import type { ToolStep } from "scout-core";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface ToolCardProps {
   steps: ToolStep[];
+  /** When true, expand tool-group details by default (streaming). */
   defaultExpanded?: boolean;
+  baseUrl?: string;
+  token?: string | null;
 }
 
-type ToolGroup = {
-  key: string;
-  reflections: string[];
-  steps: ToolStep[];
-};
+type TimelineSegment =
+  | { kind: "text"; content: string }
+  | { kind: "tools"; title: string; steps: ToolStep[] };
 
 function pathFrom(step: ToolStep): string {
   return String(step.args?.path ?? step.args?.file ?? step.args?.directory ?? "").trim();
@@ -88,136 +89,250 @@ function iconFor(step: ToolStep) {
   if (step.name === "read_file" || step.name === "read_pdf") return FileText;
   if (step.name === "list_files") return FolderOpen;
   if (step.name === "search_documents") return Search;
-  if (step.name === "exec_command" || step.name === "run_python" || step.name === "run_code" || step.name === "run_node") return Terminal;
+  if (step.name === "exec_command" || step.name === "run_python" || step.name === "run_code" || step.name === "run_node") {
+    return Terminal;
+  }
   return Check;
 }
 
-function groupTitle(group: ToolGroup): string {
-  const reflectionTitle = group.reflections.find(Boolean);
-  if (reflectionTitle) {
-    const firstSentence = reflectionTitle.split(/(?<=[.!?])\s+/)[0] ?? reflectionTitle;
-    return firstSentence.length > 86 ? `${firstSentence.slice(0, 83)}...` : firstSentence;
-  }
-
-  const running = group.steps.some((step) => step.status === "executing");
-  const names = group.steps.map((step) => displayName(step, running ? "present" : "past"));
-  const unique = names.filter((name, index) => names.indexOf(name) === index);
-  if (unique.length === 0) return running ? "Working" : "Completed work";
-  if (unique.length === 1) return unique[0] ?? "";
-  if (unique.length === 2) return `${unique[0]}, ${unique[1]}`;
-  return `${unique.slice(0, 2).join(", ")} + ${unique.length - 2} more`;
+function isThinking(step: ToolStep): boolean {
+  return step.kind === "thinking" || step.kind === "reflection" || step.name === "think";
 }
 
-function buildGroups(steps: ToolStep[]): ToolGroup[] {
-  const items: ToolGroup[] = [];
-  let current: ToolGroup = { key: "group-0", reflections: [], steps: [] };
+function isText(step: ToolStep): boolean {
+  return step.kind === "text";
+}
 
-  const flush = () => {
-    if (!current.reflections.length && !current.steps.length) return;
-    items.push({ ...current, key: `group-${items.length}` });
-    current = { key: `group-${items.length + 1}`, reflections: [], steps: [] };
+function thinkingBody(step: ToolStep): string {
+  return (step.reflection ?? step.content ?? "").trim();
+}
+
+function deriveToolGroupTitle(tools: ToolStep[]): string {
+  if (tools.length === 0) return "Working";
+  if (tools.length === 1) {
+    return displayName(tools[0]!, tools[0]!.status === "executing" ? "present" : "past");
+  }
+  const running = tools.some((step) => step.status === "executing");
+  return running ? "Running tools" : "Completed tools";
+}
+
+/**
+ * Build a Claude-like interleaved timeline:
+ * - `think` content → main prose
+ * - `think` title → labels the following tool card
+ * - tools → expandable activity card (the nice card chrome)
+ * - assistant_text → main prose
+ */
+function buildTimeline(steps: ToolStep[]): TimelineSegment[] {
+  const segments: TimelineSegment[] = [];
+  let pendingTitle = "";
+  let toolBuffer: ToolStep[] = [];
+
+  const flushTools = () => {
+    if (toolBuffer.length === 0) return;
+    const title = pendingTitle || deriveToolGroupTitle(toolBuffer);
+    segments.push({ kind: "tools", title, steps: toolBuffer });
+    toolBuffer = [];
+    pendingTitle = "";
   };
 
   for (const step of steps) {
-    if (step.kind === "reflection") {
-      const text = (step.reflection ?? step.output ?? "").trim();
-      if (!text) continue;
-      if (current.steps.length > 0) flush();
-      current.reflections.push(text);
-    } else {
-      current.steps.push(step);
+    if (isThinking(step)) {
+      flushTools();
+      const body = thinkingBody(step);
+      const title = (step.title ?? "").trim();
+      // Prose the model put in think.content is user-facing main text.
+      if (body) {
+        segments.push({ kind: "text", content: body });
+      }
+      // Title names the next tool group (e.g. "Plan demo").
+      if (title) {
+        pendingTitle = title;
+      }
+      continue;
     }
+
+    if (isText(step)) {
+      flushTools();
+      const content = (step.content ?? step.reflection ?? "").trim();
+      if (content) {
+        segments.push({ kind: "text", content });
+      }
+      continue;
+    }
+
+    toolBuffer.push(step);
   }
-  flush();
-  return items;
+
+  flushTools();
+  // Orphan title with no tools: nothing to show (title only labels tools).
+  return segments;
 }
 
-function hasOutput(group: ToolGroup): boolean {
-  return group.steps.some((step) => step.output && step.name !== "memory_add_note");
-}
-
-function ActivityGroup({ group, defaultExpanded }: { group: ToolGroup; defaultExpanded?: boolean }) {
+function ToolRow({
+  step,
+  defaultExpanded,
+}: {
+  step: ToolStep;
+  defaultExpanded?: boolean;
+}) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
-  const running = group.steps.some((step) => step.status === "executing");
-  const outputAvailable = hasOutput(group);
+  const Icon = iconFor(step);
+  const detail = detailText(step);
+  const hasOutput = Boolean(step.output && step.name !== "memory_add_note");
 
   return (
     <div className="space-y-1">
       <button
         type="button"
+        onClick={() => hasOutput && setExpanded((value) => !value)}
+        className={`group flex w-full items-start gap-2 text-left text-xs text-scout-muted ${
+          hasOutput ? "hover:text-scout-text cursor-pointer" : "cursor-default"
+        } transition-colors`}
+      >
+        {hasOutput ? (
+          <ChevronRight
+            size={13}
+            className={`mt-0.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+        ) : (
+          <span className="w-[13px] shrink-0" />
+        )}
+        <Icon
+          size={13}
+          className={`${step.status === "executing" ? "animate-spin" : ""} mt-0.5 shrink-0`}
+        />
+        <div className="min-w-0">
+          <div className="text-scout-text/80">
+            {displayName(step, step.status === "executing" ? "present" : "past")}
+          </div>
+          {detail && (
+            <div className="mt-0.5 truncate font-mono text-[11px] text-scout-muted/75">
+              {detail}
+            </div>
+          )}
+        </div>
+        {step.status === "complete" && !hasOutput && (
+          <Check size={12} className="ml-auto mt-0.5 shrink-0 text-scout-success" />
+        )}
+      </button>
+      {expanded && hasOutput && (
+        <pre className="ml-8 max-h-40 overflow-auto rounded-xl border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
+          {step.output}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Expandable activity card (same chrome as the previous thinking card).
+ * Holds one or more tool steps under a short phase title.
+ */
+function ToolGroupCard({
+  title,
+  steps,
+  defaultExpanded,
+}: {
+  title: string;
+  steps: ToolStep[];
+  defaultExpanded?: boolean;
+}) {
+  const running = steps.some((step) => step.status === "executing");
+  const [expanded, setExpanded] = useState(defaultExpanded ?? running);
+
+  return (
+    <div className="rounded-xl border border-scout-hairline-faint bg-scout-lift/30">
+      <button
+        type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="group flex items-center gap-2 text-left text-xs text-scout-muted hover:text-scout-text transition-colors"
+        className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs text-scout-muted hover:text-scout-text transition-colors"
       >
         <ChevronRight
           size={13}
-          className={`shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+          className={`mt-0.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
         />
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] uppercase tracking-wide text-scout-muted/70 mb-0.5">
+            {running ? "Working" : "Activity"}
+          </div>
+          <div className="text-scout-text/85 leading-relaxed">{title}</div>
+        </div>
         {running ? (
-          <Loader2 size={13} className="animate-spin shrink-0" />
+          <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin" />
         ) : (
-          <Check size={13} className="text-scout-success shrink-0" />
+          <Check size={13} className="mt-0.5 shrink-0 text-scout-success" />
         )}
-        <span>{groupTitle(group)}</span>
       </button>
-
       {expanded && (
-        <div className="ml-[6px] border-l border-scout-hairline-faint pl-4 pt-1 space-y-2">
-          {group.reflections.map((text, index) => (
-            <div key={`reflection-${index}`} className="flex items-start gap-2 text-xs text-scout-muted">
-              <CircleDashed size={13} className="mt-0.5 shrink-0 text-scout-muted/80" />
-              <p className="leading-relaxed">{text}</p>
-            </div>
+        <div className="space-y-2 border-t border-scout-hairline-faint px-3 py-2.5">
+          {steps.map((step, index) => (
+            <ToolRow
+              key={`${step.name}-${index}`}
+              step={step}
+              defaultExpanded={running && step.status === "executing"}
+            />
           ))}
-          {group.steps.map((step, index) => {
-            const Icon = iconFor(step);
-            const detail = detailText(step);
-            return (
-              <div key={index} className="space-y-1.5">
-                <div className="flex min-w-0 items-start gap-2 text-xs text-scout-muted">
-                  <Icon
-                    size={13}
-                    className={`${step.status === "executing" ? "animate-spin" : ""} mt-0.5 shrink-0`}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-scout-text/80">{displayName(step, step.status === "executing" ? "present" : "past")}</div>
-                    {detail && (
-                      <div className="mt-0.5 truncate font-mono text-[11px] text-scout-muted/75">
-                        {detail}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                {outputAvailable && step.output && step.name !== "memory_add_note" && (
-                  <details className="ml-5">
-                    <summary className="cursor-pointer list-none text-[11px] text-scout-muted/75 hover:text-scout-text">
-                      Show output
-                    </summary>
-                    <pre className="mt-1 max-h-40 overflow-auto rounded-xl border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
-                      {step.output}
-                    </pre>
-                  </details>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
   );
 }
 
-export function ToolCard({ steps, defaultExpanded = false }: ToolCardProps) {
+function TextBlock({
+  content,
+  baseUrl,
+  token,
+}: {
+  content: string;
+  baseUrl?: string;
+  token?: string | null;
+}) {
+  if (!content.trim()) return null;
+  return (
+    <div className="prose-scout text-[15px] overflow-x-auto">
+      <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} />
+    </div>
+  );
+}
+
+/**
+ * Chronological turn timeline:
+ * main prose interleaved with expandable tool-activity cards.
+ */
+export function ToolCard({
+  steps,
+  defaultExpanded = false,
+  baseUrl = "",
+  token = null,
+}: ToolCardProps) {
   if (steps.length === 0) return null;
+
+  const segments = buildTimeline(steps);
+  if (segments.length === 0) return null;
 
   return (
     <div className="mb-4 space-y-3 text-scout-muted">
-      {buildGroups(steps).map((group) => (
-        <ActivityGroup
-          key={group.key}
-          group={group}
-          defaultExpanded={defaultExpanded}
-        />
-      ))}
+      {segments.map((segment, index) => {
+        if (segment.kind === "text") {
+          return (
+            <TextBlock
+              key={`text-${index}`}
+              content={segment.content}
+              baseUrl={baseUrl}
+              token={token}
+            />
+          );
+        }
+        return (
+          <ToolGroupCard
+            key={`tools-${index}`}
+            title={segment.title}
+            steps={segment.steps}
+            defaultExpanded={defaultExpanded}
+          />
+        );
+      })}
     </div>
   );
 }

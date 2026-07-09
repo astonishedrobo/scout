@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-export type Theme = "dark" | "light";
+export type Theme = "dark" | "soft" | "light";
 
 /**
  * Theme is shared application-wide via a tiny external store rather than
@@ -12,15 +12,23 @@ export type Theme = "dark" | "light";
 function readInitial(): Theme {
   const saved =
     typeof localStorage !== "undefined" ? localStorage.getItem("scout-theme") : null;
-  return saved === "light" ? "light" : "dark";
+  return saved === "light" || saved === "soft" || saved === "dark" ? saved : "dark";
 }
 
 let currentTheme: Theme = readInitial();
 const listeners = new Set<() => void>();
 
+function readPreferredDarkTheme(): Exclude<Theme, "light"> {
+  const saved =
+    typeof localStorage !== "undefined" ? localStorage.getItem("scout-dark-theme") : null;
+  return saved === "soft" ? "soft" : "dark";
+}
+
+let preferredDarkTheme = readPreferredDarkTheme();
+
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
-  root.classList.remove("dark", "light");
+  root.classList.remove("dark", "soft", "light");
   root.classList.add(theme);
   localStorage.setItem("scout-theme", theme);
 }
@@ -30,6 +38,10 @@ applyTheme(currentTheme);
 
 function setThemeInternal(theme: Theme) {
   if (theme === currentTheme) return;
+  if (theme !== "light") {
+    preferredDarkTheme = theme;
+    localStorage.setItem("scout-dark-theme", theme);
+  }
   currentTheme = theme;
   applyTheme(theme);
   listeners.forEach((l) => l());
@@ -49,7 +61,7 @@ export function useTheme() {
 
   const setTheme = useCallback((t: Theme) => setThemeInternal(t), []);
   const toggle = useCallback(
-    () => setThemeInternal(currentTheme === "dark" ? "light" : "dark"),
+    () => setThemeInternal(currentTheme === "light" ? preferredDarkTheme : "light"),
     [],
   );
 

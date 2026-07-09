@@ -55,17 +55,50 @@ interface UseChatReturn {
  * executing step with the matching name is marked "complete".
  */
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
+  if (event.type === "thinking") {
+    const content = (event.content ?? "").trim();
+    if (!content) return steps;
+    return [
+      ...steps,
+      {
+        kind: "thinking",
+        name: "think",
+        args: {},
+        status: "complete",
+        title: (event.title ?? "").trim(),
+        reflection: content,
+        content,
+      },
+    ];
+  }
+
   if (event.type === "reflection") {
     const reflection = (event.content ?? "").trim();
     if (!reflection) return steps;
     return [
       ...steps,
       {
-        kind: "reflection",
-        name: "reflection",
+        kind: "thinking",
+        name: "think",
         args: {},
         status: "complete",
         reflection,
+        content: reflection,
+      },
+    ];
+  }
+
+  if (event.type === "assistant_text") {
+    const content = (event.content ?? "").trim();
+    if (!content) return steps;
+    return [
+      ...steps,
+      {
+        kind: "text",
+        name: "text",
+        args: {},
+        status: "complete",
+        content,
       },
     ];
   }
@@ -184,7 +217,13 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
           if (event.type === "response") {
             finalContent = event.content ?? "";
             setStatusMessage(undefined);
-          } else if (event.type === "tool_call" || event.type === "tool_result" || event.type === "reflection") {
+          } else if (
+            event.type === "tool_call"
+            || event.type === "tool_result"
+            || event.type === "thinking"
+            || event.type === "assistant_text"
+            || event.type === "reflection"
+          ) {
             steps = applyEvent(steps, event);
             setStreamingSteps([...steps]);
             setStatusMessage(undefined);
@@ -194,7 +233,11 @@ export function useChat({ baseUrl, cwd, sessionId, model }: UseChatOptions): Use
             } else if (event.type === "tool_result") {
               const stillRunning = steps.find((s) => s.status === "executing");
               setCurrentTool(stillRunning?.name);
-            } else if (event.type === "reflection") {
+            } else if (
+              event.type === "thinking"
+              || event.type === "assistant_text"
+              || event.type === "reflection"
+            ) {
               setCurrentTool(undefined);
             }
           }

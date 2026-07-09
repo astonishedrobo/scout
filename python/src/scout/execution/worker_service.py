@@ -255,6 +255,9 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             cwd=layout.personal_root,
             policy=policy,
             environment=env,
+            sandbox_cwd=layout.in_sandbox_personal,
+            sandbox_personal_dir=layout.in_sandbox_personal,
+            sandbox_shared_dir=layout.in_sandbox_shared,
             persistent=payload.persistent,
             staging_dir=staging_path,
             scratch_dir=scratch if payload.persistent else None,
@@ -309,6 +312,9 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                         session_id=payload.session_id,
                         cwd=layout.personal_root,
                         policy=policy,
+                        sandbox_cwd=layout.in_sandbox_personal,
+                        sandbox_personal_dir=layout.in_sandbox_personal,
+                        sandbox_shared_dir=layout.in_sandbox_shared,
                         timeout=cfg.timeout_seconds,
                     )
                 )
@@ -386,16 +392,40 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         return getattr(backend, "_unified_exec", None)
 
     def _map_rpc_workspace_path(path: str | None, layout) -> Path | None:
-        """Map server-visible /app/workspace paths to worker-visible roots."""
+        """Map sandbox or legacy server paths to worker-visible roots."""
         if not path:
             return None
         p = Path(path)
+        # Canonical sandbox coordinates.
+        if p.parts[:1] == ("/",) and len(p.parts) >= 2 and p.parts[1] == "workspace":
+            rel = Path(*p.parts[2:]) if len(p.parts) > 2 else Path(".")
+            return (layout.personal_root / rel).resolve()
+        if str(p) == "/workspace" or p == layout.in_sandbox_personal:
+            return layout.personal_root
+        if p.parts[:1] == ("/",) and len(p.parts) >= 2 and p.parts[1] == "shared":
+            rel = Path(*p.parts[2:]) if len(p.parts) > 2 else Path(".")
+            return (layout.shared_root / rel).resolve()
+        if str(p) == "/shared" or p == layout.in_sandbox_shared:
+            return layout.shared_root
+        if not p.is_absolute():
+            return (layout.personal_root / p).resolve()
+        # Already under worker roots.
+        try:
+            p.resolve().relative_to(layout.personal_root)
+            return p.resolve()
+        except ValueError:
+            pass
+        try:
+            p.resolve().relative_to(layout.shared_root)
+            return p.resolve()
+        except ValueError:
+            pass
+        # Legacy server path: .../workspace/users/{id}/...
         parts = p.parts
         try:
             workspace_idx = parts.index("workspace")
         except ValueError:
             return p
-
         rel = Path(*parts[workspace_idx + 1:])
         if rel.parts[:2] == ("users", layout.personal_root.name):
             tail = rel.parts[2:]
@@ -404,6 +434,51 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             tail = rel.parts[1:]
             return layout.shared_root / (Path(*tail) if tail else Path("."))
         return p
+
+    def _map_rpc_sandbox_path(path: str | None, layout) -> Path | None:
+        """Map cwd inputs to canonical in-sandbox paths."""
+        if not path:
+            return None
+        p = Path(path)
+        if str(p) == "/workspace" or p == layout.in_sandbox_personal:
+            return layout.in_sandbox_personal
+        if str(p) == "/shared" or p == layout.in_sandbox_shared:
+            return layout.in_sandbox_shared
+        if p.parts[:1] == ("/",) and len(p.parts) >= 2 and p.parts[1] == "workspace":
+            rel = Path(*p.parts[2:]) if len(p.parts) > 2 else Path(".")
+            return layout.in_sandbox_personal / rel
+        if p.parts[:1] == ("/",) and len(p.parts) >= 2 and p.parts[1] == "shared":
+            rel = Path(*p.parts[2:]) if len(p.parts) > 2 else Path(".")
+            return layout.in_sandbox_shared / rel
+        if not p.is_absolute():
+            return layout.in_sandbox_personal / p
+        if p.is_absolute():
+            try:
+                rel = p.resolve().relative_to(layout.personal_root)
+                return layout.in_sandbox_personal / rel
+            except ValueError:
+                pass
+            try:
+                rel = p.resolve().relative_to(layout.shared_root)
+                return layout.in_sandbox_shared / rel
+            except ValueError:
+                pass
+        # Legacy server path archaeology.
+        parts = p.parts
+        try:
+            workspace_idx = parts.index("workspace")
+        except ValueError:
+            return layout.in_sandbox_personal / p if not p.is_absolute() else p
+        rel = Path(*parts[workspace_idx + 1:])
+        if rel.parts[:2] == ("users", layout.personal_root.name):
+            tail = rel.parts[2:]
+            return layout.in_sandbox_personal / (Path(*tail) if tail else Path("."))
+        if rel.parts[:1] == ("shared",):
+            tail = rel.parts[1:]
+            return layout.in_sandbox_shared / (Path(*tail) if tail else Path("."))
+        if not rel.parts:
+            return layout.in_sandbox_personal
+        return layout.in_sandbox_personal / rel
 
     @app.post("/exec/command")
     async def exec_command(
@@ -419,6 +494,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         layout = derive_user_roots(payload.user_id)
         staging_path = _map_rpc_workspace_path(payload.staging_dir, layout)
         cwd = _map_rpc_workspace_path(payload.cwd, layout) or layout.personal_root
+        sandbox_cwd = _map_rpc_sandbox_path(payload.cwd, layout) or layout.in_sandbox_personal
         policy = _build_policy(
             payload.user_id,
             payload.session_id,
@@ -439,6 +515,7 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                 session_id=payload.session_id,
                 command=payload.command,
                 cwd=cwd,
+                workspace_root=layout.personal_root,
                 policy=policy,
                 staging_dir=staging_path,
                 work_dir=_map_rpc_workspace_path(payload.work_dir, layout),
@@ -449,6 +526,10 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
                 proxy_url=proxy_url if payload.network_domains else None,
                 allow_insecure_fallback=cfg.allow_insecure_local_fallback,
                 sandbox_python=exec_python,
+                personal_write=payload.personal_write,
+                sandbox_cwd=sandbox_cwd,
+                sandbox_personal_dir=layout.in_sandbox_personal,
+                sandbox_shared_dir=layout.in_sandbox_shared,
             )
             loop = asyncio.get_event_loop()
             resp = await loop.run_in_executor(None, mgr.exec_command, req)

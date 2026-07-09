@@ -1,0 +1,82 @@
+services:
+  egress-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - python
+      - -m
+      - scout.execution.network_proxy_service
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "7892"
+    networks:
+      - scout-ci
+      - scout-egress
+
+  execution-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "0:0"
+    privileged: true
+    command:
+      - python
+      - -m
+      - scout.execution.worker_service
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "7891"
+    volumes:
+      - ./workspace/users:/srv/scout-source/users
+      - ./workspace/shared:/srv/scout-source/shared:ro
+    environment:
+      - SCOUT_WORKER_SECRET=scout-worker-ci-secret
+      - SCOUT_WORKSPACE_USERS=/srv/scout-source/users
+      - SCOUT_WORKSPACE_SHARED=/srv/scout-source/shared
+      - SCOUT_EGRESS_PROXY_URL=http://egress-proxy:7892
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - egress-proxy
+    networks:
+      - scout-ci
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "0:0"
+    privileged: true
+    depends_on:
+      - execution-worker
+      - egress-proxy
+    environment:
+      - SCOUT_WORKER_SECRET=scout-worker-ci-secret
+      - SCOUT_WORKER_URL=http://execution-worker:7891
+      - SCOUT_EGRESS_PROXY_URL=http://egress-proxy:7892
+      - SCOUT_WORKSPACE_USERS=/srv/scout-source/users
+      - SCOUT_WORKSPACE_SHARED=/srv/scout-source/shared
+    volumes:
+      - ./workspace/users:/srv/scout-source/users
+      - ./workspace/shared:/srv/scout-source/shared:ro
+    working_dir: /app/python
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/test_execution_adversarial.py
+      - tests/test_execution.py
+      - tests/test_execution_integration.py
+      - -v
+      - --tb=short
+    networks:
+      - scout-ci
+
+networks:
+  scout-ci:
+    internal: true
+  scout-egress:
+    internal: false

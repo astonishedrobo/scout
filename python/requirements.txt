@@ -1,13 +1,17 @@
 # Scout agent Python dependencies
 # Installed into ~/.scout/env/ by the CLI on first run
+# Data research baseline (also the sandbox image offline stack)
+numpy>=1.24
 pandas>=2.0
+matplotlib>=3.7
+pillow>=10.0
+openpyxl>=3.1
 pydantic>=2.0
 pyyaml>=6.0
 litellm>=1.0
 rank-bm25>=0.2.2
 pymupdf>=1.24
 pdfplumber>=0.11
-langchain-text-splitters>=0.2
 langgraph>=0.5
 langchain>=0.3
 langchain-litellm>=0.2

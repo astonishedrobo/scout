@@ -35,6 +35,14 @@ def test_deployment_config_accepts_model_capabilities(tmp_path: Path):
     }
 
 
+def test_per_user_session_limit_cannot_exceed_global_limit():
+    config = AppConfig(server={"max_live_sessions": 24, "max_live_sessions_per_user": 8})
+    assert config.server.max_live_sessions_per_user == 8
+
+    with pytest.raises(ValueError, match="max_live_sessions_per_user"):
+        AppConfig(server={"max_live_sessions": 4, "max_live_sessions_per_user": 5})
+
+
 def test_model_client_kwargs_use_provider_env(monkeypatch):
     monkeypatch.setenv("VLLM_API_KEY", "local-vllm")
     monkeypatch.setenv("VLLM_API_BASE", "http://vllm:8000/v1")

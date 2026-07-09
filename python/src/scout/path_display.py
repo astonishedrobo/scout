@@ -7,29 +7,27 @@ from pathlib import Path
 
 
 _ABSOLUTE_PATH = re.compile(r"(?<![\w./:-])/(?:[^/\s:'\"`\]\[(),]+/)*[^/\s:'\"`\]\[(),]*")
-_USER_RELATIVE_PATH = re.compile(r"(?<![\w./-])users/[^/\s:'\"`\]\[(),]+/")
-
-
 def display_path(path: str | Path, personal_root: str | Path, shared_root: str | Path | None = None) -> str:
     candidate = Path(path)
     if not candidate.is_absolute():
         return str(candidate)
+    if candidate.parts[:2] in {("/", "workspace"), ("/", "shared")}:
+        return str(candidate)
     candidate = candidate.resolve()
-    roots = [(Path(personal_root).resolve(), "workspace")]
+    roots = [(Path(personal_root).resolve(), "/workspace")]
     if shared_root is not None:
-        roots.append((Path(shared_root).resolve(), "shared"))
+        roots.append((Path(shared_root).resolve(), "/shared"))
     for root, label in roots:
         try:
             relative = candidate.relative_to(root)
             return label if str(relative) == "." else f"{label}/{relative}"
         except ValueError:
             continue
-    return "[internal path]"
+    return str(candidate)
 
 
 def redact_paths(text: str, personal_root: str | Path, shared_root: str | Path | None = None) -> str:
     """Replace internal absolute and user-directory paths in model-visible text."""
-    text = _USER_RELATIVE_PATH.sub("workspace/", text)
     return _ABSOLUTE_PATH.sub(
         lambda match: display_path(match.group(0), personal_root, shared_root),
         text,

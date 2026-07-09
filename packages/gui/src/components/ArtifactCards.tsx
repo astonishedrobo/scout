@@ -1,5 +1,5 @@
 import type { Artifact } from "scout-core";
-import { ArrowUpRight, FileCode2, Image, FileText, Table2 } from "lucide-react";
+import { FileCode2, Image, FileText, Table2 } from "lucide-react";
 import { MemoryUpdateChip } from "./MemoryUpdateChip";
 import { AuthenticatedImage } from "./AuthenticatedImage";
 
@@ -60,9 +60,9 @@ export function ArtifactCards({
           <button
             key={artifact.id}
             onClick={() => onOpen(artifact)}
-            className="group flex w-full max-w-[45rem] items-center gap-3 rounded-xl border border-scout-hairline-faint bg-scout-panel/65 px-4 py-3 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] transition-all hover:bg-scout-lift/80"
+            className="group flex w-full max-w-[45rem] items-center gap-3 rounded-lg border border-scout-hairline-faint bg-scout-panel/50 px-3.5 py-3 text-left transition-colors hover:bg-scout-lift/65"
           >
-            <span className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-scout-hairline-faint bg-scout-input-bg">
+            <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-scout-hairline-faint bg-scout-input-bg">
               {artifact.renderer === "image" ? (
                 <AuthenticatedImage
                   src={`${baseUrl}/artifacts/content?path=${encodeURIComponent(artifact.path)}`}
@@ -72,8 +72,7 @@ export function ArtifactCards({
                 />
               ) : (
                 <>
-                  <span className="absolute -bottom-5 -right-4 h-16 w-12 rotate-[-7deg] rounded-lg border border-scout-hairline-faint bg-scout-panel shadow-sm" />
-                  <Icon size={19} className="relative text-scout-muted" />
+                  <Icon size={18} className="relative text-scout-muted" />
                 </>
               )}
             </span>
@@ -88,9 +87,8 @@ export function ArtifactCards({
               </span>
             </span>
             <span className="flex shrink-0 items-center">
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text group-hover:bg-scout-panel">
+              <span className="inline-flex rounded-md px-2.5 py-1.5 text-xs font-semibold text-scout-muted transition-colors group-hover:bg-scout-panel group-hover:text-scout-text">
                 Open
-                <ArrowUpRight size={13} className="text-scout-muted" />
               </span>
             </span>
           </button>

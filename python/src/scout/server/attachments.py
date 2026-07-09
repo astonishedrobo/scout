@@ -78,18 +78,18 @@ def _handle_csv(p: Path, size_str: str) -> str:
                 f"[Attached: {p.name} (CSV, {row_count} rows x {n_cols} cols, {size_str})] "
                 f"Path: {p}\n"
                 f"Columns: {cols_preview}\n"
-                f"Use a Python script with `uv run --with pandas` to explore this file."
+                f"Use `exec_command` with `python` (pandas is preinstalled) to explore this file."
             )
     except Exception:
         pass
     return (
         f"[Attached: {p.name} (CSV, {size_str})] Path: {p}\n"
-        f"Use a Python script with `uv run --with pandas` to explore this file."
+        f"Use `exec_command` with `python` (pandas is preinstalled) to explore this file."
     )
 
 
 def _handle_excel(p: Path, size_str: str) -> str:
-    """XLSX/XLS: count sheets, suggest uv-managed Python with openpyxl."""
+    """XLSX/XLS: count sheets; openpyxl/pandas are preinstalled in the sandbox."""
     try:
         import openpyxl
         wb = openpyxl.load_workbook(p, read_only=True)
@@ -101,7 +101,7 @@ def _handle_excel(p: Path, size_str: str) -> str:
     return (
         f"[Attached: {p.name} (Excel, {sheets_str}, {size_str})] "
         f"Path: {p}\n"
-        f"Use a Python script with `uv run --with pandas --with openpyxl` to explore this file."
+        f"Use `exec_command` with `python` (pandas and openpyxl are preinstalled) to explore this file."
     )
 
 
@@ -119,13 +119,13 @@ def _handle_json(p: Path, size_str: str) -> str:
                     f"[Attached: {p.name} (JSON, {n} records, {size_str})] "
                     f"Path: {p}\n"
                     f"Top keys: [{key_str}]\n"
-                    f"Use a Python script with `uv run --with pandas` to explore, or "
+                    f"Use `exec_command` with `python` (pandas is preinstalled) to explore, or "
                     f"`search_documents` if it's indexed."
                 )
             return (
                 f"[Attached: {p.name} (JSON array, {n} items, {size_str})] "
                 f"Path: {p}\n"
-                f"Use a Python script with `uv run` to explore this file."
+                f"Use `exec_command` with `python` to explore this file."
             )
         elif isinstance(data, dict):
             keys = list(data.keys())[:10]
@@ -134,13 +134,13 @@ def _handle_json(p: Path, size_str: str) -> str:
                 f"[Attached: {p.name} (JSON object, {size_str})] "
                 f"Path: {p}\n"
                 f"Top keys: [{key_str}]\n"
-                f"Use a Python script with `uv run` to explore this file."
+                f"Use `exec_command` with `python` to explore this file."
             )
     except Exception:
         pass
     return (
         f"[Attached: {p.name} (JSON, {size_str})] Path: {p}\n"
-        f"Use a Python script with `uv run` to explore this file."
+        f"Use `exec_command` with `python` to explore this file."
     )
 
 
@@ -162,7 +162,7 @@ def _handle_generic(p: Path, size_str: str) -> str:
     return (
         f"[Attached: {p.name} ({p.suffix or 'unknown'}, {size_str})] "
         f"Path: {p}\n"
-        f"Use `read_file` to peek at content, or a Python script with `uv run` for binary formats."
+        f"Use `read_file` to peek at content, or `exec_command` with `python` for binary formats."
     )
 
 

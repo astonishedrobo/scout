@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import type {
   ChatEvent, ToolStep, Message, FileDiffEntry, Artifact,
-  CapabilityRequestPayload, ChatImage,
+  CapabilityRequestPayload, ChatImage, UserInputRequest, FileChangeSet,
 } from "scout-core";
 
 export interface PermissionElevationPayload {
@@ -28,11 +28,12 @@ interface ChatState {
   isLoading: boolean;
   error: string | null;
   pendingApproval: ApprovalRequest | null;
+  pendingUserInput: UserInputRequest | null;
 }
 
 const emptyState = (): ChatState => ({
   messages: [], streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
-  isLoading: false, error: null, pendingApproval: null,
+  isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
 });
 
 interface UseChatOptions {
@@ -41,22 +42,56 @@ interface UseChatOptions {
   token: string | null;
   onUserMessage?: () => Promise<string | void> | string | void;
   onUserAccepted?: (sessionId: string, text: string, attachments: string[], chatImages: ChatImage[]) => Promise<void> | void;
-  onAssistantMessage?: (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[]) => Promise<void> | void;
+  onAssistantMessage?: (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[], fileChanges: FileChangeSet[]) => Promise<void> | void;
   onSessionTitle?: (sessionId: string, title: string) => void;
 }
 
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
+  if (event.type === "thinking") {
+    const content = (event.content ?? "").trim();
+    if (!content) return steps;
+    return [
+      ...steps,
+      {
+        kind: "thinking",
+        name: "think",
+        args: {},
+        status: "complete",
+        title: (event.title ?? "").trim(),
+        reflection: content,
+        content,
+      },
+    ];
+  }
+
+  // Legacy reflection events → thinking blocks (older servers / sessions).
   if (event.type === "reflection") {
     const reflection = (event.content ?? "").trim();
     if (!reflection) return steps;
     return [
       ...steps,
       {
-        kind: "reflection",
-        name: "reflection",
+        kind: "thinking",
+        name: "think",
         args: {},
         status: "complete",
         reflection,
+        content: reflection,
+      },
+    ];
+  }
+
+  if (event.type === "assistant_text") {
+    const content = (event.content ?? "").trim();
+    if (!content) return steps;
+    return [
+      ...steps,
+      {
+        kind: "text",
+        name: "text",
+        args: {},
+        status: "complete",
+        content,
       },
     ];
   }
@@ -119,6 +154,10 @@ export function useChat({
     update(sessionId, (state) => ({ ...state, pendingApproval: null }));
   }, [sessionId, update]);
 
+  const clearUserInput = useCallback(() => {
+    update(sessionId, (state) => ({ ...state, pendingUserInput: null }));
+  }, [sessionId, update]);
+
   const isSessionLoading = useCallback((id: string) => {
     return !!statesRef.current[id]?.isLoading;
   }, []);
@@ -144,7 +183,7 @@ export function useChat({
 
     if (statesRef.current[requestSessionId]?.isLoading) return false;
     update(requestSessionId, (state) => ({
-      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
+      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined, pendingUserInput: null,
     }));
 
     const controller = new AbortController();
@@ -152,7 +191,9 @@ export function useChat({
     let steps: ToolStep[] = [];
     let finalContent = "";
     let accepted = false;
+    let userInputRequested = false;
     const artifacts: Artifact[] = [];
+    const fileChanges: FileChangeSet[] = [];
 
     try {
       const resp = await fetch(`${baseUrl}/chat`, {
@@ -209,6 +250,28 @@ export function useChat({
               } }));
               continue;
             }
+            if (event.type === "user_input_request") {
+              userInputRequested = true;
+              const pausedSteps = [...steps];
+              update(requestSessionId, (state) => ({
+                ...state,
+                messages: pausedSteps.length > 0
+                  ? [...state.messages, { role: "assistant", content: "", steps: pausedSteps }]
+                  : state.messages,
+                pendingUserInput: {
+                  request_id: event.request_id ?? "",
+                  questions: event.questions ?? [],
+                },
+                streamingSteps: [],
+                streamingText: "",
+                statusMessage: undefined,
+              }));
+              if (pausedSteps.length > 0) {
+                try { await onAssistantMessage?.(requestSessionId, "", pausedSteps, [], []); } catch { /* best effort */ }
+              }
+              streamDone = true;
+              break;
+            }
             if (event.type === "session_title" && event.title) {
               onSessionTitle?.(requestSessionId, event.title);
               continue;
@@ -227,7 +290,19 @@ export function useChat({
                 if (!artifacts.some((existing) => existing.id === artifact.id)) artifacts.push(artifact);
               }
             }
-            if (event.type === "tool_call" || event.type === "tool_output_chunk" || event.type === "tool_result" || event.type === "reflection") {
+            if (event.file_changes?.length) {
+              for (const changeSet of event.file_changes) {
+                if (!fileChanges.some((existing) => existing.id === changeSet.id)) fileChanges.push(changeSet);
+              }
+            }
+            if (
+              event.type === "tool_call"
+              || event.type === "tool_output_chunk"
+              || event.type === "tool_result"
+              || event.type === "thinking"
+              || event.type === "assistant_text"
+              || event.type === "reflection"
+            ) {
               steps = applyEvent(steps, event);
               update(requestSessionId, (state) => ({
                 ...state, streamingSteps: [...steps],
@@ -238,12 +313,18 @@ export function useChat({
           } catch { /* skip malformed event */ }
         }
       }
-      if (finalContent || steps.length > 0) {
+      if (!userInputRequested && (finalContent || steps.length > 0)) {
         const content = finalContent || "(no text response)";
         update(requestSessionId, (state) => ({
-          ...state, messages: [...state.messages, { role: "assistant", content, steps: [...steps], artifacts: [...artifacts] }],
+          ...state, messages: [...state.messages, {
+            role: "assistant",
+            content,
+            steps: [...steps],
+            artifacts: [...artifacts],
+            fileChanges: [...fileChanges],
+          }],
         }));
-        try { await onAssistantMessage?.(requestSessionId, content, [...steps], [...artifacts]); } catch { /* best effort */ }
+        try { await onAssistantMessage?.(requestSessionId, content, [...steps], [...artifacts], [...fileChanges]); } catch { /* best effort */ }
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
@@ -296,7 +377,7 @@ export function useChat({
     messages: active.messages, setMessages, setMessagesForSession,
     streamingSteps: active.streamingSteps, currentTool: active.currentTool,
     streamingText: active.streamingText, statusMessage: active.statusMessage, isLoading: active.isLoading,
-    error: active.error, pendingApproval: active.pendingApproval,
-    clearApproval, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
+    error: active.error, pendingApproval: active.pendingApproval, pendingUserInput: active.pendingUserInput,
+    clearApproval, clearUserInput, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
   };
 }

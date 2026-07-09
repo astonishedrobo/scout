@@ -188,7 +188,15 @@ class ExecutionService:
                 self._isolation_ok = False
         domains = self._grants.network_domains_for(self._user_id, self._session_id)
         self._proxy.update_domains(domains)
-        if domains and not self._proxy_url and self._proxy._server is None:
+        # Server/docker deploys use the dedicated egress-proxy service (worker
+        # side). Never bind a second in-process proxy in server mode — it races
+        # on :7892 with compose and other sessions.
+        if (
+            domains
+            and not self._server_mode
+            and not self._proxy_url
+            and self._proxy._server is None
+        ):
             try:
                 await self._proxy.start()
             except Exception as exc:
@@ -199,6 +207,7 @@ class ExecutionService:
         if self._proxy_url:
             return self._proxy_url
         if self._server_mode:
+            # Worker applies SCOUT_EGRESS_PROXY_URL for sandbox containers.
             return None
         if self._proxy._server is not None:
             return self._proxy.proxy_url

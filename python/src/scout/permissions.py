@@ -32,7 +32,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
         can_request_permissions=False,
         allowed_tools=frozenset({
             "read_file", "list_files", "search_documents", "read_pdf",
-            "think", "ask_human",
+            "think", "ask_user_choice",
             "memory_search", "memory_read", "memory_list",
             "skill_list", "skill_read",
         }),
@@ -50,7 +50,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "write_file", "write_binary_artifact", "apply_patch",
             "memory_search", "memory_read", "memory_list", "memory_add_note",
             "skill_list", "skill_read", "request_permissions",
-            "think", "ask_human",
+            "think", "ask_user_choice",
         }),
     ),
     "admin": ProfileConfig(
@@ -66,7 +66,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "write_file", "write_binary_artifact", "apply_patch",
             "memory_search", "memory_read", "memory_list", "memory_add_note",
             "skill_list", "skill_read", "request_permissions",
-            "think", "ask_human",
+            "think", "ask_user_choice",
         }),
     ),
 }

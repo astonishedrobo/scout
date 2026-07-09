@@ -11,13 +11,22 @@ export function ArtifactPanel({
   token,
   onClose,
   embedded = false,
+  compact = false,
+  scope = null,
+  contentEndpoint = "/artifacts/content",
 }: {
   artifact: Artifact;
   baseUrl: string;
   token: string | null;
   onClose: () => void;
   embedded?: boolean;
+  compact?: boolean;
+  /** Disambiguates identical relative paths in personal and shared workspaces. */
+  scope?: string | null;
+  /** Content API used by chat artifacts or the workspace browser. */
+  contentEndpoint?: string;
 }) {
+  const artifactKey = `${scope ?? "workspace"}:${artifact.path}`;
   const [content, setContent] = useState("");
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -27,10 +36,10 @@ export function ArtifactPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestRef = useRef(0);
-  const previousPathRef = useRef(artifact.path);
+  const previousArtifactRef = useRef(artifactKey);
   const objectUrlRef = useRef("");
   const iframeScrollRef = useRef({ x: 0, y: 0 });
-  const preservedScrollRef = useRef(artifactScrollPositions.get(artifact.path) ?? 0);
+  const preservedScrollRef = useRef(artifactScrollPositions.get(artifactKey) ?? 0);
   const restoringScrollRef = useRef(false);
   const restoreTimerRef = useRef<number | undefined>(undefined);
 
@@ -53,17 +62,17 @@ export function ArtifactPanel({
   useEffect(() => {
     const controller = new AbortController();
     const requestId = ++requestRef.current;
-    const sameArtifact = previousPathRef.current === artifact.path;
+    const sameArtifact = previousArtifactRef.current === artifactKey;
     const scrollTop = sameArtifact
-      ? scrollRef.current?.scrollTop ?? artifactScrollPositions.get(artifact.path) ?? 0
+      ? scrollRef.current?.scrollTop ?? artifactScrollPositions.get(artifactKey) ?? 0
       : 0;
     preservedScrollRef.current = scrollTop;
-    artifactScrollPositions.set(artifact.path, scrollTop);
+    artifactScrollPositions.set(artifactKey, scrollTop);
     const iframeScroll = sameArtifact
       ? readIframeScroll(iframeRef.current)
       : { x: 0, y: 0 };
     iframeScrollRef.current = iframeScroll;
-    previousPathRef.current = artifact.path;
+    previousArtifactRef.current = artifactKey;
     setError("");
     setIsRefreshing(true);
     if (!sameArtifact) {
@@ -76,7 +85,8 @@ export function ArtifactPanel({
       version: artifact.version,
       refresh: String(refresh),
     });
-    const request = fetch(`${baseUrl}/artifacts/content?${params}`, {
+    if (scope) params.set("scope", scope);
+    const request = fetch(`${baseUrl}${contentEndpoint}?${params}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: "no-store",
       signal: controller.signal,
@@ -93,7 +103,15 @@ export function ArtifactPanel({
           const text = await blob.text();
           const nextContent =
             artifact.renderer === "html"
-              ? await inlineLocalAssets(text, artifact.path, baseUrl, token, controller.signal)
+              ? await inlineLocalAssets(
+                  text,
+                  artifact.path,
+                  baseUrl,
+                  contentEndpoint,
+                  token,
+                  controller.signal,
+                  scope,
+                )
               : text;
           if (requestId !== requestRef.current) return;
           setContent(nextContent);
@@ -115,7 +133,7 @@ export function ArtifactPanel({
     return () => {
       controller.abort();
     };
-  }, [artifact.path, artifact.version, baseUrl, token, refresh, artifact.renderer]);
+  }, [artifact.path, artifact.version, artifactKey, baseUrl, contentEndpoint, token, refresh, artifact.renderer, scope]);
 
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -124,7 +142,7 @@ export function ArtifactPanel({
 
   useLayoutEffect(() => {
     preserveScrollThroughLayout();
-  }, [content, url, artifact.path]);
+  }, [content, url, artifactKey]);
 
   const blocked = artifact.renderer === "html" && hasExternalAssets(content);
   const rendererLabel = artifact.renderer === "markdown" ? "MD" : artifact.renderer.toUpperCase();
@@ -140,24 +158,28 @@ export function ArtifactPanel({
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <div className="h-14 px-4 flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/85 backdrop-blur-xl">
+      <div className={`${compact ? "h-12 px-3" : "h-14 px-4"} flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/85 backdrop-blur-xl`}>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <div className="truncate text-sm font-medium text-scout-text">{artifact.title}</div>
-            <span className="rounded-md border border-scout-hairline-faint px-1.5 py-0.5 text-[10px] font-semibold text-scout-muted">
-              {rendererLabel}
-            </span>
+            {!compact && (
+              <span className="rounded-md border border-scout-hairline-faint px-1.5 py-0.5 text-[10px] font-semibold text-scout-muted">
+                {rendererLabel}
+              </span>
+            )}
           </div>
-          <div className="text-[10px] text-scout-muted truncate">{artifact.path} · {formatSize(artifact.size)}</div>
+          <div className="text-[10px] text-scout-muted truncate">
+            {scope === "shared" ? "Shared / " : ""}{artifact.path} · {formatSize(artifact.size)}
+          </div>
         </div>
         {canCopy && (
           <button
             onClick={copyContent}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift/80 transition-colors"
+            className={`inline-flex items-center gap-1.5 rounded-xl bg-scout-input-bg/80 text-xs font-semibold text-scout-text hover:bg-scout-lift/80 transition-colors ${compact ? "p-2" : "px-3 py-2"}`}
             title="Copy artifact content"
           >
             {copied ? <Check size={14} /> : <Copy size={14} />}
-            Copy
+            {!compact && "Copy"}
           </button>
         )}
         {url && (
@@ -180,7 +202,7 @@ export function ArtifactPanel({
         <button
           onClick={onClose}
           className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-          title="Close"
+          title={compact ? "Close preview" : "Close"}
         >
           <X size={18} />
         </button>
@@ -191,7 +213,7 @@ export function ArtifactPanel({
           if (restoringScrollRef.current) return;
           const scrollTop = event.currentTarget.scrollTop;
           preservedScrollRef.current = scrollTop;
-          artifactScrollPositions.set(artifact.path, scrollTop);
+          artifactScrollPositions.set(artifactKey, scrollTop);
         }}
         className={`flex-1 min-h-0 overflow-auto bg-scout-canvas ${
           artifact.renderer === "markdown" ? "px-5 py-8" : "p-4"
@@ -221,7 +243,14 @@ export function ArtifactPanel({
         )}
         {artifact.renderer === "markdown" && content && (
           <div className="artifact-document prose-scout mx-auto max-w-[760px]">
-            <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} artifactPath={artifact.path} />
+            <MarkdownRenderer
+              content={content}
+              baseUrl={baseUrl}
+              token={token}
+              artifactPath={artifact.path}
+              contentEndpoint={contentEndpoint}
+              scope={scope}
+            />
           </div>
         )}
         {artifact.renderer === "json" && content && (
@@ -267,8 +296,10 @@ async function inlineLocalAssets(
   content: string,
   artifactPath: string,
   baseUrl: string,
+  contentEndpoint: string,
   token: string | null,
   signal: AbortSignal,
+  scope: string | null,
 ) {
   const directory = artifactPath.includes("/") ? artifactPath.slice(0, artifactPath.lastIndexOf("/") + 1) : "";
   const matches = [...content.matchAll(/(\b(?:src|poster)\s*=\s*["'])(?!data:|https?:|\/\/|#|javascript:)([^"']+)(["'])/gi)];
@@ -276,7 +307,9 @@ async function inlineLocalAssets(
   for (const match of matches) {
     const relative = match[2];
     const path = `${directory}${relative}`.replace(/\/+/g, "/");
-    const response = await fetch(`${baseUrl}/artifacts/content?path=${encodeURIComponent(path)}`, {
+    const params = new URLSearchParams({ path });
+    if (scope) params.set("scope", scope);
+    const response = await fetch(`${baseUrl}${contentEndpoint}?${params}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: "no-store",
       signal,

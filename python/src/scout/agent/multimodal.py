@@ -8,12 +8,7 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage
 from ..chat_images import processed_data_url
-
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-
-def image_paths(paths: list[str] | None) -> list[str]:
-    return [str(Path(p).resolve()) for p in (paths or []) if Path(p).suffix.lower() in IMAGE_SUFFIXES]
+from ..media import image_paths
 
 
 def build_human_message(text: str, paths: list[str] | None = None) -> HumanMessage:

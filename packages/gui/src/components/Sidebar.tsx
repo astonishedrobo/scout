@@ -3,11 +3,10 @@ import {
   Settings,
   HelpCircle,
   FolderOpen,
-  Sparkles,
+  CircleUserRound,
   Sun,
   Moon,
   AlertTriangle,
-  MessageSquare,
   Pencil,
   Trash2,
   ChevronUp,
@@ -100,26 +99,22 @@ export function Sidebar({
   };
 
   return (
-    <div className="flex flex-col h-full w-[260px] bg-transparent border-r border-scout-hairline-faint overflow-hidden">
-      <div className="px-4 pb-3">
-        <div className="flex items-center justify-between h-12 mb-3">
-          <span className="inline-flex items-center gap-2 font-semibold text-scout-text text-[15px] tracking-[-0.02em]">
-            <span className="h-2 w-2 rounded-full bg-scout-text/80" />
-            Scout
-          </span>
+    <div className="flex h-full w-[252px] flex-col overflow-hidden border-r border-scout-hairline-faint bg-scout-panel">
+      <div className="px-3 pb-2.5">
+        <div className="mb-2 flex h-12 items-center justify-between">
+          <div className="min-w-0 text-[15px] font-semibold tracking-[-0.035em] text-scout-text">Scout</div>
           <button
             onClick={onToggleTheme}
-            className="p-2 rounded-btn hover:bg-scout-lift/80 text-scout-muted hover:text-scout-text transition-colors"
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            className="rounded-btn p-2 text-scout-muted transition-colors hover:bg-scout-lift/80 hover:text-scout-text"
+            title={theme === "light" ? "Return to your selected dark mode" : "Switch to light mode"}
           >
-            {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
           </button>
         </div>
 
         <Button
           onClick={onNewChat}
-          accent="contrast"
-          variant="filled"
+          variant="filledInverse"
           surface="panel"
           fullWidth
           size="default"
@@ -147,10 +142,10 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 pt-1">
+      <div className="flex-1 overflow-y-auto px-3 pt-1">
         {sessions.length > 0 && (
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-scout-muted/80 px-1 py-2">
-            Recents
+          <p className="px-1 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-scout-muted/65">
+            Recent conversations
           </p>
         )}
         {sessions.length === 0 ? (
@@ -158,18 +153,17 @@ export function Sidebar({
             No conversations yet
           </p>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {sessions.map((s) => (
               <div
                 key={s.sessionId}
-                className={`group flex items-center gap-2 px-3 py-2.5 rounded-2xl cursor-pointer transition-all text-sm border
+                className={`group flex cursor-pointer items-center rounded-lg px-2.5 py-2 text-sm transition-colors
                   ${s.sessionId === currentSessionId
-                    ? "bg-scout-lift/70 border-scout-hairline-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-                    : "bg-transparent border-transparent hover:bg-scout-input-bg/70 hover:border-scout-hairline-faint"
+                    ? "bg-scout-lift"
+                    : "hover:bg-scout-lift/65"
                   }`}
                 onClick={() => onResumeSession(s.sessionId)}
               >
-                <MessageSquare size={14} className="shrink-0 text-scout-muted" />
                 <div className="flex-1 min-w-0">
                   {editingId === s.sessionId ? (
                     <input
@@ -285,16 +279,16 @@ export function Sidebar({
 
         <button
           onClick={() => setBottomExpanded((p) => !p)}
-          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-2xl text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
+          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
           title="Account & app menu"
         >
-          <div className="w-7 h-7 rounded-pill bg-scout-input-bg border border-scout-hairline-faint flex items-center justify-center shrink-0">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-pill border border-scout-hairline-faint bg-scout-input-bg">
             {username ? (
               <span className="text-caption font-semibold text-scout-text uppercase">
                 {username.charAt(0)}
               </span>
             ) : (
-              <Sparkles size={12} className="text-scout-muted" />
+              <CircleUserRound size={13} className="text-scout-muted" />
             )}
           </div>
           <span className="flex-1 text-left text-sm font-medium truncate capitalize">

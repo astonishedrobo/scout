@@ -1,7 +1,5 @@
 /**
- * Integrated activity timeline: concise public reflections plus tool steps.
- *
- * Reflections are always visible. Tool output previews are shown when expanded.
+ * Chronological TUI timeline: main prose interleaved with tool-activity groups.
  */
 
 import React from "react";
@@ -10,22 +8,18 @@ import Spinner from "ink-spinner";
 import { theme, STATUS_ICONS } from "scout-core";
 import type { ToolStep } from "scout-core";
 
-/* ── Constants ───────────────────────────────────────────────────── */
-
 const MAX_OUTPUT_LINES = 15;
 const MAX_ARGS_WIDTH = 60;
 
-/* ── Props ───────────────────────────────────────────────────────── */
-
 interface ActivityLogProps {
   steps: ToolStep[];
-  /** When true, show truncated output for completed steps. */
   expanded?: boolean;
-  /** Available width for the tool group box. */
   width?: number;
 }
 
-/* ── Helpers ─────────────────────────────────────────────────────── */
+type TimelineSegment =
+  | { kind: "text"; content: string }
+  | { kind: "tools"; title: string; steps: ToolStep[] };
 
 function summarize(step: ToolStep): string {
   const { name, args } = step;
@@ -46,10 +40,10 @@ function summarize(step: ToolStep): string {
   }
   if (name === "read_file") return String(args?.path ?? "");
   if (name === "think") {
-    const text = String(args?.reflection ?? "");
+    const text = String(args?.content ?? args?.reflection ?? args?.title ?? "");
     return text.substring(0, 80) + (text.length > 80 ? "…" : "");
   }
-  if (name === "ask_human") return String(args?.question ?? "");
+  if (name === "ask_user_choice") return String(args?.question ?? "");
 
   const raw = JSON.stringify(args ?? {});
   return raw.length > MAX_ARGS_WIDTH
@@ -65,15 +59,59 @@ function truncateOutput(output: string): string {
   return `${shown}\n  … (${hidden} more lines)`;
 }
 
-function reflectionText(step: ToolStep): string {
-  return (step.reflection ?? step.output ?? "").trim();
+function isThinking(step: ToolStep): boolean {
+  return step.kind === "thinking" || step.kind === "reflection" || step.name === "think";
+}
+
+function thinkingBody(step: ToolStep): string {
+  return (step.reflection ?? step.content ?? "").trim();
+}
+
+function deriveToolGroupTitle(tools: ToolStep[]): string {
+  if (tools.length === 1) return tools[0]!.name;
+  return tools.some((s) => s.status === "executing") ? "Running tools" : "Completed tools";
+}
+
+function buildTimeline(steps: ToolStep[]): TimelineSegment[] {
+  const segments: TimelineSegment[] = [];
+  let pendingTitle = "";
+  let toolBuffer: ToolStep[] = [];
+
+  const flushTools = () => {
+    if (!toolBuffer.length) return;
+    segments.push({
+      kind: "tools",
+      title: pendingTitle || deriveToolGroupTitle(toolBuffer),
+      steps: toolBuffer,
+    });
+    toolBuffer = [];
+    pendingTitle = "";
+  };
+
+  for (const step of steps) {
+    if (isThinking(step)) {
+      flushTools();
+      const body = thinkingBody(step);
+      const title = (step.title ?? "").trim();
+      if (body) segments.push({ kind: "text", content: body });
+      if (title) pendingTitle = title;
+      continue;
+    }
+    if (step.kind === "text") {
+      flushTools();
+      const content = (step.content ?? "").trim();
+      if (content) segments.push({ kind: "text", content });
+      continue;
+    }
+    toolBuffer.push(step);
+  }
+  flushTools();
+  return segments;
 }
 
 function outputLines(output: string): string[] {
   return truncateOutput(output).split("\n");
 }
-
-/* ── Component ───────────────────────────────────────────────────── */
 
 export const ActivityLog: React.FC<ActivityLogProps> = ({
   steps,
@@ -81,78 +119,91 @@ export const ActivityLog: React.FC<ActivityLogProps> = ({
   width,
 }) => {
   if (steps.length === 0) return null;
+  const segments = buildTimeline(steps);
+  if (segments.length === 0) return null;
 
   return (
-    <Box
-      flexDirection="column"
-      {...(width ? { width } : {})}
-    >
-      {steps.map((step, i) => {
-        if (step.kind === "reflection") {
+    <Box flexDirection="column" {...(width ? { width } : {})}>
+      {segments.map((segment, i) => {
+        if (segment.kind === "text") {
           return (
-            <Box key={i} flexDirection="column" marginBottom={i === steps.length - 1 ? 0 : 1}>
+            <Box key={i} flexDirection="column" marginBottom={i === segments.length - 1 ? 0 : 1}>
               <Box>
                 <Box width={3} flexShrink={0}>
-                  <Text color={theme.text.secondary}>◷</Text>
+                  <Text color={theme.text.secondary}>›</Text>
                 </Box>
-                <Text color={theme.text.secondary} italic wrap="wrap">
-                  {reflectionText(step)}
+                <Text color={theme.text.primary} wrap="wrap">
+                  {segment.content}
                 </Text>
-              </Box>
-              <Box>
-                <Box width={3} flexShrink={0}>
-                  <Text color={theme.status.success}>{STATUS_ICONS.complete}</Text>
-                </Box>
-                <Text color={theme.text.secondary}>Done</Text>
               </Box>
             </Box>
           );
         }
 
+        const running = segment.steps.some((s) => s.status === "executing");
         return (
-          <Box key={i} flexDirection="column" marginBottom={i === steps.length - 1 ? 0 : 1}>
+          <Box key={i} flexDirection="column" marginBottom={i === segments.length - 1 ? 0 : 1}>
             <Box>
               <Box width={3} flexShrink={0}>
-                {step.status === "executing" ? (
+                {running ? (
                   <Text color={theme.status.active}>
                     <Spinner type="dots" />
                   </Text>
                 ) : (
-                  <Text color={theme.text.secondary}>◎</Text>
+                  <Text color={theme.text.secondary}>◷</Text>
                 )}
               </Box>
-              <Text color={theme.tool.name} bold>
-                {step.name}
+              <Text color={theme.text.secondary} bold>
+                {running ? "Working · " : "Activity · "}
               </Text>
-              <Text color={theme.tool.args}>
-                {" "}
-                {summarize(step)}
+              <Text color={theme.text.secondary} wrap="wrap">
+                {segment.title}
               </Text>
             </Box>
-
-            {expanded && step.status === "complete" && step.output && (
-              <Box flexDirection="column">
-                {outputLines(step.output).map((line, lineIndex) => (
-                  <Box key={lineIndex}>
-                    <Box width={3} flexShrink={0}>
-                      <Text color={theme.text.secondary}>│</Text>
-                    </Box>
-                    <Text color={theme.tool.output} dimColor wrap="wrap">
-                      {line}
-                    </Text>
+            {segment.steps.map((step, j) => (
+              <Box key={j} flexDirection="column" marginLeft={3}>
+                <Box>
+                  <Box width={3} flexShrink={0}>
+                    {step.status === "executing" ? (
+                      <Text color={theme.status.active}>
+                        <Spinner type="dots" />
+                      </Text>
+                    ) : (
+                      <Text color={theme.text.secondary}>◎</Text>
+                    )}
                   </Box>
-                ))}
-              </Box>
-            )}
-
-            {step.status === "complete" && (
-              <Box>
-                <Box width={3} flexShrink={0}>
-                  <Text color={theme.status.success}>{STATUS_ICONS.complete}</Text>
+                  <Text color={theme.tool.name} bold>
+                    {step.name}
+                  </Text>
+                  <Text color={theme.tool.args}>
+                    {" "}
+                    {summarize(step)}
+                  </Text>
                 </Box>
-                <Text color={theme.text.secondary}>Done</Text>
+                {expanded && step.status === "complete" && step.output && (
+                  <Box flexDirection="column">
+                    {outputLines(step.output).map((line, lineIndex) => (
+                      <Box key={lineIndex}>
+                        <Box width={3} flexShrink={0}>
+                          <Text color={theme.text.secondary}>│</Text>
+                        </Box>
+                        <Text color={theme.tool.output} dimColor wrap="wrap">
+                          {line}
+                        </Text>
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+                {step.status === "complete" && (
+                  <Box>
+                    <Box width={3} flexShrink={0}>
+                      <Text color={theme.status.success}>{STATUS_ICONS.complete}</Text>
+                    </Box>
+                    <Text color={theme.text.secondary}>Done</Text>
+                  </Box>
+                )}
               </Box>
-            )}
+            ))}
           </Box>
         );
       })}

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import litellm
-
 VisionSupport = Literal["supported", "unsupported", "unverified"]
 
 
@@ -20,6 +18,10 @@ def model_vision_support(model: str, overrides: dict | None = None) -> VisionSup
         return "unsupported"
 
     try:
+        # LiteLLM imports a large provider registry. Keep server startup and
+        # non-model APIs independent from it.
+        import litellm
+
         info = litellm.get_model_info(model=model)
         value = info.get("supports_vision")
         if value is True:

@@ -147,11 +147,17 @@ services:
       - SCOUT_SECRET_KEY_FILE=${SCOUT_SECRET_KEY_FILE:-/run/secrets/scout_secret_key}
       - SCOUT_WORKER_SECRET_FILE=${SCOUT_WORKER_SECRET_FILE:-/run/secrets/scout_worker_secret}
       - SCOUT_WORKER_URL=http://execution-worker:7891
+      # Worker owns sandbox egress; server must not start a competing local proxy.
+      - SCOUT_EGRESS_PROXY_URL=http://egress-proxy:7892
 
       # ── Admin accounts ───────────────────────────────────────────────────────
       # Comma-separated usernames that are always admin, regardless of registration
       # order. If unset, the first registered user becomes admin automatically.
       - SCOUT_ADMIN_USERS=${SCOUT_ADMIN_USERS:-}
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    init: true
     networks:
       - scout-internal
       - default

@@ -4,23 +4,15 @@ import type { ApprovalRequest } from "../hooks/useChat";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { DiffViewer } from "./DiffViewer";
 
 interface ApprovalModalProps {
   request: ApprovalRequest;
   onRespond: (action: string, feedback?: string, saveExecpolicy?: boolean) => void;
 }
 
-function DiffLine({ line }: { line: string }) {
-  let cls = "text-scout-muted";
-  if (line.startsWith("+")) cls = "text-scout-success";
-  else if (line.startsWith("-")) cls = "text-scout-error";
-  else if (line.startsWith("@@")) cls = "text-scout-cyan";
-
-  return <div className={`${cls} font-mono text-xs whitespace-pre`}>{line}</div>;
-}
-
 const actionBtn =
-  "flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold border border-transparent transition-all";
+  "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-transparent transition-all";
 
 export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
   const [suggestMode, setSuggestMode] = useState(false);
@@ -181,35 +173,16 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
           const statusLabel =
             entry.status === "added" ? "NEW" : entry.status === "deleted" ? "DELETE" : "MODIFIED";
 
-          const lines = entry.diff.split("\n").filter(
-            (l) =>
-              !l.startsWith("diff --git") &&
-              !l.startsWith("index ") &&
-              !l.startsWith("---") &&
-              !l.startsWith("+++") &&
-              !l.startsWith("new file") &&
-              !l.startsWith("deleted file"),
-          );
-
           return (
-            <div key={i}>
-              <div className="flex items-center gap-2 mb-2">
+            <section key={i} className="overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel/60">
+              <div className="flex items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/75 px-3 py-2.5">
                 <span className={`text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-lg border border-scout-hairline-faint ${statusColor}`}>
                   {statusLabel}
                 </span>
-                <span className="text-sm text-scout-text font-mono">{entry.path}</span>
+                <span className="min-w-0 truncate text-xs text-scout-text font-mono">{entry.path}</span>
               </div>
-              <div className="bg-scout-code-bg rounded-2xl border border-scout-hairline-faint p-3 overflow-x-auto max-h-48 overflow-y-auto">
-                {lines.slice(0, 30).map((line, j) => (
-                  <DiffLine key={j} line={line} />
-                ))}
-                {lines.length > 30 && (
-                  <div className="text-xs text-scout-muted italic mt-1">
-                    ... {lines.length - 30} more lines
-                  </div>
-                )}
-              </div>
-            </div>
+              <DiffViewer diff={entry.diff} maxHeight="14rem" />
+            </section>
           );
         })}
       </div>

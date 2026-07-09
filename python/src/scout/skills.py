@@ -30,6 +30,8 @@ def _read_md_file(path: Path, label: str) -> str | None:
             if len(content) > _MAX_LAYER_CHARS:
                 content = content[:_MAX_LAYER_CHARS] + "\n\n… [truncated]"
             return f"### {label}\n\n{content}"
+    except FileNotFoundError:
+        return None
     except Exception as exc:
         logger.warning("Could not read %s: %s", path, exc)
     return None

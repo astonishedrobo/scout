@@ -31,22 +31,10 @@ from .staging import (
 )
 from .changes import diff_snapshots, snapshot_writable_roots
 from .unified_exec import UnifiedExecCommandRequest, UnifiedExecStdinRequest
+from .worker_roots import SANDBOX_PERSONAL, SANDBOX_SHARED
 
 logger = logging.getLogger(__name__)
 
-
-def _replace_symlink(link: Path, target: Path) -> None:
-    if link.is_symlink() or link.exists():
-        try:
-            if link.is_symlink() and link.resolve() == target.resolve():
-                return
-            link.unlink()
-        except OSError:
-            return
-    try:
-        link.symlink_to(target, target_is_directory=target.is_dir())
-    except OSError:
-        return
 
 CapabilityApprovalFn = Callable[[CapabilityRequest], Awaitable[tuple[str, str]]]
 PromotionApprovalFn = Callable[[str, list[FileDiff], dict], Awaitable[tuple[str, str]]]
@@ -117,9 +105,25 @@ class ExecutionOrchestrator:
         payload = "|".join(domains)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
+    def _canonicalize_agent_path(self, path: str | Path) -> Path:
+        candidate = Path(path)
+        if candidate.is_absolute():
+            if candidate.parts[:2] == ("/", "workspace"):
+                return (self._personal / Path(*candidate.parts[2:])).resolve()
+            if candidate.parts[:2] == ("/", "shared") and self._shared is not None:
+                return (self._shared / Path(*candidate.parts[2:])).resolve()
+            return candidate.resolve()
+        return (self._personal / candidate).resolve()
+
+    def _agent_read_denied(self, path: str | Path) -> bool:
+        mapped = self._canonicalize_agent_path(path)
+        if self._path_checker is not None:
+            return bool(self._path_checker(mapped))
+        return False
+
     async def run_python(self, code: str, description: str = "") -> ToolExecutionResult:
         denied = scan_code_for_denied_paths(
-            code, base_dir=self._personal, path_checker=self._path_checker,
+            code, base_dir=self._personal, path_checker=self._agent_read_denied,
         )
         if denied:
             return ToolExecutionResult(
@@ -128,7 +132,6 @@ class ExecutionOrchestrator:
 
         scratch = self._personal / ".scout-cache" / "session-scratch" / self._session_id
         scratch.mkdir(parents=True, exist_ok=True)
-        self._prepare_python_workspace_aliases(scratch)
         before = snapshot_writable_roots((scratch,))
         scratch_relative = scratch.relative_to(self._personal)
         wrapped_code = (
@@ -136,7 +139,6 @@ class ExecutionOrchestrator:
             "if '_SCOUT_PYTHON_WORKDIR' not in globals():\n"
             f"    _SCOUT_PYTHON_WORKDIR = _scout_os.path.abspath({str(scratch_relative)!r})\n"
             "_scout_os.chdir(_SCOUT_PYTHON_WORKDIR)\n"
-            + self._python_workspace_path_preamble()
             + code
         )
         staging = create_staging(self._personal)
@@ -155,138 +157,24 @@ class ExecutionOrchestrator:
             shutil.copy2(source, target)
         return await self._finalize(result, staging, description or "run_python")
 
-    def _prepare_python_workspace_aliases(self, scratch: Path) -> None:
-        """Expose the prompt's `workspace/` path from the Python scratch cwd."""
-        workspace = scratch / "workspace"
-        workspace.mkdir(parents=True, exist_ok=True)
-
-        users = workspace / "users"
-        users.mkdir(exist_ok=True)
-        _replace_symlink(users / self._user_id, self._personal)
-
-        if self._shared is not None:
-            _replace_symlink(workspace / "shared", self._shared)
-
-        for entry in self._personal.iterdir():
-            if entry.name in {".scout-cache", ".scout-executions", "workspace"}:
-                continue
-            alias = workspace / entry.name
-            if alias.exists() or alias.is_symlink():
-                continue
-            try:
-                alias.symlink_to(entry, target_is_directory=entry.is_dir())
-            except OSError:
-                # The Python preamble still translates these paths for libraries
-                # that call open/stat directly, so aliases are best-effort.
-                continue
-
-    def _python_workspace_path_preamble(self) -> str:
-        shared = str(self._shared) if self._shared is not None else ""
-        return f"""
-import builtins as _scout_builtins
-import io as _scout_io
-import os as _scout_path_os
-import os.path as _scout_path_op
-if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
-    _SCOUT_WORKSPACE_PATH_ALIASES_READY = True
-    _SCOUT_PERSONAL_ROOT = {str(self._personal)!r}
-    _SCOUT_SHARED_ROOT = {shared!r}
-    _SCOUT_USER_ID = {self._user_id!r}
-    def _scout_translate_workspace_path(_p):
-        try:
-            _s = _scout_path_os.fspath(_p)
-        except TypeError:
-            return _p
-        if not isinstance(_s, str):
-            return _p
-        _prefixes = ('/app/workspace/', '/workspace/', 'workspace/')
-        _rest = None
-        for _prefix in _prefixes:
-            if _s == _prefix.rstrip('/'):
-                _rest = ''
-                break
-            if _s.startswith(_prefix):
-                _rest = _s[len(_prefix):]
-                break
-        if _rest is None:
-            _user_prefix = 'users/' + _SCOUT_USER_ID + '/'
-            if _s == 'users/' + _SCOUT_USER_ID:
-                return _SCOUT_PERSONAL_ROOT
-            if _s.startswith(_user_prefix):
-                return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, _s[len(_user_prefix):])
-            return _p
-        if not _rest:
-            return _SCOUT_PERSONAL_ROOT
-        _parts = _rest.split('/')
-        if len(_parts) >= 2 and _parts[0] == 'users' and _parts[1] == _SCOUT_USER_ID:
-            return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, *_parts[2:])
-        if _parts[0] == 'shared' and _SCOUT_SHARED_ROOT:
-            return _scout_path_op.join(_SCOUT_SHARED_ROOT, *_parts[1:])
-        return _scout_path_op.join(_SCOUT_PERSONAL_ROOT, *_parts)
-    _scout_open_prev = _scout_builtins.open
-    _scout_io_open_prev = _scout_io.open
-    def _scout_open_workspace_alias(_file, *args, **kwargs):
-        return _scout_open_prev(_scout_translate_workspace_path(_file), *args, **kwargs)
-    def _scout_io_open_workspace_alias(_file, *args, **kwargs):
-        return _scout_io_open_prev(_scout_translate_workspace_path(_file), *args, **kwargs)
-    _scout_builtins.open = _scout_open_workspace_alias
-    _scout_io.open = _scout_io_open_workspace_alias
-    _scout_stat_prev = _scout_path_os.stat
-    _scout_lstat_prev = _scout_path_os.lstat
-    _scout_listdir_prev = _scout_path_os.listdir
-    _scout_scandir_prev = _scout_path_os.scandir
-    def _scout_stat_workspace_alias(_path, *args, **kwargs):
-        return _scout_stat_prev(_scout_translate_workspace_path(_path), *args, **kwargs)
-    def _scout_lstat_workspace_alias(_path, *args, **kwargs):
-        return _scout_lstat_prev(_scout_translate_workspace_path(_path), *args, **kwargs)
-    def _scout_listdir_workspace_alias(_path='.'):
-        return _scout_listdir_prev(_scout_translate_workspace_path(_path))
-    def _scout_scandir_workspace_alias(_path='.'):
-        return _scout_scandir_prev(_scout_translate_workspace_path(_path))
-    _scout_path_os.stat = _scout_stat_workspace_alias
-    _scout_path_os.lstat = _scout_lstat_workspace_alias
-    _scout_path_os.listdir = _scout_listdir_workspace_alias
-    _scout_path_os.scandir = _scout_scandir_workspace_alias
-"""
-
     def set_active_tool_call_id(self, tool_call_id: str) -> None:
         self._active_tool_call_id = tool_call_id
 
     def _resolve_workdir(self, workdir: str) -> Path:
-        """Resolve a tool-supplied workdir into a real cwd under the workspace.
-
-        The file tools and system prompt present the personal workspace as
-        ``workspace/`` (and the shared repo as ``workspace/shared/``), so the
-        model naturally passes ``workdir="workspace"``. Without alias handling
-        that joins to ``<personal>/workspace`` — a nested directory — and any
-        file written there is described as an artifact but lives one level
-        below where the artifact endpoint serves from, yielding
-        "Artifact is unavailable". Mirror ``_resolve_workspace_path`` from the
-        agent tools so shell and file tools agree on where ``workspace`` is.
-        """
-        if not workdir:
+        """Resolve canonical workdir values into host paths."""
+        if not workdir or workdir == ".":
             return self._personal
 
         candidate = Path(workdir)
         if candidate.is_absolute():
-            parts = candidate.parts
-            if "workspace" in parts:
-                parts = parts[parts.index("workspace") + 1:]
+            if candidate.parts[:2] == ("/", "workspace"):
+                target = self._personal.joinpath(*candidate.parts[2:])
+            elif candidate.parts[:2] == ("/", "shared") and self._shared is not None:
+                target = self._shared.joinpath(*candidate.parts[2:])
             else:
-                parts = ()
+                target = self._personal
         else:
-            parts = candidate.parts
-            if parts[:1] == ("workspace",):
-                parts = parts[1:]
-
-        uid = str(self._user_id)
-        target: Path
-        if parts[:2] == ("users", uid):
-            target = self._personal.joinpath(*parts[2:])
-        elif parts[:1] == ("shared",) and self._shared is not None:
-            target = self._shared.joinpath(*parts[1:])
-        else:
-            target = self._personal.joinpath(*parts)
+            target = self._personal / candidate
 
         target = target.resolve()
         for root in (self._personal, self._shared):
@@ -298,6 +186,22 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
             except ValueError:
                 continue
         return self._personal
+
+    def _sandbox_path_for(self, path: Path) -> Path:
+        """Map a host workspace path to the canonical sandbox view."""
+        resolved = path.resolve()
+        try:
+            rel = resolved.relative_to(self._personal)
+            return SANDBOX_PERSONAL / rel
+        except ValueError:
+            pass
+        if self._shared is not None:
+            try:
+                rel = resolved.relative_to(self._shared)
+                return SANDBOX_SHARED / rel
+            except ValueError:
+                pass
+        return resolved
 
     async def exec_command(
         self,
@@ -325,6 +229,7 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
             session_id=self._session_id,
             command=command,
             cwd=cwd,
+            workspace_root=self._personal,
             policy=self._shell_policy(staging),
             staging_dir=staging.root,
             work_dir=staging.work_dir,
@@ -335,6 +240,9 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
             allow_insecure_fallback=self._config.allow_insecure_local_fallback,
             personal_write=self._personal_write,
             sandbox_python=self._sandbox_python,
+            sandbox_cwd=self._sandbox_path_for(cwd),
+            sandbox_personal_dir=SANDBOX_PERSONAL,
+            sandbox_shared_dir=SANDBOX_SHARED,
         )
         resp = await self._backend.exec_command(req)
         if resp.error:
@@ -531,6 +439,9 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
             cwd=cwd,
             policy=policy,
             environment=env,
+            sandbox_cwd=self._sandbox_path_for(cwd),
+            sandbox_personal_dir=SANDBOX_PERSONAL,
+            sandbox_shared_dir=SANDBOX_SHARED,
             persistent=persistent,
             staging_dir=staging.root,
             scratch_dir=scratch_dir,
@@ -600,6 +511,7 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
 
         artifacts: list[dict] = list(result.artifacts)
         staged_changes = _staged_file_diffs(staging, self._personal)
+        promoted_changes: list[FileDiff] = []
 
         if staged_changes and self._promotion_approval:
             action, feedback = await self._promotion_approval(
@@ -617,6 +529,7 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
                     art = describe_artifact(dest, self._personal)
                     if art:
                         artifacts.append(art)
+                promoted_changes = staged_changes
                 discard_staging(staging)
             elif action == "no":
                 discard_staging(staging)
@@ -641,7 +554,7 @@ if '_SCOUT_WORKSPACE_PATH_ALIASES_READY' not in globals():
         warnings = [warning for warning in warnings if warning]
         if warnings:
             text = "\n".join([text, *warnings]).strip()
-        return ToolExecutionResult(text, artifacts=artifacts)
+        return ToolExecutionResult(text, artifacts=artifacts, promotion_diffs=promoted_changes)
 
     @staticmethod
     def _needs_network(command: str) -> bool:

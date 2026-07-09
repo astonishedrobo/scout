@@ -7,7 +7,7 @@ interface UploadButtonProps {
   uploads: UploadItem[];
   activeCount: number;
   errorCount: number;
-  onUpload: (files: FileList | null) => void;
+  onUpload: (files: FileList | null) => void | Promise<unknown>;
   onDismiss: (id: string) => void;
 }
 

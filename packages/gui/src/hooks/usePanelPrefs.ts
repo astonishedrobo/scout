@@ -11,8 +11,8 @@ export function usePanelPrefs() {
   const [artifactDefaultSize, setArtifactDefaultSizeState] = useState(() => {
     const v = localStorage.getItem(ARTIFACT_KEY);
     const parsed = v ? parseFloat(v) : NaN;
-    // Clamp to the panel's min/max (20-55%); discard corrupt persisted values.
-    return Number.isFinite(parsed) ? Math.min(55, Math.max(20, parsed)) : 38;
+    // Clamp to the panel's min/max; discard corrupt persisted values.
+    return Number.isFinite(parsed) ? Math.min(70, Math.max(20, parsed)) : 38;
   });
 
   const setSidebarCollapsed = useCallback((v: boolean) => {
@@ -21,8 +21,9 @@ export function usePanelPrefs() {
   }, []);
 
   const setArtifactDefaultSize = useCallback((v: number) => {
-    setArtifactDefaultSizeState(v);
-    localStorage.setItem(ARTIFACT_KEY, String(v));
+    const next = Math.min(70, Math.max(20, v));
+    setArtifactDefaultSizeState(next);
+    localStorage.setItem(ARTIFACT_KEY, String(next));
   }, []);
 
   return {

@@ -17,6 +17,7 @@ export default defineConfig({
       "/edit-done": "http://127.0.0.1:7801",
       "/sessions": "http://127.0.0.1:7801",
       "/files": "http://127.0.0.1:7801",
+      "/workspace": "http://127.0.0.1:7801",
       "/artifacts": "http://127.0.0.1:7801",
       "/upload": "http://127.0.0.1:7801",
       "/shared": "http://127.0.0.1:7801",

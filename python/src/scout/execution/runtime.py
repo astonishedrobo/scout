@@ -19,7 +19,7 @@ def resolve_sandbox_python(python_path: str | None) -> str:
 
 def prepare_user_package_dir(cache_dir: Path) -> Path:
     """Ensure the writable pip target directory exists under the user cache."""
-    pkg_dir = cache_dir / USER_PACKAGE_DIR_NAME
+    pkg_dir = Path(cache_dir) / USER_PACKAGE_DIR_NAME
     pkg_dir.mkdir(parents=True, exist_ok=True)
     return pkg_dir
 
@@ -30,7 +30,11 @@ def enrich_execution_env(
     sandbox_python: str,
     cache_dir: Path,
 ) -> dict[str, str]:
-    """Augment execution env with sandbox Python PATH and writable pip target."""
+    """Augment *local/bwrap* execution env with interpreter PATH and pip target.
+
+    Do not use this for container launches — the sandbox image has its own
+    interpreter layout; worker PATH prefixes are wrong inside the container.
+    """
     env = dict(base_env)
     pkg_dir = prepare_user_package_dir(cache_dir)
     pkg_path = str(pkg_dir.resolve())

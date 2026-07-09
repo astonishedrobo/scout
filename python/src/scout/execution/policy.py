@@ -214,14 +214,47 @@ def safe_read_bind_paths(
     return binds
 
 
+# Directory / tree names that are never user deliverables (install caches, venvs).
+_IGNORED_PATH_PARTS = frozenset({
+    ".scout-cache",
+    ".scout-executions",
+    ".local",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "site-packages",
+})
+
+# Suffixes / names for package install metadata noise.
+_IGNORED_NAME_SUFFIXES = (
+    ".dist-info",
+    ".egg-info",
+    ".pyc",
+    ".pyo",
+)
+
+
 def is_ignored_execution_path(path: Path, workspace_root: Path) -> bool:
-    """Return True for cache/execution internals that should be hidden."""
-    rel_parts = []
+    """Return True for cache/install trees that must not surface as changes/artifacts.
+
+    Intentional user dotfiles (e.g. ``.gitignore``) are *not* ignored.
+    """
+    rel_parts: tuple[str, ...] = ()
     try:
         rel = path.resolve().relative_to(workspace_root.resolve())
         rel_parts = rel.parts
     except ValueError:
-        pass
+        rel_parts = path.parts
 
-    ignored = {".scout-cache", ".scout-executions"}
-    return any(part in ignored for part in rel_parts) or path.name.startswith(".")
+    if any(part in _IGNORED_PATH_PARTS for part in rel_parts):
+        return True
+    if any(
+        part.endswith(_IGNORED_NAME_SUFFIXES) or path.name.endswith(_IGNORED_NAME_SUFFIXES)
+        for part in rel_parts
+    ):
+        return True
+    name = path.name
+    if name in {"uv.lock", ".python-version"} and ".scout-cache" in rel_parts:
+        return True
+    return False

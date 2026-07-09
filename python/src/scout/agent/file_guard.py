@@ -23,32 +23,14 @@ from pathlib import Path
 
 from ..execution.path_utils import is_under_root
 from ..execution.policy import is_deny_read_path
+from ..file_safety import (
+    DENIED_BASENAMES,
+    DENIED_DIRECTORIES,
+    DENIED_GLOBS,
+    is_name_denied,
+)
 
 # ── Sensitive filename patterns ──────────────────────────────────────────
-
-DENIED_BASENAMES = {
-    ".env", ".env.local", ".env.development", ".env.production",
-    ".env.staging", ".env.test", ".env.dev", ".env.prod",
-    ".npmrc", ".pypirc", ".netrc", ".pgpass", ".htpasswd",
-    "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
-    "id_rsa.pub", "id_ed25519.pub",
-    "config.yaml", "config.yml",
-    "scout_users.db", "scout.db",
-}
-
-DENIED_GLOBS = [
-    ".env*",
-    "*secret*.json", "*secret*.yaml", "*secret*.yml",
-    "*secret*.toml", "*secret*.cfg", "*secret*.ini",
-    "*credential*.json", "*credential*.yaml", "*credential*.yml",
-    "*credential*.toml",
-    "service-account*.json",
-]
-
-DENIED_DIRECTORIES = {
-    ".ssh", ".gnupg", ".aws", ".docker", ".scout", ".git",
-    "node_modules", "__pycache__",
-}
 
 _HOME = Path.home()
 DENIED_ABSOLUTE_PREFIXES = [
@@ -77,33 +59,15 @@ def is_path_denied(filepath: str | Path) -> bool:
             return True
 
     # Any ancestor directory is in the denied set
-    # This MUST come before the /app/workspace early return
     for part in p.parts:
         if part.lower() in DENIED_DIRECTORIES:
             return True
-
-    # Allow everything inside the workspace ONLY if not in a denied dir (checked above)
-    if abs_str.startswith("/app/workspace"):
-        return False
 
     # Absolute prefix match (home dir secrets)
     for prefix in DENIED_ABSOLUTE_PREFIXES:
         if abs_str.startswith(prefix):
             return True
 
-    return False
-
-
-def is_name_denied(filename: str) -> bool:
-    """Check just a filename (no path resolution) for listing filters."""
-    lower = filename.lower()
-    if lower in DENIED_BASENAMES:
-        return True
-    if lower.startswith(".env"):
-        return True
-    for pattern in DENIED_GLOBS:
-        if fnmatch.fnmatch(lower, pattern):
-            return True
     return False
 
 

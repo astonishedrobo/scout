@@ -15,8 +15,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const sizeClasses: Record<Size, string> = {
-  hero: "px-6 py-3 text-[15px] rounded-pill",
-  default: "px-5 py-2.5 text-sm rounded-pill",
+  hero: "px-6 py-3 text-[15px] rounded-xl",
+  default: "px-5 py-2.5 text-sm rounded-xl",
   compact: "px-3 py-1.5 text-xs rounded-btn",
 };
 

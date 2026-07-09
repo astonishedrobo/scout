@@ -18,6 +18,8 @@ interface MarkdownRendererProps {
   baseUrl?: string;
   token?: string | null;
   artifactPath?: string;
+  contentEndpoint?: string;
+  scope?: string | null;
 }
 
 function CodeBlock({
@@ -53,7 +55,7 @@ function CodeBlock({
   );
 }
 
-function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "dark" }) {
+function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "dark" | "soft" }) {
   const [svg, setSvg] = useState(() => mermaidCache.get(source) ?? "");
   const [error, setError] = useState("");
   useEffect(() => {
@@ -63,7 +65,7 @@ function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "d
         module.default.initialize({
           startOnLoad: false,
           securityLevel: "strict",
-          theme: theme === "dark" ? "dark" : "neutral",
+          theme: theme === "light" ? "neutral" : "dark",
         });
         return module;
       });
@@ -100,7 +102,14 @@ function resolveMarkdownImage(src: string, artifactPath: string) {
   return { artifact: `${directory}${src}`.replace(/\/+/g, "/") };
 }
 
-export function MarkdownRenderer({ content, baseUrl = "", token = null, artifactPath = "" }: MarkdownRendererProps) {
+export function MarkdownRenderer({
+  content,
+  baseUrl = "",
+  token = null,
+  artifactPath = "",
+  contentEndpoint = "/artifacts/content",
+  scope = null,
+}: MarkdownRendererProps) {
   const { theme } = useTheme();
 
   return (
@@ -144,7 +153,10 @@ export function MarkdownRenderer({ content, baseUrl = "", token = null, artifact
           }
           return (
             <AuthenticatedImage
-              src={`${baseUrl}/artifacts/content?path=${encodeURIComponent(resolved.artifact ?? "")}`}
+              src={`${baseUrl}${contentEndpoint}?${new URLSearchParams({
+                path: resolved.artifact ?? "",
+                ...(scope ? { scope } : {}),
+              })}`}
               token={token}
               alt={alt}
               className="max-w-full rounded-card"

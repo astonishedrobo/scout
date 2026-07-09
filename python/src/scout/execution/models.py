@@ -50,6 +50,9 @@ class ExecutionRequest:
     cwd: Path
     policy: ExecutionPolicy
     environment: Mapping[str, str]
+    sandbox_cwd: Path | None = None
+    sandbox_personal_dir: Path | None = None
+    sandbox_shared_dir: Path | None = None
     persistent: bool = False
     staging_dir: Path | None = None
     scratch_dir: Path | None = None

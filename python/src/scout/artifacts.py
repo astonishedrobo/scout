@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-RENDERERS = {
+# Primary user-facing deliverables (always eligible as UI artifacts).
+DELIVERABLE_RENDERERS = {
     ".md": "markdown",
     ".markdown": "markdown",
     ".html": "html",
@@ -22,6 +23,11 @@ RENDERERS = {
     ".svg": "image",
     ".csv": "csv",
     ".json": "json",
+    ".txt": "text",
+}
+
+# Code / config: eligible only when not under install/cache trees (see ignore).
+CODE_RENDERERS = {
     ".py": "code",
     ".js": "code",
     ".jsx": "code",
@@ -32,11 +38,24 @@ RENDERERS = {
     ".yaml": "code",
     ".yml": "code",
     ".toml": "code",
-    ".txt": "text",
 }
+
+RENDERERS = {**DELIVERABLE_RENDERERS, **CODE_RENDERERS}
 
 INLINE_RENDERERS = {"image"}
 MAX_ARTIFACT_SIZE = 20 * 1024 * 1024
+
+# Never surface as UI artifacts even if the suffix is known.
+_ARTIFACT_JUNK_PARTS = frozenset({
+    ".scout-cache",
+    ".scout-executions",
+    ".local",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "site-packages",
+})
 _LOCAL_HTML_ASSET = re.compile(
     r"""(?:src|href)\s*=\s*["'](?!data:|https?:|//|#|javascript:)([^"']+)["']|"""
     r"""url\(\s*["']?(?!data:|https?:|//)([^)"']+)""",
@@ -64,7 +83,7 @@ def html_artifact_warning(path: Path) -> str:
 
 
 def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:
-    """Return a client-safe descriptor for a supported file."""
+    """Return a client-safe descriptor for a supported user deliverable."""
     path = path.resolve()
     root = root.resolve()
     try:
@@ -72,6 +91,13 @@ def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:
     except ValueError:
         return None
     if not path.is_file() or path.name.startswith("."):
+        return None
+    if any(part in _ARTIFACT_JUNK_PARTS for part in rel.parts):
+        return None
+    if any(part.endswith((".dist-info", ".egg-info")) for part in rel.parts):
+        return None
+    # Install scaffolding is never a deliverable.
+    if path.name in {"uv.lock", "package-lock.json", ".python-version"}:
         return None
     renderer = RENDERERS.get(path.suffix.lower())
     if not renderer:

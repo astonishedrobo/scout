@@ -17,7 +17,7 @@
   ],
   "dependencies": {
     "commander": "^12.1.0",
-    "electron": "^32.3.0",
+    "electron": "^43.1.0",
     "scout-core": "0.1.0",
     "scout-gui": "0.1.0"
   },

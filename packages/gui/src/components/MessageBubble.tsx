@@ -2,22 +2,35 @@ import { useState, useCallback } from "react";
 import type { Message } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { Copy, Check, RotateCcw, GitBranch } from "lucide-react";
-import type { Artifact } from "scout-core";
+import type { Artifact, FileChangeSet } from "scout-core";
 import { ArtifactCards } from "./ArtifactCards";
 import { AuthenticatedImage } from "./AuthenticatedImage";
 import { MemoryUpdateChip } from "./MemoryUpdateChip";
+import { FileChangeCards } from "./FileChangeCards";
 
 interface MessageBubbleProps {
   message: Message;
   onRetry?: () => void;
   onFork?: () => void;
   onOpenArtifact?: (artifact: Artifact) => void;
+  onOpenFileChanges?: (changeSet: FileChangeSet) => void;
+  onUndoFileChanges?: (changeSet: FileChangeSet) => void;
   onOpenMemories?: () => void;
   baseUrl?: string;
   token?: string | null;
 }
 
-export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpenMemories, baseUrl = "", token = null }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onRetry,
+  onFork,
+  onOpenArtifact,
+  onOpenFileChanges,
+  onUndoFileChanges,
+  onOpenMemories,
+  baseUrl = "",
+  token = null,
+}: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const hasMemoryUpdate = message.steps?.some(
     (step) =>
@@ -73,11 +86,13 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
 
   return (
     <div>
-      <div className="min-w-0 overflow-hidden">
-        <div className="prose-scout text-[15px] overflow-x-auto">
-          <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
+      {!!message.content?.trim() && (
+        <div className="min-w-0 overflow-hidden">
+          <div className="prose-scout text-[15px] overflow-x-auto">
+            <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
+          </div>
         </div>
-      </div>
+      )}
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
         <ArtifactCards
           artifacts={message.artifacts}
@@ -85,6 +100,13 @@ export function MessageBubble({ message, onRetry, onFork, onOpenArtifact, onOpen
           onOpenMemories={onOpenMemories}
           baseUrl={baseUrl}
           token={token}
+        />
+      )}
+      {message.fileChanges && message.fileChanges.length > 0 && onOpenFileChanges && onUndoFileChanges && (
+        <FileChangeCards
+          changeSets={message.fileChanges}
+          onReview={onOpenFileChanges}
+          onUndo={onUndoFileChanges}
         />
       )}
       {hasMemoryUpdate && <MemoryUpdateChip onOpenMemories={onOpenMemories} className="mt-3" />}

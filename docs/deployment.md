@@ -90,6 +90,8 @@ docker compose ps
 docker compose logs -f scout-server execution-worker
 ```
 
+The server container has explicit CPU, memory, and PID limits. Scout also bounds resident BM25 indexes and live agent sessions inside the process; tune those values under `retriever` and `server` in `config/scout.yaml` only after observing the `resources` section of `GET /health` under representative load.
+
 If the isolated execution service is unavailable, users may still sign in and browse files, but Scout disables generated-code execution.
 
 ## 4. Create the first administrator

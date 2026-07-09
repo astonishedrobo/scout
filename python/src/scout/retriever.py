@@ -6,15 +6,24 @@ import csv
 import json
 import logging
 import re
+import threading
+import time
 from pathlib import Path
+from typing import TypedDict
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Plus
 
 from .config import AppConfig, JSONSourceConfig
 from .models import RetrievedChunk
+from .text_splitter import OverlappingTextSplitter
 
 logger = logging.getLogger(__name__)
+
+
+class EvictionReport(TypedDict):
+    users: list[str]
+    released_bytes: int
+    resident_users: int
 
 
 class BM25Retriever:
@@ -37,13 +46,12 @@ class BM25Retriever:
         self._config = config
         self._workspace_roots = workspace_roots
         self._chunks: list[_Chunk] = []
-        self._bm25: BM25Okapi | None = None
+        self._bm25: BM25Plus | None = None
+        self._estimated_bytes = 0
 
-        self._splitter = RecursiveCharacterTextSplitter(
+        self._splitter = OverlappingTextSplitter(
             chunk_size=config.retriever.chunk_size,
             chunk_overlap=config.retriever.chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
-            keep_separator=True,
         )
 
         self._index_files()
@@ -51,6 +59,15 @@ class BM25Retriever:
     @property
     def is_empty(self) -> bool:
         return len(self._chunks) == 0
+
+    @property
+    def chunk_count(self) -> int:
+        return len(self._chunks)
+
+    @property
+    def estimated_resident_bytes(self) -> int:
+        """Conservative estimate including chunk text and BM25 token maps."""
+        return self._estimated_bytes
 
     def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         """Return top-k chunks matching *query* via BM25."""
@@ -87,8 +104,6 @@ class BM25Retriever:
 
     # ── Indexing ────────────────────────────────────────────────────────
 
-    MAX_INDEX_BYTES = 100_000_000  # 100 MB total text limit
-    MAX_CHUNKS = 50_000           # Cap total chunks to prevent OOM
     MAX_CHUNKS_PER_FILE = 5000    # Per-file cap for text/pdf files
     MAX_CHUNKS_PER_CSV = 5000     # Per-file cap for CSV (1 chunk per row)
     MAX_CHARS_PER_CSV_ROW = 800   # Truncate long CSV rows to avoid index bloat
@@ -97,10 +112,12 @@ class BM25Retriever:
         """Read, chunk, and index local text/JSON/CSV/PDF files."""
         raw_texts: list[_Chunk] = []
         total_bytes = 0
+        max_index_bytes = self._config.retriever.max_index_bytes
+        max_chunks = self._config.retriever.max_chunks
 
         for root in self._candidate_roots():
             for fpath in self._iter_supported_files(root):
-                if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
+                if total_bytes >= max_index_bytes or len(raw_texts) >= max_chunks:
                     logger.warning(
                         "Indexing limit reached (%d MB / %d chunks). Skipping remaining files.",
                         total_bytes // (1024 * 1024), len(raw_texts)
@@ -117,12 +134,12 @@ class BM25Retriever:
                     total_bytes += len(c.text)
                     raw_texts.append(c)
                     added += 1
-                    if len(raw_texts) >= self.MAX_CHUNKS:
+                    if len(raw_texts) >= max_chunks:
                         break
                 if added:
                     logger.debug("Indexed %d chunks from %s", added, fpath.name)
 
-            if total_bytes >= self.MAX_INDEX_BYTES or len(raw_texts) >= self.MAX_CHUNKS:
+            if total_bytes >= max_index_bytes or len(raw_texts) >= max_chunks:
                 break
 
         if not raw_texts:
@@ -142,7 +159,10 @@ class BM25Retriever:
             return
 
         self._chunks = filtered_chunks
-        self._bm25 = BM25Okapi(corpus)
+        # BM25Plus keeps useful positive scores for tiny workspaces where
+        # Okapi's IDF can collapse every match to zero.
+        self._bm25 = BM25Plus(corpus)
+        self._estimated_bytes = total_bytes * 3 + len(self._chunks) * 512
         logger.info("BM25 index built with %d chunks (~%d MB)", len(self._chunks), total_bytes // (1024 * 1024))
 
     def _read_file_safe(self, fpath: Path, root: Path) -> list[_Chunk]:
@@ -293,29 +313,7 @@ class BM25Retriever:
 
         src_config = self._config.json_sources.get(fpath.name)
         if src_config and isinstance(data, list):
-            chunks.extend(self._process_json_records(data, source_file, src_config))
-        return chunks
-
-    def _read_pdf_file(self, fpath: Path, root: Path) -> list[_Chunk]:
-        """Read a PDF file and extract text for indexing."""
-        try:
-            import fitz
-        except ImportError:
-            logger.warning("pymupdf not installed, skipping PDF: %s", fpath)
-            return []
-
-        chunks: list[_Chunk] = []
-        try:
-            with fitz.open(fpath) as doc:
-                text_parts = []
-                for page in doc:
-                    text_parts.append(page.get_text())
-                full_text = "\n\n".join(text_parts)
-                if full_text.strip():
-                    chunks.extend(self._split_text(full_text, self._source_name(fpath, root)))
-        except Exception as exc:
-            logger.error("Error indexing PDF %s: %s", fpath, exc)
-        return chunks
+            return self._process_json_records(data, source_file, src_config)
 
         # Config-free JSON indexing: flatten records/objects to text.
         if isinstance(data, list):
@@ -338,6 +336,27 @@ class BM25Retriever:
         if text.strip():
             for split_text in self._splitter.split_text(text):
                 chunks.append(_Chunk(source_file=source_file, text=split_text, source_type="json"))
+        return chunks
+
+    def _read_pdf_file(self, fpath: Path, root: Path) -> list[_Chunk]:
+        """Read a PDF file and extract text for indexing."""
+        try:
+            import fitz
+        except ImportError:
+            logger.warning("pymupdf not installed, skipping PDF: %s", fpath)
+            return []
+
+        chunks: list[_Chunk] = []
+        try:
+            with fitz.open(fpath) as doc:
+                text_parts = []
+                for page in doc:
+                    text_parts.append(page.get_text())
+                full_text = "\n\n".join(text_parts)
+                if full_text.strip():
+                    chunks.extend(self._split_text(full_text, self._source_name(fpath, root)))
+        except Exception as exc:
+            logger.error("Error indexing PDF %s: %s", fpath, exc)
         return chunks
 
     def _read_csv_file(self, fpath: Path, root: Path) -> list[_Chunk]:
@@ -467,7 +486,7 @@ class BM25Retriever:
     # ── Splitting helpers ────────────────────────────────────────────────
 
     def _split_text(self, text: str, source_file: str) -> list[_Chunk]:
-        """Split text/PDF content using RecursiveCharacterTextSplitter."""
+        """Split text/PDF content at natural boundaries with overlap."""
         docs = self._splitter.split_text(text)
         return [_Chunk(source_file, chunk_text) for chunk_text in docs]
 
@@ -508,29 +527,129 @@ class RetrieverProxy:
     ``rebuild_if_dirty()`` call will rebuild the inner index transparently.
     """
 
-    def __init__(self, workspace_roots: list[Path], config: AppConfig) -> None:
+    def __init__(
+        self,
+        workspace_roots: list[Path],
+        config: AppConfig,
+        *,
+        build_semaphore: threading.BoundedSemaphore | None = None,
+    ) -> None:
         self._workspace_roots = workspace_roots
         self._config = config
         self._inner: BM25Retriever | None = None
+        self._lock = threading.RLock()
+        self._build_semaphore = build_semaphore
+        self._last_access = time.monotonic()
         self.dirty = True  # starts dirty; built on first use
 
     @property
     def is_empty(self) -> bool:
-        return self._inner is None or self._inner.is_empty
+        with self._lock:
+            return self._inner is None or self._inner.is_empty
+
+    @property
+    def is_resident(self) -> bool:
+        with self._lock:
+            return self._inner is not None
+
+    @property
+    def last_access(self) -> float:
+        with self._lock:
+            return self._last_access
+
+    @property
+    def chunk_count(self) -> int:
+        with self._lock:
+            return self._inner.chunk_count if self._inner else 0
+
+    @property
+    def estimated_resident_bytes(self) -> int:
+        with self._lock:
+            return self._inner.estimated_resident_bytes if self._inner else 0
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last_access = time.monotonic()
 
     def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        if self._inner is None:
-            self._rebuild()
-        return self._inner.search(query, top_k)  # type: ignore[union-attr]
+        with self._lock:
+            self._last_access = time.monotonic()
+            if self._inner is None or self.dirty:
+                self._rebuild_locked()
+            return self._inner.search(query, top_k)  # type: ignore[union-attr]
 
     def mark_dirty(self) -> None:
-        self.dirty = True
+        with self._lock:
+            self.dirty = True
 
     def rebuild_if_dirty(self) -> None:
-        if self.dirty or self._inner is None:
-            self._rebuild()
+        with self._lock:
+            self._last_access = time.monotonic()
+            if self.dirty or self._inner is None:
+                self._rebuild_locked()
 
-    def _rebuild(self) -> None:
+    def evict(self) -> int:
+        """Release the resident index; it will rebuild transparently on use."""
+        with self._lock:
+            released = self.estimated_resident_bytes
+            self._inner = None
+            return released
+
+    def _rebuild_locked(self) -> None:
         logger.info("Building BM25 index for user (roots: %s)", self._workspace_roots)
-        self._inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+        # Drop a stale index before constructing its replacement so a rebuild
+        # does not temporarily double the user's resident memory.
+        self._inner = None
+        if self._build_semaphore is None:
+            inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+        else:
+            with self._build_semaphore:
+                inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+        self._inner = inner
         self.dirty = False
+        self._last_access = time.monotonic()
+
+
+def evict_retriever_proxies(
+    proxies: dict[str, RetrieverProxy],
+    *,
+    idle_ttl_seconds: float,
+    max_resident: int,
+    exclude_user: str | None = None,
+    reserve: int = 0,
+    now: float | None = None,
+) -> EvictionReport:
+    """Evict idle indexes first, then LRU indexes to satisfy a hard cap.
+
+    Proxy objects remain registered so sessions holding a proxy reload the
+    same index transparently on their next search.
+    """
+    current_time = time.monotonic() if now is None else now
+    released = 0
+    evicted: list[str] = []
+    for user_id, proxy in proxies.items():
+        if (
+            user_id != exclude_user
+            and proxy.is_resident
+            and current_time - proxy.last_access >= idle_ttl_seconds
+        ):
+            released += proxy.evict()
+            evicted.append(user_id)
+
+    resident = [
+        (user_id, proxy)
+        for user_id, proxy in proxies.items()
+        if proxy.is_resident and user_id != exclude_user
+    ]
+    allowed_others = max(0, max_resident - reserve)
+    if len(resident) > allowed_others:
+        resident.sort(key=lambda item: item[1].last_access)
+        for user_id, proxy in resident[: len(resident) - allowed_others]:
+            released += proxy.evict()
+            evicted.append(user_id)
+
+    return {
+        "users": evicted,
+        "released_bytes": released,
+        "resident_users": sum(proxy.is_resident for proxy in proxies.values()),
+    }

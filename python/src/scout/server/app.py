@@ -19,11 +19,13 @@ Exposes:
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 import os as _os
 import shutil
+import threading
 import time
 import traceback
 import uuid
@@ -38,9 +40,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
-from ..agent import ScoutAgent
-from ..agent.exceptions import ProviderRateLimitError
-from ..agent.file_guard import WorkspaceGuard
 from ..execution.grants import CapabilityGrantStore
 from ..execution.models import CapabilityRequest
 from ..artifacts import MAX_ARTIFACT_SIZE, RENDERERS
@@ -52,9 +51,8 @@ from ..config import (
     load_deployment_config,
     redacted_config,
 )
-from ..retriever import RetrieverProxy
 from .attachments import build_attachment_notes
-from ..agent.multimodal import image_paths
+from ..media import image_paths
 from ..model_capabilities import model_vision_support
 from ..chat_images import asset_dir, resolve_asset, resolve_assets, validate_and_store
 from .auth import (
@@ -93,7 +91,17 @@ from .session_title import (
     fallback_title,
     generate_session_title,
 )
-from .workspace import ensure_workspaces, shared_workspace, user_workspace
+from .workspace import (
+    WorkspacePathError,
+    ensure_workspaces,
+    list_workspace_directory,
+    location_for_scope,
+    search_workspace_files,
+    shared_workspace,
+    user_workspace,
+    workspace_locations,
+    resolve_workspace_path,
+)
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
@@ -155,6 +163,7 @@ class SessionMessageRequest(BaseModel):
     model: str | None = None
     attachments: list[str] | None = None
     artifacts: list[dict] | None = None
+    file_changes: list[dict] | None = None
     chat_images: list[dict] | None = None
 
 
@@ -292,6 +301,7 @@ def _parse_session_file(path: Path) -> dict | None:
                 "content": entry.get("content", ""),
                 "steps": entry.get("steps"),
                 "artifacts": entry.get("artifacts"),
+                "fileChanges": entry.get("file_changes"),
             })
             updated_at = entry.get("timestamp", updated_at)
 
@@ -310,6 +320,53 @@ def _parse_session_file(path: Path) -> dict | None:
         },
         "messages": messages,
     }
+
+
+def _hash_file(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _decode_change_content(value: str | None) -> bytes | None:
+    if value is None:
+        return None
+    return base64.b64decode(value.encode("ascii"), validate=True)
+
+
+def _safe_workspace_file(root: Path, rel_path: str) -> Path:
+    if not rel_path or Path(rel_path).is_absolute():
+        raise HTTPException(status_code=400, detail="Invalid file path in change set")
+    target = (root / rel_path).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Change set path escapes workspace")
+    return target
+
+
+def _find_stored_change_set(session_path: Path, change_set_id: str) -> tuple[dict, list[str], int, int]:
+    lines = session_path.read_text(encoding="utf-8").splitlines()
+    for line_index, raw in enumerate(lines):
+        if not raw.strip():
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("type") != "assistant":
+            continue
+        for set_index, change_set in enumerate(entry.get("file_changes") or []):
+            if change_set.get("id") == change_set_id:
+                return change_set, lines, line_index, set_index
+    raise HTTPException(status_code=404, detail="Change set not found")
+
+
+def _mark_change_set_undone(lines: list[str], line_index: int, set_index: int, session_path: Path) -> None:
+    entry = json.loads(lines[line_index])
+    entry["file_changes"][set_index]["undone"] = True
+    lines[line_index] = json.dumps(entry)
+    session_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def create_app(
@@ -344,7 +401,7 @@ def create_app(
 
     class SessionState:
         """Isolated state for a single user session."""
-        def __init__(self, agent: ScoutAgent, model: str):
+        def __init__(self, agent: Any, model: str):
             self.agent = agent
             self.model = model
             self.approval_queue: asyncio.Queue | None = None
@@ -355,6 +412,11 @@ def create_app(
             self.auto_approve = False
             self.abort_event: asyncio.Event | None = None
             self.active_permission_profile: str | None = None
+            self.created_at = time.monotonic()
+            self.last_activity = self.created_at
+
+        def touch(self) -> None:
+            self.last_activity = time.monotonic()
 
     # ── State (created on startup) ───────────────────────────────────
     _state: dict[str, Any] = {
@@ -369,6 +431,11 @@ def create_app(
         "multi_user": multi_user,
         "execution_health": None,
         "title_tasks": {},
+        "maintenance_tasks": [],
+        "session_init_locks": {},
+        "session_init_reservations": set(),
+        "session_registry_lock": threading.RLock(),
+        "retriever_lock": threading.RLock(),
     }
 
     def _load_base_config() -> AppConfig:
@@ -380,6 +447,12 @@ def create_app(
     _state["base_config"] = initial_config
     _state["config_version"] = config_hash(initial_config)
     _state["config_reloaded_at"] = time.time()
+    _state["retriever_build_semaphore"] = threading.BoundedSemaphore(
+        initial_config.retriever.build_concurrency
+    )
+    _state["agent_init_semaphore"] = asyncio.Semaphore(
+        initial_config.server.agent_init_concurrency
+    )
 
     def _base_config_copy() -> AppConfig:
         return _state["base_config"].model_copy(deep=True)
@@ -467,22 +540,51 @@ def create_app(
             return str(user_workspace(_state["workspace_root"], user_id))
         return _state["cwd"]
 
-    def _get_or_create_proxy(user_id: str | int) -> "RetrieverProxy | None":
+    def _get_or_create_proxy(user_id: str | int) -> Any | None:
         """Return the shared BM25 proxy for a user, creating it if needed."""
         if not _state["multi_user"]:
             return None
         uid = str(user_id)
-        if uid not in _state["retrievers"]:
-            personal = user_workspace(_state["workspace_root"], user_id)
-            shared = shared_workspace(_state["workspace_root"])
-            personal.mkdir(parents=True, exist_ok=True)
-            shared.mkdir(parents=True, exist_ok=True)
-            config = _base_config_copy()
-            _state["retrievers"][uid] = RetrieverProxy(
-                workspace_roots=[personal, shared],
-                config=config,
+        with _state["retriever_lock"]:
+            if uid not in _state["retrievers"]:
+                from ..retriever import RetrieverProxy
+
+                personal = user_workspace(_state["workspace_root"], user_id)
+                shared = shared_workspace(_state["workspace_root"])
+                personal.mkdir(parents=True, exist_ok=True)
+                shared.mkdir(parents=True, exist_ok=True)
+                config = _base_config_copy()
+                _state["retrievers"][uid] = RetrieverProxy(
+                    workspace_roots=[personal, shared],
+                    config=config,
+                    build_semaphore=_state["retriever_build_semaphore"],
+                )
+            proxy = _state["retrievers"][uid]
+            proxy.touch()
+            return proxy
+
+    def _evict_retriever_indexes(*, exclude_user: str | None = None, reserve: int = 0) -> dict:
+        """Evict idle/LRU BM25 indexes while preserving lightweight proxies."""
+        from ..retriever import evict_retriever_proxies
+
+        config = _state["base_config"].retriever
+        with _state["retriever_lock"]:
+            report = evict_retriever_proxies(
+                _state["retrievers"],
+                idle_ttl_seconds=config.idle_ttl_seconds,
+                max_resident=config.max_resident_users,
+                exclude_user=exclude_user,
+                reserve=reserve,
             )
-        return _state["retrievers"][uid]
+        evicted = report["users"]
+        if evicted:
+            logger.info(
+                "Evicted %d BM25 indexes (~%.1f MB): %s",
+                len(evicted),
+                int(report["released_bytes"]) / (1024 * 1024),
+                ", ".join(evicted),
+            )
+        return report
 
     def _effective_config(personal: Path, user_id: str | int = "default") -> AppConfig:
         config = _base_config_copy()
@@ -493,11 +595,68 @@ def create_app(
                 config.memories.generate_memories = preferences["generate_memories"]
         return config
 
-    def _get_session_state(session_id: str, user_id: str | int = "default", user: User | None = None) -> SessionState:
-        """Return the SessionState for a given ID, creating it if needed."""
+    def _hydrate_agent_history(
+        agent: Any,
+        messages: list[dict],
+        *,
+        user_id: str | int,
+        session_id: str,
+    ) -> int:
+        """Rebuild model history so evicted sessions reload transparently."""
+        from langchain_core.messages import AIMessage, ToolMessage
+        from ..agent.multimodal import build_human_message
+
+        restored: list = []
+        for index, message in enumerate(messages):
+            role = message.get("role", "")
+            content = message.get("content", "")
+            if role == "user":
+                paths = list(message.get("attachments") or [])
+                try:
+                    paths.extend(str(path) for path in resolve_assets(
+                        _session_dir(_session_cwd(user_id), user_id),
+                        session_id,
+                        [image["id"] for image in (message.get("chatImages") or [])],
+                    ))
+                except (FileNotFoundError, KeyError):
+                    pass
+                restored.append(build_human_message(content, paths))
+                continue
+            if role != "assistant":
+                continue
+            steps = message.get("steps") or []
+            if not steps:
+                restored.append(AIMessage(content=content))
+                continue
+            tool_calls = [
+                {
+                    "name": step.get("name", "unknown"),
+                    "args": step.get("args") or {},
+                    "id": f"restore-{index}-{step_index}",
+                }
+                for step_index, step in enumerate(steps)
+            ]
+            restored.append(AIMessage(content=content or "", tool_calls=tool_calls))
+            for step_index, step in enumerate(steps):
+                restored.append(ToolMessage(
+                    content=str(step.get("output", ""))[:500],
+                    name=step.get("name", "unknown"),
+                    tool_call_id=f"restore-{index}-{step_index}",
+                ))
+        agent._messages = restored
+        return len(restored)
+
+    def _create_session_state(session_id: str, user_id: str | int, user: User | None) -> SessionState:
+        """Construct one session state. Called in a bounded worker thread."""
         key = (str(user_id), session_id)
         if key not in _state["sessions"]:
             try:
+                # Importing the model/graph stack is intentionally deferred
+                # until the first chat session. Health, auth, workspace APIs,
+                # and static UI startup stay lightweight.
+                from ..agent import ScoutAgent
+                from ..agent.file_guard import WorkspaceGuard
+
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
                 if session_path.exists():
@@ -569,7 +728,16 @@ def create_app(
                     )
 
                 agent.set_request_permissions_fn(_req_perms)
-                _state["sessions"][key] = s
+                parsed = _parse_session_file(session_path) if session_path.exists() else None
+                if parsed and parsed.get("messages"):
+                    _hydrate_agent_history(
+                        agent,
+                        parsed["messages"],
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+                with _state["session_registry_lock"]:
+                    _state["sessions"][key] = s
 
                 if _state["multi_user"] and user is not None:
                     personal, _ = ensure_workspaces(_state["workspace_root"], user.id)
@@ -597,6 +765,177 @@ def create_app(
                 raise HTTPException(status_code=500, detail=str(exc))
 
         return _state["sessions"][key]
+
+    async def _evict_session_states(
+        *,
+        reserve: int = 0,
+        user_id: str | None = None,
+        per_user_reserve: int = 0,
+    ) -> list[tuple[str, str]]:
+        """Close idle/LRU agents while preserving fair per-user capacity."""
+        if not _state["multi_user"]:
+            return []
+        runtime = _state["base_config"].server
+        now = time.monotonic()
+        with _state["session_registry_lock"]:
+            sessions: dict[tuple[str, str], SessionState] = _state["sessions"]
+            candidates = [
+                (key, state)
+                for key, state in sessions.items()
+                if state.abort_event is None
+            ]
+            remove_keys = {
+                key
+                for key, state in candidates
+                if now - state.last_activity >= runtime.session_idle_ttl_seconds
+            }
+
+            if user_id is not None:
+                remaining_user_count = sum(
+                    1
+                    for key in sessions
+                    if key[0] == user_id and key not in remove_keys
+                )
+                user_allowed = max(
+                    0,
+                    runtime.max_live_sessions_per_user - per_user_reserve,
+                )
+                if remaining_user_count > user_allowed:
+                    user_lru = sorted(
+                        (
+                            (key, state)
+                            for key, state in candidates
+                            if key[0] == user_id
+                            and key not in remove_keys
+                            and now - state.last_activity
+                            >= runtime.session_eviction_grace_seconds
+                        ),
+                        key=lambda item: item[1].last_activity,
+                    )
+                    remove_keys.update(
+                        key
+                        for key, _ in user_lru[: remaining_user_count - user_allowed]
+                    )
+
+            remaining_count = len(sessions) - len(remove_keys)
+            allowed = max(0, runtime.max_live_sessions - reserve)
+            if remaining_count > allowed:
+                lru = sorted(
+                    (
+                        (key, state)
+                        for key, state in candidates
+                        if key not in remove_keys
+                        and now - state.last_activity
+                        >= runtime.session_eviction_grace_seconds
+                    ),
+                    key=lambda item: item[1].last_activity,
+                )
+                remove_keys.update(key for key, _ in lru[: remaining_count - allowed])
+            removed = [
+                (key, sessions.pop(key))
+                for key in remove_keys
+                if key in sessions
+            ]
+
+        for key, state in removed:
+            try:
+                await state.agent.close()
+            except Exception:
+                logger.warning("Failed to close evicted session %s", key, exc_info=True)
+        if removed:
+            logger.info("Evicted %d idle session agents", len(removed))
+        return [key for key, _ in removed]
+
+    async def _get_session_state(
+        session_id: str,
+        user_id: str | int = "default",
+        user: User | None = None,
+    ) -> SessionState:
+        """Return a live session, initializing it with bounded concurrency."""
+        key = (str(user_id), session_id)
+        with _state["session_registry_lock"]:
+            existing = _state["sessions"].get(key)
+        if existing is not None:
+            existing.touch()
+            return existing
+
+        locks: dict[tuple[str, str], asyncio.Lock] = _state["session_init_locks"]
+        lock = locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            with _state["session_registry_lock"]:
+                existing = _state["sessions"].get(key)
+            if existing is not None:
+                existing.touch()
+                return existing
+
+            uid = str(user_id)
+            await _evict_session_states(
+                reserve=1,
+                user_id=uid,
+                per_user_reserve=1,
+            )
+            runtime = _state["base_config"].server
+            with _state["session_registry_lock"]:
+                reservations = _state["session_init_reservations"]
+                global_at_capacity = (
+                    len(_state["sessions"]) + len(reservations)
+                    >= runtime.max_live_sessions
+                )
+                user_at_capacity = (
+                    sum(1 for session_key in _state["sessions"] if session_key[0] == uid)
+                    + sum(1 for reservation in reservations if reservation[0] == uid)
+                    >= runtime.max_live_sessions_per_user
+                )
+                at_capacity = global_at_capacity or user_at_capacity
+                if not at_capacity:
+                    reservations.add(key)
+            if at_capacity:
+                locks.pop(key, None)
+                if user_at_capacity:
+                    detail = {
+                        "code": "USER_SESSION_CAPACITY",
+                        "message": "This account has reached its active conversation capacity. Try again shortly.",
+                    }
+                else:
+                    detail = {
+                        "code": "SERVER_CAPACITY",
+                        "message": "All agent session slots are currently active. Try again shortly.",
+                    }
+                raise HTTPException(
+                    status_code=503,
+                    detail=detail,
+                    headers={"Retry-After": "10"},
+                )
+            try:
+                try:
+                    await asyncio.wait_for(
+                        _state["agent_init_semaphore"].acquire(),
+                        timeout=runtime.agent_init_timeout_seconds,
+                    )
+                except TimeoutError as exc:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "code": "SERVER_BUSY",
+                            "message": "Agent initialization is busy. Try again shortly.",
+                        },
+                        headers={"Retry-After": "5"},
+                    ) from exc
+                try:
+                    state = await asyncio.to_thread(
+                        _create_session_state,
+                        session_id,
+                        user_id,
+                        user,
+                    )
+                finally:
+                    _state["agent_init_semaphore"].release()
+            finally:
+                with _state["session_registry_lock"]:
+                    _state["session_init_reservations"].discard(key)
+                locks.pop(key, None)
+            state.touch()
+            return state
 
     # Helper to enforce auth if multi_user is True
     async def get_user_context(user: User | None = Depends(get_current_user_optional)):
@@ -816,10 +1155,23 @@ def create_app(
             return "Permissions elevated for this session (admin profile, network granted where requested)."
         return "Permissions granted for this request."
 
+    async def _resource_maintenance() -> None:
+        interval = _state["base_config"].server.maintenance_interval_seconds
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await _evict_session_states()
+                await asyncio.to_thread(_evict_retriever_indexes)
+        except asyncio.CancelledError:
+            return
+
     @app.on_event("startup")
     async def _startup() -> None:
         if _state["multi_user"]:
             shared_workspace(_state["workspace_root"]).mkdir(parents=True, exist_ok=True)
+            _state["maintenance_tasks"].append(
+                asyncio.create_task(_resource_maintenance())
+            )
         logger.info(
             "Scout server started in %s mode (cwd=%s)",
             "multi-user" if multi_user else "local",
@@ -844,9 +1196,16 @@ def create_app(
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        for task in _state["maintenance_tasks"]:
+            task.cancel()
+        if _state["maintenance_tasks"]:
+            await asyncio.gather(*_state["maintenance_tasks"], return_exceptions=True)
         for task in _state["title_tasks"].values():
             task.cancel()
-        for s in _state["sessions"].values():
+        with _state["session_registry_lock"]:
+            sessions = list(_state["sessions"].values())
+            _state["sessions"].clear()
+        for s in sessions:
             await s.agent.close()
 
     # ── Endpoints ────────────────────────────────────────────────────
@@ -885,7 +1244,7 @@ def create_app(
     async def chat(req: ChatRequest, user: User | None = Depends(get_user_context)) -> EventSourceResponse:
         """Stream agent events as SSE."""
         uid = user.id if user else "default"
-        s = _get_session_state(req.session_id, uid, user)
+        s = await _get_session_state(req.session_id, uid, user)
         agent = s.agent
         if s.abort_event is not None:
             raise HTTPException(
@@ -899,7 +1258,8 @@ def create_app(
         # Rebuild BM25 index for this user if files changed since last chat
         proxy = _get_or_create_proxy(uid)
         if proxy is not None:
-            proxy.rebuild_if_dirty()
+            _evict_retriever_indexes(exclude_user=str(uid), reserve=1)
+            await asyncio.to_thread(proxy.rebuild_if_dirty)
 
         agent.set_focus_from_attachments(req.attachments or None)
 
@@ -1013,6 +1373,11 @@ def create_app(
                         if task is agent_get:
                             kind, payload = result
                             if kind == "event":
+                                if payload.get("file_changes"):
+                                    now = _now_iso()
+                                    for change_set in payload.get("file_changes") or []:
+                                        if not change_set.get("created_at"):
+                                            change_set["created_at"] = now
                                 if payload.get("type") == "response" and payload.get("content"):
                                     first_assistant_response = payload["content"]
                                 event_count += 1
@@ -1026,6 +1391,7 @@ def create_app(
                                 )
                             elif kind == "error":
                                 exc = payload
+                                from ..agent.exceptions import ProviderRateLimitError
                                 if isinstance(exc, ProviderRateLimitError):
                                     logger.warning("Rate limit during streaming: %s", exc)
                                     yield ServerSentEvent(
@@ -1079,6 +1445,7 @@ def create_app(
                     stream_task.cancel()
                 s.approval_queue = None
                 s.abort_event = None
+                s.touch()
                 logger.info("SSE stream finished (%d events emitted)", event_count)
 
         return EventSourceResponse(_generate())
@@ -1116,48 +1483,14 @@ def create_app(
     async def restore(req: RestoreRequest, session_id: str, user: User | None = Depends(get_user_context)) -> dict:
         """Restore agent conversation history from a persisted session."""
         uid = user.id if user else "default"
-        s = _get_session_state(session_id, uid, user)
+        s = await _get_session_state(session_id, uid, user)
         agent = s.agent
-
-        from langchain_core.messages import AIMessage, ToolMessage
-        from ..agent.multimodal import build_human_message
-
-        restored: list = []
-        for idx, m in enumerate(req.messages):
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role == "user":
-                paths = list(m.get("attachments") or [])
-                try:
-                    paths.extend(str(p) for p in resolve_assets(
-                        _session_dir(_session_cwd(uid), uid),
-                        session_id,
-                        [img["id"] for img in (m.get("chatImages") or [])],
-                    ))
-                except (FileNotFoundError, KeyError):
-                    pass
-                restored.append(build_human_message(content, paths))
-            elif role == "assistant":
-                steps = m.get("steps") or []
-                if steps:
-                    tool_calls = [
-                        {
-                            "name": s.get("name", "unknown"),
-                            "args": s.get("args") or {},
-                            "id": f"restore-{idx}-{j}",
-                        }
-                        for j, s in enumerate(steps)
-                    ]
-                    restored.append(AIMessage(content=content or "", tool_calls=tool_calls))
-                    for j, s in enumerate(steps):
-                        restored.append(ToolMessage(
-                            content=str(s.get("output", ""))[:500],
-                            name=s.get("name", "unknown"),
-                            tool_call_id=f"restore-{idx}-{j}",
-                        ))
-                else:
-                    restored.append(AIMessage(content=content))
-        agent._messages = restored
+        restored_count = _hydrate_agent_history(
+            agent,
+            req.messages,
+            user_id=uid,
+            session_id=session_id,
+        )
         cwd = _session_cwd(uid)
         snap = load_session_snapshot(_session_dir(cwd, uid), session_id)
         if snap:
@@ -1168,8 +1501,9 @@ def create_app(
                 _state["grant_store"].import_session(str(uid), session_id, snap["grants"])
             if snap.get("exec_rules") and agent._execution and agent._execution._orchestrator:
                 agent._execution._orchestrator._session_exec_rules = list(snap["exec_rules"])
-        logger.info("Restored %d messages into agent history", len(restored))
-        return {"status": "ok", "count": len(restored)}
+        s.touch()
+        logger.info("Restored %d messages into agent history", restored_count)
+        return {"status": "ok", "count": restored_count}
 
     @app.get("/health")
     async def health() -> dict:
@@ -1178,7 +1512,9 @@ def create_app(
         init_error = _state.get("init_error")
 
         exec_health: dict | None = _state.get("execution_health")
-        for s in _state["sessions"].values():
+        with _state["session_registry_lock"]:
+            live_sessions = list(_state["sessions"].values())
+        for s in live_sessions:
             svc = s.agent.execution_service
             if svc:
                 h = await svc.health()
@@ -1218,6 +1554,20 @@ def create_app(
             if exec_health:
                 body["execution"] = exec_health
             if _state["multi_user"]:
+                with _state["retriever_lock"]:
+                    proxies = list(_state["retrievers"].values())
+                resident = [proxy for proxy in proxies if proxy.is_resident]
+                body["resources"] = {
+                    "live_sessions": len(live_sessions),
+                    "max_live_sessions": _state["base_config"].server.max_live_sessions,
+                    "max_live_sessions_per_user": _state["base_config"].server.max_live_sessions_per_user,
+                    "initializing_sessions": len(_state["session_init_reservations"]),
+                    "resident_retriever_indexes": len(resident),
+                    "max_resident_retriever_indexes": _state["base_config"].retriever.max_resident_users,
+                    "estimated_retriever_bytes": sum(
+                        proxy.estimated_resident_bytes for proxy in resident
+                    ),
+                }
                 if _state.get("init_error"):
                     body["status"] = "error"
                     body["error"] = _state["init_error"]
@@ -1528,6 +1878,70 @@ def create_app(
             raise HTTPException(status_code=500, detail="Malformed session file")
         return parsed
 
+    @app.post("/sessions/{session_id}/file-changes/{change_set_id}/undo")
+    async def undo_file_changes(
+        session_id: str,
+        change_set_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Safely undo a stored agent file-change set.
+
+        Undo is conditional: every current file must still match the content
+        hash written by the original change. If the user or agent edited a file
+        afterward, the request fails instead of clobbering newer work.
+        """
+        uid = user.id if user else "default"
+        cwd = _session_cwd(uid)
+        session_path = _session_file(cwd, session_id, uid)
+        if not session_path.exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        change_set, lines, line_index, set_index = _find_stored_change_set(session_path, change_set_id)
+        if change_set.get("undone"):
+            return {"status": "already_undone", "change_set_id": change_set_id}
+
+        root = user_workspace(_state["workspace_root"], uid) if _state["multi_user"] and user else Path(_state["cwd"])
+        root = root.resolve()
+        entries = change_set.get("entries") or []
+        if not entries:
+            raise HTTPException(status_code=400, detail="Change set is empty")
+
+        targets: list[tuple[Path, dict, bytes | None]] = []
+        for entry in entries:
+            if not entry.get("reversible"):
+                raise HTTPException(status_code=409, detail=f"Change is not reversible: {entry.get('path')}")
+            target = _safe_workspace_file(root, str(entry.get("path") or ""))
+            current_hash = _hash_file(target)
+            expected_hash = entry.get("new_hash")
+            if current_hash != expected_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "File changed after this edit; undo was not applied.",
+                        "path": entry.get("path"),
+                        "expected_hash": expected_hash,
+                        "current_hash": current_hash,
+                    },
+                )
+            old_content = _decode_change_content(entry.get("old_content_base64"))
+            targets.append((target, entry, old_content))
+
+        undone_paths: list[str] = []
+        for target, entry, old_content in targets:
+            if old_content is None:
+                if target.exists():
+                    target.unlink()
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(old_content)
+            undone_paths.append(str(entry.get("path") or target.name))
+
+        _mark_change_set_undone(lines, line_index, set_index, session_path)
+        proxy = _state["retrievers"].get(str(uid))
+        if proxy:
+            proxy.mark_dirty()
+        return {"status": "undone", "change_set_id": change_set_id, "paths": undone_paths}
+
     @app.put("/sessions/{session_id}/title")
     async def set_session_title(
         session_id: str,
@@ -1575,7 +1989,7 @@ def create_app(
             state.agent.set_model(req.model)
             state.model = req.model
         else:
-            state = _get_session_state(session_id, uid, user)
+            state = await _get_session_state(session_id, uid, user)
         overrides = getattr(config, "model_capabilities", None)
         overrides = overrides if isinstance(overrides, dict) else {}
         return {"model": state.model, "capabilities": {"vision": model_vision_support(state.model, overrides)}}
@@ -1720,6 +2134,8 @@ def create_app(
             entry["model"] = req.model
         if req.role == "assistant" and req.artifacts:
             entry["artifacts"] = req.artifacts
+        if req.role == "assistant" and req.file_changes:
+            entry["file_changes"] = req.file_changes
 
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -1746,66 +2162,21 @@ def create_app(
         shutil.rmtree(asset_dir(_session_dir(cwd, uid), session_id), ignore_errors=True)
         # Clean up in-memory state and shut down the agent subprocess
         key = (str(uid), session_id)
-        s = _state["sessions"].pop(key, None)
+        with _state["session_registry_lock"]:
+            s = _state["sessions"].pop(key, None)
+            user_has_live_sessions = any(
+                session_user == str(uid)
+                for session_user, _ in _state["sessions"]
+            )
         if s:
             await s.agent.close()
+        if _state["multi_user"] and not user_has_live_sessions:
+            proxy = _state["retrievers"].get(str(uid))
+            if proxy:
+                proxy.evict()
         return {"status": "ok"}
 
     # ── File listing endpoint (for @ autocomplete) ───────────────────
-
-    IGNORED_DIRS = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        ".tox", ".mypy_cache", ".pytest_cache", "dist", "build",
-        ".next", ".nuxt", ".scout", ".scout-cache", ".scout-executions",
-        ".idea", ".vscode",
-    }
-    IGNORED_EXTENSIONS = {
-        ".pyc", ".pyo", ".so", ".dylib", ".dll", ".o", ".a",
-        ".class", ".jar", ".war", ".egg", ".whl",
-    }
-
-    from ..agent.file_guard import is_name_denied as _is_sandbox_denied
-
-    def _fuzzy_file_score(candidate: str, query: str) -> int | None:
-        """Return fuzzy score for a path query, or None if no match."""
-        q = query.strip().lower()
-        if not q:
-            return 0
-
-        c = candidate.lower()
-        base_name = Path(candidate).name.lower()
-
-        # Strong signals first
-        if c.startswith(q):
-            return 300 - min(len(candidate), 200)
-        if base_name.startswith(q):
-            return 260 - min(len(base_name), 200)
-        if f"/{q}" in c:
-            return 230 - min(len(candidate), 200)
-        if q in c:
-            return 200 - min(len(candidate), 200)
-
-        # Subsequence match (fzf-like loose matching)
-        pos = -1
-        score = 120
-        for ch in q:
-            nxt = c.find(ch, pos + 1)
-            if nxt < 0:
-                return None
-            gap = nxt - pos - 1
-            if gap == 0:
-                score += 6
-            elif gap <= 2:
-                score += 3
-            else:
-                score += 1
-            pos = nxt
-
-        # Prefer matches in basename and shorter paths
-        if any(base_name[i : i + len(q)] == q for i in range(max(1, len(base_name) - len(q) + 1))):
-            score += 20
-        score -= min(len(candidate), 120) // 4
-        return score
 
     @app.get("/files")
     async def list_files(
@@ -1815,61 +2186,112 @@ def create_app(
     ) -> dict:
         """List workspace files for @-mention autocomplete.
 
-        In multi-user mode, lists files from the user's personal workspace
-        and the shared team repo, tagged with scope. In single-user mode,
-        returns files from cwd with scope: null.
+        Uses the same bounded, filtered search service as the workspace panel,
+        keeping autocomplete work off the request event loop.
         """
-        if _state["multi_user"] and user is not None:
-            uid = user.id
-            personal = user_workspace(_state["workspace_root"], uid)
-            shared = shared_workspace(_state["workspace_root"])
-            personal.mkdir(parents=True, exist_ok=True)
-            shared.mkdir(parents=True, exist_ok=True)
-            roots: list[tuple[Path, str | None]] = [(personal, "personal"), (shared, "shared")]
-        else:
-            roots = [(Path(_state["cwd"]), None)]
-
-        matches: list[tuple[int, str, str | None, str]] = []  # (score, display, scope, abs_path)
-        scan_limit = 30_000
-        scanned = 0
-
-        for root, scope in roots:
-            for root_str, dirs, files in _os.walk(root):
-                dirs[:] = [
-                    d for d in dirs
-                    if d not in IGNORED_DIRS and not d.startswith(".")
-                ]
-                root_path = Path(root_str)
-                for fname in files:
-                    ext = Path(fname).suffix.lower()
-                    if ext in IGNORED_EXTENSIONS:
-                        continue
-                    if _is_sandbox_denied(fname):
-                        continue
-                    abs_path = str(root_path / fname)
-                    try:
-                        rel = str((root_path / fname).relative_to(root))
-                    except ValueError:
-                        rel = fname
-                    score = _fuzzy_file_score(rel, prefix) if prefix else 0
-                    if prefix and score is None:
-                        continue
-                    matches.append((score or 0, rel, scope, abs_path))
-                    scanned += 1
-                    if scanned >= scan_limit:
-                        break
-            if scanned >= scan_limit:
-                break
-
-        if prefix:
-            matches.sort(key=lambda x: (-x[0], x[1]))
-        else:
-            matches.sort(key=lambda x: x[1])
-        results = [
-            {"path": m[1], "abs_path": m[3], "scope": m[2]}
-            for m in matches[:limit]
-        ]
+        locations = _workspace_locations(user)
+        files = await asyncio.to_thread(
+            search_workspace_files,
+            locations,
+            prefix,
+            limit=limit,
+        )
+        by_scope = {location.scope: location for location in locations}
+        results = []
+        for file in files:
+            location = by_scope[file["scope"]]
+            results.append({
+                "path": file["path"],
+                "abs_path": str(location.root / file["path"]),
+                "scope": file["scope"],
+            })
         return {"files": results}
+
+    def _workspace_locations(user: User | None):
+        try:
+            return workspace_locations(
+                workspace_root=_state["workspace_root"],
+                cwd=_state["cwd"],
+                multi_user=_state["multi_user"],
+                user_id=user.id if user else None,
+            )
+        except WorkspacePathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _workspace_location(user: User | None, scope: str):
+        try:
+            return location_for_scope(_workspace_locations(user), scope)
+        except WorkspacePathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/workspace/roots")
+    async def workspace_roots(
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Return visible roots with their first directory level."""
+        roots_out: list[dict] = []
+        for location in _workspace_locations(user):
+            try:
+                entries, truncated = await asyncio.to_thread(
+                    list_workspace_directory,
+                    location,
+                )
+            except WorkspacePathError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            root = location.descriptor()
+            root["children"] = entries
+            root["truncated"] = truncated
+            roots_out.append(root)
+        return {"roots": roots_out}
+
+    @app.get("/workspace/entries")
+    async def workspace_entries(
+        scope: str = Query(...),
+        path: str = Query(""),
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Return one directory level for lazy tree expansion."""
+        location = _workspace_location(user, scope)
+        try:
+            entries, truncated = await asyncio.to_thread(
+                list_workspace_directory,
+                location,
+                path,
+            )
+        except WorkspacePathError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"scope": scope, "path": path, "entries": entries, "truncated": truncated}
+
+    @app.get("/workspace/search")
+    async def workspace_search(
+        query: str = Query(..., min_length=1, max_length=200),
+        limit: int = Query(80, ge=1, le=200),
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Search workspace files without blocking request handling."""
+        results = await asyncio.to_thread(
+            search_workspace_files,
+            _workspace_locations(user),
+            query,
+            limit=limit,
+        )
+        return {"files": results}
+
+    @app.get("/workspace/content")
+    async def workspace_content(
+        scope: str = Query(...),
+        path: str = Query(...),
+        user: User | None = Depends(get_user_context),
+    ):
+        """Serve a previewable file addressed by scope and relative path."""
+        location = _workspace_location(user, scope)
+        try:
+            target = resolve_workspace_path(location, path, expect="file")
+        except WorkspacePathError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if target.suffix.lower() not in RENDERERS or target.stat().st_size > MAX_ARTIFACT_SIZE:
+            raise HTTPException(status_code=415, detail="This file type cannot be previewed")
+        return FileResponse(target, headers={"Cache-Control": "no-store, max-age=0"})
 
     @app.get("/files/content")
     async def file_content(
@@ -1892,15 +2314,22 @@ def create_app(
     @app.get("/artifacts/content")
     async def artifact_content(
         path: str = Query(...),
+        scope: str | None = Query(None),
         user: User | None = Depends(get_user_context),
     ):
         """Serve a supported workspace artifact from an authorized root."""
         roots: list[Path]
         if _state["multi_user"] and user is not None:
-            roots = [
-                user_workspace(_state["workspace_root"], user.id),
-                shared_workspace(_state["workspace_root"]),
-            ]
+            if scope not in {None, "personal", "shared"}:
+                raise HTTPException(status_code=400, detail="Invalid workspace scope")
+            personal = user_workspace(_state["workspace_root"], user.id)
+            shared = shared_workspace(_state["workspace_root"])
+            if scope == "personal":
+                roots = [personal]
+            elif scope == "shared":
+                roots = [shared]
+            else:
+                roots = [personal, shared]
         else:
             roots = [Path(_state["cwd"])]
 
@@ -1953,7 +2382,14 @@ def create_app(
             proxy = _state["retrievers"].get(str(user.id))
             if proxy:
                 proxy.mark_dirty()
-        return {"status": "ok", "filename": fname, "size": len(content)}
+        return {
+            "status": "ok",
+            "filename": fname,
+            "path": fname,
+            "abs_path": str(dest.resolve()),
+            "scope": "shared" if target == "shared" else "personal",
+            "size": len(content),
+        }
 
     # ── Shared repo management endpoints ────────────────────────────
 
@@ -2196,7 +2632,7 @@ def create_app(
         if _state["multi_user"]:
             raise HTTPException(status_code=403, detail="Not available in server mode")
         """Generate a workspace skill file using the LLM."""
-        s = _get_session_state(session_id)
+        s = await _get_session_state(session_id)
         agent = s.agent
 
         listing = req.directory_summary

@@ -15,6 +15,20 @@ retriever:
   top_k: 5
   chunk_size: 1000
   chunk_overlap: 200
+  max_index_bytes: 25000000
+  max_chunks: 20000
+  max_resident_users: 4
+  idle_ttl_seconds: 900
+  build_concurrency: 1
+
+server:
+  max_live_sessions: 24
+  max_live_sessions_per_user: 8
+  session_idle_ttl_seconds: 1800
+  session_eviction_grace_seconds: 5
+  agent_init_concurrency: 2
+  agent_init_timeout_seconds: 45
+  maintenance_interval_seconds: 60
 
 execution:
   enabled: true

@@ -52,7 +52,7 @@ def make_tools(
         return guard.is_write_denied(p) if guard else is_path_denied(p)
 
     def _resolve_workspace_path(path: str) -> Path:
-        """Map server-visible workspace paths into this tool's workspace roots."""
+        """Map canonical agent paths into this tool's workspace roots."""
         p = Path(path)
         def _shared_path(parts: tuple[str, ...]) -> Path | None:
             shared_dir = getattr(guard, "_shared", None)
@@ -60,38 +60,21 @@ def make_tools(
                 return None
             return Path(shared_dir) / (Path(*parts) if parts else Path("."))
 
-        if not p.is_absolute():
-            if p.parts[:2] == ("users", user_id):
-                return Path(data_dir) / Path(*p.parts[2:])
-            if p.parts[:1] == ("workspace",):
-                relative = p.parts[1:]
-                if relative[:2] == ("users", user_id):
-                    return Path(data_dir) / (Path(*relative[2:]) if relative[2:] else Path("."))
-                if relative[:1] == ("shared",):
-                    shared = _shared_path(relative[1:])
-                    if shared is not None:
-                        return shared
+        if p.is_absolute():
+            if p.parts[:2] == ("/", "workspace"):
+                relative = p.parts[2:]
                 return Path(data_dir) / (Path(*relative) if relative else Path("."))
-            if p.parts[:1] == ("shared",):
-                shared = _shared_path(p.parts[1:])
+            if p.parts[:2] == ("/", "shared"):
+                shared = _shared_path(p.parts[2:])
                 if shared is not None:
                     return shared
-            return Path(data_dir) / p
-
-        parts = p.parts
-        try:
-            workspace_idx = parts.index("workspace")
-        except ValueError:
             return p
 
-        relative = Path(*parts[workspace_idx + 1:])
-        if relative.parts[:2] == ("users", user_id):
-            return Path(data_dir) / (Path(*relative.parts[2:]) if relative.parts[2:] else Path("."))
-        if relative.parts[:1] == ("shared",):
-            shared = _shared_path(relative.parts[1:])
+        if p.parts[:1] == ("shared",):
+            shared = _shared_path(p.parts[1:])
             if shared is not None:
                 return shared
-        return p
+        return Path(data_dir) / p
 
     def _fallback_search_documents(query: str, top_k: int) -> str:
         root = Path(data_dir)
@@ -180,6 +163,10 @@ def make_tools(
         Short commands finish within yield_time_ms and return exit code.
         Long-running commands return a session ID — poll with write_stdin(session_id, "").
         File writes are staged for approval. Network access requires approval.
+        Commands run from /workspace by default. Use bare relative paths such
+        as "script.py" for personal workspace files, or /shared/... for shared
+        files. Do not use server/host paths such as /app/workspace or
+        /srv/scout-source.
         """
         if not execution_service:
             return "[SANDBOX UNAVAILABLE] Shell execution requires an active execution sandbox."
@@ -329,13 +316,30 @@ def make_tools(
         return "\n\n---\n\n".join(parts)
 
     @tool
-    def think(reflection: str) -> str:
-        """Pause to reason through your analysis strategy before acting."""
+    def think(content: str = "", title: str = "", reflection: str = "") -> str:
+        """Label the next tool phase and optionally narrate it in main prose.
+
+        *title*: short phase name for the tool-activity card (e.g. "Plan demo").
+        *content*: user-visible prose shown in the main transcript (not private).
+        *reflection*: legacy alias for content.
+        After calling this, run the related tools for that phase.
+        """
         return "[Thought recorded — continue with your plan.]"
 
     @tool
-    def ask_human(question: str) -> str:
-        """Ask the user a clarifying question before proceeding."""
+    def ask_user_choice(
+        question: str,
+        header: str = "Question",
+        options: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Ask the user a structured question, optionally with multiple-choice options.
+
+        Use this for explicit interactive flows (quizzes, MCQs, pick-one
+        decisions) and for genuinely blocking choices. Provide options as
+        [{"label": "...", "description": "..."}] when the answer can be
+        expressed as a small multiple-choice decision. Omit options only when
+        free-form input is required.
+        """
         return question
 
     _pdf_cache: dict[str, tuple[str, int]] = {}
@@ -407,9 +411,7 @@ def make_tools(
     @tool
     def write_file(path: str, content: str, description: str = "") -> str:
         """Write text content to a file. Requires user approval."""
-        p = Path(path)
-        if not p.is_absolute():
-            p = Path(data_dir) / p
+        p = _resolve_workspace_path(path)
         if _write_denied(p):
             return f"[Access denied: cannot write to {p}]"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -482,7 +484,7 @@ def make_tools(
     tools = [
         *python_tools, *shell_tools, run_node,
         *memory_tools, *skill_tools, *perm_tools,
-        read_file, list_files, search_documents, think, ask_human, read_pdf,
+        read_file, list_files, search_documents, think, ask_user_choice, read_pdf,
     ]
     if not disable_write_tools:
         tools.extend([apply_patch, write_file, write_binary_artifact])

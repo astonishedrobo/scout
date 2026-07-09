@@ -424,14 +424,12 @@ def search_pdf_text(
     This creates a temporary index each time — suitable for ad-hoc
     searches on attached PDFs, not for large-scale retrieval.
     """
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from .text_splitter import OverlappingTextSplitter
     from rank_bm25 import BM25Okapi
 
-    splitter = RecursiveCharacterTextSplitter(
+    splitter = OverlappingTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
-        keep_separator=True,
     )
     chunks = splitter.split_text(full_text)
     if not chunks:

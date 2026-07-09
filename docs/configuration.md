@@ -206,6 +206,30 @@ session_titles:
 
 Omit `model` to use each conversation's selected model. The configured title model must be available through one of the configured providers. Title generation runs after the first response is available, including for image-only and file-only prompts. If every model attempt fails, Scout creates a title from the saved conversation content.
 
+## Multi-user resource limits
+
+Docker deployments keep BM25 indexes and live agent sessions bounded. Idle indexes are evicted from memory and rebuilt from workspace files on the next search. Idle agent sessions are closed and transparently rehydrated from the saved conversation when the user returns.
+
+```yaml
+retriever:
+  max_index_bytes: 25000000
+  max_chunks: 20000
+  max_resident_users: 4
+  idle_ttl_seconds: 900
+  build_concurrency: 1
+
+server:
+  max_live_sessions: 24
+  max_live_sessions_per_user: 8
+  session_idle_ttl_seconds: 1800
+  session_eviction_grace_seconds: 5
+  agent_init_concurrency: 2
+  agent_init_timeout_seconds: 45
+  maintenance_interval_seconds: 60
+```
+
+`max_resident_users` is a hard LRU cap for in-memory indexes. `build_concurrency` prevents simultaneous index builds from causing memory spikes. `max_live_sessions` is the process-wide protection limit, while `max_live_sessions_per_user` prevents one account from monopolising it. `session_eviction_grace_seconds` prevents a just-used non-streaming session from being closed underneath its request. Requests receive `503` with `Retry-After` only when all relevant slots are busy or protected and no idle session can be evicted. Current counts, pending initializations, and the configured limits are reported under `resources` in `/health`.
+
 ## Apply configuration changes
 
 For a local launch, stop and restart Scout after changing YAML or environment variables.

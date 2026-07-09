@@ -14,6 +14,8 @@ interface WorkspaceShellProps {
   artifactPanel?: ReactNode;
   artifactOpen?: boolean;
   artifactDefaultSize?: number;
+  artifactMinSize?: number;
+  artifactMaxSize?: number;
   onArtifactResize?: (size: number) => void;
   isConnected?: boolean;
 }
@@ -29,6 +31,8 @@ export function WorkspaceShell({
   artifactPanel,
   artifactOpen,
   artifactDefaultSize = 38,
+  artifactMinSize = 20,
+  artifactMaxSize = 70,
   onArtifactResize,
   isConnected,
 }: WorkspaceShellProps) {
@@ -48,9 +52,9 @@ export function WorkspaceShell({
 
       <aside
         className={`
-          fixed lg:relative z-30 h-full shrink-0 bg-scout-canvas/95 backdrop-blur-xl
+          fixed lg:relative z-30 h-full shrink-0 bg-scout-panel/88 backdrop-blur-xl
           transition-[width,transform] duration-200 ease-in-out overflow-hidden
-          ${sidebarHidden ? "w-0 lg:w-0" : "w-[260px]"}
+          ${sidebarHidden ? "w-0 lg:w-0" : "w-[252px]"}
           ${isMobile ? (sidebarCollapsed ? "-translate-x-full" : "translate-x-0") : "translate-x-0"}
         `}
       >
@@ -58,7 +62,7 @@ export function WorkspaceShell({
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="flex items-center h-14 px-4 bg-scout-canvas/85 backdrop-blur-xl border-b border-scout-hairline-faint shrink-0 gap-3">
+        <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-transparent bg-scout-panel/30 px-3.5">
           <button
             onClick={onToggleSidebar}
             className="p-2 rounded-btn hover:bg-scout-lift/80 text-scout-muted hover:text-scout-text transition-colors"
@@ -67,7 +71,7 @@ export function WorkspaceShell({
             {sidebarCollapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
           </button>
           {sessionTitle && (
-            <span className="text-sm font-medium text-scout-text/90 truncate flex-1 min-w-0">
+            <span className="text-[13px] font-semibold tracking-[-0.01em] text-scout-text/90 truncate flex-1 min-w-0">
               {sessionTitle}
             </span>
           )}
@@ -107,12 +111,12 @@ export function WorkspaceShell({
                 {children}
               </div>
             </Panel>
-            <Separator className="w-1 -mx-px shrink-0 cursor-col-resize bg-scout-hairline-faint hover:bg-scout-muted/60 active:bg-scout-muted transition-colors" />
+            <Separator className="-mx-px w-px shrink-0 cursor-col-resize bg-scout-hairline-faint transition-colors hover:w-1 hover:bg-scout-muted/45 active:bg-scout-muted" />
             <Panel
               id="artifact"
               defaultSize={`${artifactDefaultSize}%`}
-              minSize="20%"
-              maxSize="55%"
+              minSize={`${artifactMinSize}%`}
+              maxSize={`${artifactMaxSize}%`}
               className="bg-scout-canvas"
               onResize={(size) => onArtifactResize?.(size.asPercentage)}
             >

@@ -79,20 +79,38 @@ class PersistentSandboxSession:
         self._inject_path_guard()
 
     def close(self) -> None:
-        if self._proc and self._proc.poll() is None:
-            pid = self._proc.pid
-            try:
-                if self._proc.stdin:
-                    self._proc.stdin.close()
-            except (OSError, BrokenPipeError):
-                pass
+        # Keep a local reference while detaching the process from the session.
+        # Dropping the final Popen reference with a broken TextIOWrapper still
+        # attached can otherwise surface a BrokenPipeError during GC.
+        with self._lock:
+            proc = self._proc
+            self._proc = None
+        if proc is None:
+            return
+
+        pid = proc.pid
+        if proc.poll() is None:
+            kill_process_tree(pid)
+        try:
+            proc.communicate(timeout=IO_DRAIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
             kill_process_tree(pid)
             try:
-                self._proc.wait(timeout=IO_DRAIN_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                kill_process_tree(pid)
+                proc.communicate(timeout=IO_DRAIN_TIMEOUT)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+        except (OSError, ValueError):
+            pass
+        finally:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+        if proc.returncode is not None:
             logger.info("Closed persistent sandbox session (pid=%s)", pid)
-        self._proc = None
 
     @property
     def alive(self) -> bool:

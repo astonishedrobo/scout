@@ -11,6 +11,7 @@ from pathlib import Path
 class FilePatch:
     path: str
     new_content: bytes
+    delete: bool = False
 
 
 def parse_patch(patch_text: str, root: Path) -> list[FilePatch]:
@@ -63,7 +64,7 @@ def _parse_codex_patch(patch_text: str, root: Path) -> list[FilePatch]:
             elif line.startswith("*** Delete File:"):
                 rel = line.split(":", 1)[1].strip()
                 target = _resolve_patch_path(rel, root)
-                results.append(FilePatch(path=str(target), new_content=b""))
+                results.append(FilePatch(path=str(target), new_content=b"", delete=True))
                 i += 1
             else:
                 i += 1
@@ -169,7 +170,7 @@ def parse_unified_patch(patch_text: str, root: Path) -> list[FilePatch]:
             old_bytes = target.read_bytes() if target.exists() else b""
 
         if new_line.endswith("/dev/null") or new_line.split("\t")[0].strip().endswith("/dev/null"):
-            results.append(FilePatch(path=str(target), new_content=b""))
+            results.append(FilePatch(path=str(target), new_content=b"", delete=True))
             continue
 
         if old_bytes is None:

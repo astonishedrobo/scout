@@ -17,6 +17,7 @@ import {
 import { AnchoredPopover } from "./ui/AnchoredPopover";
 import type { ChatImage } from "scout-core";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+import type { UploadResult } from "../hooks/useUploads";
 
 interface SlashCommand {
   name: string;
@@ -34,7 +35,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 interface FileEntry {
   path: string;
   abs_path: string;
-  scope: "personal" | "shared" | null;
+  scope: "workspace" | "personal" | "shared";
 }
 
 interface InputBarProps {
@@ -51,7 +52,9 @@ interface InputBarProps {
   isMultiUser?: boolean;
   token?: string | null;
   uploadingCount?: number;
-  onUpload?: (files: FileList | null) => void;
+  /** Workspace upload. When used from the chat plus menu, successful results
+   *  are also inserted as @file references at the cursor. */
+  onUpload?: (files: FileList | null) => void | Promise<UploadResult[] | void>;
   welcomeMode?: boolean;
   embedded?: boolean;
   requiresVision?: boolean;
@@ -156,7 +159,7 @@ export function InputBar({
             if (fetchIdRef.current === id) {
               const raw = data.files ?? [];
               const entries: FileEntry[] = raw.map((f: FileEntry | string) =>
-                typeof f === "string" ? { path: f, abs_path: f, scope: null } : f,
+                typeof f === "string" ? { path: f, abs_path: f, scope: "workspace" } : f,
               );
               setAtFiles(entries);
             }
@@ -172,8 +175,8 @@ export function InputBar({
     }
   }, [value, baseUrl, token]);
 
-  const minH = welcomeMode ? 120 : 44;
-  const maxH = welcomeMode ? 240 : 160;
+  const minH = welcomeMode ? 76 : 44;
+  const maxH = welcomeMode ? 180 : 160;
 
   useEffect(() => {
     const ta = textareaRef.current;
@@ -213,6 +216,64 @@ export function InputBar({
       }, 0);
     },
     [value, atStartPos, atPrefix],
+  );
+
+  /** Insert @refs for files just uploaded via the chat plus menu. */
+  const insertUploadRefs = useCallback((results: UploadResult[]) => {
+    if (results.length === 0) return;
+    const ta = textareaRef.current;
+    const pos = ta?.selectionStart ?? cursorPosRef.current ?? value.length;
+    const before = value.slice(0, pos);
+    const after = value.slice(pos);
+    let needsSpace = before.length > 0 && !/\s$/.test(before);
+    let insert = "";
+    for (const result of results) {
+      const refPath = result.abs_path || result.path || result.filename;
+      insert += (needsSpace ? " " : "") + "@" + refPath;
+      needsSpace = true;
+    }
+    // Trailing space so the user can keep typing cleanly.
+    insert += " ";
+    const newValue = before + insert + after;
+    const newPos = before.length + insert.length;
+    cursorPosRef.current = newPos;
+    setValue(newValue);
+
+    for (const result of results) {
+      const abs = result.abs_path || result.path;
+      if (/\.(png|jpe?g|webp|gif)$/i.test(abs)) {
+        const entry: FileEntry = {
+          path: result.path || result.filename,
+          abs_path: abs,
+          scope: result.scope ?? "workspace",
+        };
+        setImageAttachments((prev) =>
+          prev.some((p) => p.abs_path === entry.abs_path) ? prev : [...prev, entry],
+        );
+      }
+    }
+
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(newPos, newPos);
+      }
+    }, 0);
+  }, [value]);
+
+  const handleChatUpload = useCallback(
+    async (files: FileList | null) => {
+      if (!files?.length || !onUpload) return;
+      const maybe = onUpload(files);
+      const results = maybe && typeof (maybe as Promise<unknown>).then === "function"
+        ? await (maybe as Promise<UploadResult[] | void>)
+        : undefined;
+      if (Array.isArray(results) && results.length > 0) {
+        insertUploadRefs(results);
+      }
+    },
+    [onUpload, insertUploadRefs],
   );
 
   const insertAtSymbol = useCallback(() => {
@@ -278,9 +339,18 @@ export function InputBar({
       setChatImages([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     };
+    // Collect @paths from the draft so non-image uploads (CSV, PDF, …) become
+    // real attachments, not only bare text tokens.
+    const atPaths = [...trimmed.matchAll(/@((?:\.{0,2}\/)?[^\s,;'"]+)/g)]
+      .map((m) => m[1]!)
+      .filter(Boolean);
+    const attachmentSet = new Set<string>([
+      ...imageAttachments.map((a) => a.abs_path),
+      ...atPaths,
+    ]);
     const accepted = await onSubmit(
       trimmed,
-      imageAttachments.map((a) => a.abs_path),
+      [...attachmentSet],
       chatImages,
       clearAcceptedDraft,
     );
@@ -432,9 +502,7 @@ export function InputBar({
       )}
 
       <div
-        className={`flex flex-col bg-scout-panel/90 backdrop-blur-xl overflow-visible border border-scout-hairline-faint shadow-pop focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 transition-all ${
-          welcomeMode ? "rounded-hero" : "rounded-card"
-        } ${disabled ? "opacity-60" : ""}`}
+      className={`flex flex-col overflow-visible rounded-card border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${disabled ? "opacity-60" : ""}`}
       >
         {(imageAttachments.length > 0 || chatImages.length > 0) && (
           <div className="flex gap-2 overflow-x-auto px-3 pt-3">
@@ -472,7 +540,9 @@ export function InputBar({
                 : "How can I help you?"
           }
           rows={1}
-          className={`flex-1 bg-transparent text-scout-text placeholder:text-scout-muted/80 resize-none outline-none px-5 pt-4 pb-2 leading-relaxed ${
+          className={`flex-1 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
+            welcomeMode ? "pt-3 pb-1" : "pt-4 pb-2"
+          } ${
             welcomeMode ? "text-base" : "text-[15px]"
           }`}
           style={{ minHeight: minH, maxHeight: maxH }}
@@ -497,7 +567,8 @@ export function InputBar({
               multiple
               className="hidden"
               onChange={(e) => {
-                onUpload?.(e.target.files);
+                const files = e.target.files;
+                void handleChatUpload(files);
                 if (fileInputRef.current) fileInputRef.current.value = "";
                 setShowPlusMenu(false);
               }}
@@ -551,7 +622,7 @@ export function InputBar({
 
       {!welcomeMode && (
         <p className="text-center text-caption text-scout-muted/75 mt-3">
-          AI responses may make mistakes. Please verify responses.
+          Scout can make mistakes. Check important work.
         </p>
       )}
 

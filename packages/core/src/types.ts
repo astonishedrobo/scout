@@ -46,6 +46,7 @@ export interface Message {
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
   artifacts?: Artifact[];
+  fileChanges?: FileChangeSet[];
   attachments?: string[];
   chatImages?: ChatImage[];
 }
@@ -78,12 +79,30 @@ export interface Artifact {
 // ── Chat events (server → client via SSE) ────────────────────────
 
 export type ToolStepStatus = "executing" | "complete";
-export type ActivityStepKind = "tool" | "reflection";
+/** Chronological turn blocks. `reflection` is a legacy alias for `thinking`. */
+export type ActivityStepKind = "tool" | "thinking" | "text" | "reflection";
 
 export interface FileDiffEntry {
   path: string;
   status: "added" | "modified" | "deleted";
   diff: string;
+}
+
+export interface FileChangeEntry extends FileDiffEntry {
+  old_hash?: string | null;
+  new_hash?: string | null;
+  old_content_base64?: string | null;
+  new_content_base64?: string | null;
+  reversible: boolean;
+}
+
+export interface FileChangeSet {
+  id: string;
+  tool_name: string;
+  summary: string;
+  created_at: string;
+  entries: FileChangeEntry[];
+  undone?: boolean;
 }
 
 export interface CapabilityRequestPayload {
@@ -93,8 +112,39 @@ export interface CapabilityRequestPayload {
   command_summary: string;
 }
 
+export interface UserInputOption {
+  label: string;
+  description?: string;
+}
+
+export interface UserInputQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  options?: UserInputOption[];
+  is_other?: boolean;
+}
+
+export interface UserInputRequest {
+  request_id: string;
+  questions: UserInputQuestion[];
+}
+
 export interface ChatEvent {
-  type: "accepted" | "status" | "reflection" | "tool_call" | "tool_result" | "tool_output_chunk" | "response" | "error" | "approval_request" | "session_title";
+  type:
+    | "accepted"
+    | "status"
+    | "thinking"
+    | "assistant_text"
+    | "reflection"
+    | "tool_call"
+    | "tool_result"
+    | "tool_output_chunk"
+    | "response"
+    | "error"
+    | "approval_request"
+    | "user_input_request"
+    | "session_title";
   session_id?: string;
   name?: string;
   args?: Record<string, unknown>;
@@ -116,12 +166,15 @@ export interface ChatEvent {
   capability?: CapabilityRequestPayload;
   permission_request?: { reason: string; network_domains?: string[] };
   can_share?: boolean;
+  request_id?: string;
+  questions?: UserInputQuestion[];
   artifacts?: Artifact[];
+  file_changes?: FileChangeSet[];
 }
 
 /**
- * Enriched tool step used by the ActivityLog component.
- * Built from pairs of tool_call + tool_result events.
+ * Chronological turn step used by the GUI/CLI timeline.
+ * Built from thinking / assistant_text / tool_call / tool_result events.
  */
 export interface ToolStep {
   kind?: ActivityStepKind;
@@ -129,7 +182,12 @@ export interface ToolStep {
   args: Record<string, unknown>;
   status: ToolStepStatus;
   output?: string;
+  /** Expandable thinking body (and legacy reflection text). */
   reflection?: string;
+  /** Thinking header shown when the block is collapsed. */
+  title?: string;
+  /** Visible mid-turn prose for kind === "text". */
+  content?: string;
 }
 
 // ── File attachments ─────────────────────────────────────────────

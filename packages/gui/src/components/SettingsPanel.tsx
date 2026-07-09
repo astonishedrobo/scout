@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { ArrowLeft, Eye, EyeOff, Sun, Moon, Plus } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Sun, Moon, Cloud, Plus } from "lucide-react";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import { Button } from "./ui/Button";
 
@@ -246,23 +246,26 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
 
   return (
     <div className="fixed inset-0 z-50 bg-scout-canvas flex flex-col">
-      <div className="flex items-center gap-3 px-6 h-14 shrink-0">
+      <div className="flex items-center gap-3 px-4 sm:px-6 h-14 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/90 backdrop-blur-xl">
         <button
           onClick={onClose}
           className="p-2 rounded-btn hover:bg-scout-lift text-scout-muted hover:text-scout-text transition-colors"
         >
           <ArrowLeft size={18} />
         </button>
-        <h1 className="text-lg font-semibold text-scout-text">Settings</h1>
+        <div>
+          <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-scout-text">Settings</h1>
+          <p className="text-[10px] text-scout-muted">Workspace and model preferences</p>
+        </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden max-w-5xl mx-auto w-full px-4 pb-6 gap-4">
-        <nav className="w-48 shrink-0 py-4 px-2 space-y-1">
+      <div className="flex flex-1 flex-col md:flex-row overflow-hidden max-w-5xl mx-auto w-full px-3 sm:px-4 py-3 md:pb-6 gap-3 md:gap-4">
+        <nav className="flex w-full shrink-0 gap-1 overflow-x-auto px-1 md:w-48 md:block md:space-y-1 md:overflow-visible md:px-2 md:py-3">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-[13px] transition-colors
+              className={`shrink-0 md:w-full text-left px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-colors
                 ${tab === t.id
                   ? "bg-scout-input-bg text-scout-text font-semibold ring-1 ring-scout-hairline"
                   : "font-medium text-scout-muted hover:bg-scout-input-bg hover:text-scout-text"
@@ -273,7 +276,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
           ))}
         </nav>
 
-        <div className="flex-1 overflow-y-auto bg-scout-panel rounded-hero border border-scout-hairline-faint py-7 px-8">
+        <div className="flex-1 overflow-y-auto bg-scout-panel/80 rounded-hero border border-scout-hairline-faint py-6 px-5 sm:py-7 sm:px-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
           {tab === "general" && (
             <GeneralTab
               theme={theme}
@@ -377,7 +380,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
         </div>
       </div>
 
-      <div className="px-6 py-3 flex justify-end max-w-5xl mx-auto w-full shrink-0 border-t border-scout-hairline-faint">
+      <div className="px-4 sm:px-6 py-3 flex justify-end max-w-5xl mx-auto w-full shrink-0 border-t border-scout-hairline-faint bg-scout-canvas/90">
         <div className="flex items-center gap-3">
           <Button variant="outlined" surface="canvas" onClick={onClose}>
             Cancel
@@ -445,6 +448,15 @@ function GeneralTab({
             previewBg="#0d0d0d"
             previewFg="#1a1a1a"
             previewAccent="#ffffff"
+          />
+          <ThemeCard
+            icon={<Cloud size={20} />}
+            label="Soft gray"
+            active={theme === "soft"}
+            onClick={() => onSetTheme("soft")}
+            previewBg="#232426"
+            previewFg="#2a2b2d"
+            previewAccent="#c7c9cc"
           />
         </div>
       </section>

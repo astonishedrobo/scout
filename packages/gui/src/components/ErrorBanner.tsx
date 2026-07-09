@@ -9,7 +9,7 @@ export function ErrorBanner({ error }: ErrorBannerProps) {
   const [dismissedError, setDismissedError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (error && error !== dismissedError) {
+    if (!error || error !== dismissedError) {
       setDismissedError(null);
     }
   }, [error, dismissedError]);

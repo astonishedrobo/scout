@@ -55,7 +55,7 @@ async def test_stream_sends_full_tool_output_and_bounded_preview():
 
 
 @pytest.mark.asyncio
-async def test_stream_converts_think_tool_to_reflection_event():
+async def test_stream_converts_think_tool_to_thinking_event():
     class FakeGraph:
         async def astream(self, *_args, **_kwargs):
             yield {
@@ -67,7 +67,8 @@ async def test_stream_converts_think_tool_to_reflection_event():
                                 {
                                     "name": "think",
                                     "args": {
-                                        "reflection": "I found a mismatch, so I will inspect the narrower path next."
+                                        "title": "Checking the mismatch",
+                                        "content": "I found a mismatch, so I will inspect the narrower path next.",
                                     },
                                     "id": "call-1",
                                 }
@@ -100,7 +101,8 @@ async def test_stream_converts_think_tool_to_reflection_event():
 
     assert any(
         event == {
-            "type": "reflection",
+            "type": "thinking",
+            "title": "Checking the mismatch",
             "content": "I found a mismatch, so I will inspect the narrower path next.",
             "tool_call_id": "call-1",
         }
@@ -153,7 +155,7 @@ async def test_stream_preserves_assistant_text_that_accompanies_tool_call():
     events = [event async for event in agent.stream("demo")]
 
     assert events[1] == {
-        "type": "reflection",
+        "type": "assistant_text",
         "content": "I’ll inspect the workspace first, then decide what to check next.",
         "tool_call_id": "call-1",
     }
@@ -163,3 +165,46 @@ async def test_stream_preserves_assistant_text_that_accompanies_tool_call():
         "args": {"cmd": "ls -la"},
         "tool_call_id": "call-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_structured_user_input_request():
+    request = {
+        "type": "user_input_request",
+        "request_id": "call-1",
+        "questions": [
+            {
+                "id": "question",
+                "header": "Choice",
+                "question": "Pick one",
+                "options": [{"label": "A", "description": "Alpha"}],
+                "is_other": True,
+            }
+        ],
+    }
+
+    class FakeGraph:
+        async def astream(self, *_args, **_kwargs):
+            yield {
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content="Pick one",
+                            additional_kwargs={"user_input_request": request},
+                        )
+                    ]
+                }
+            }
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("choose")]
+
+    assert request in events
+    assert not any(event.get("type") == "response" for event in events)

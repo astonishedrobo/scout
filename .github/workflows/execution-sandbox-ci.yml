@@ -1,0 +1,35 @@
+name: Execution Sandbox CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  adversarial-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare workspace fixtures
+        run: |
+          mkdir -p workspace/users/1 workspace/users/2 workspace/shared
+          echo "user1" > workspace/users/1/mine.txt
+          echo "secret" > workspace/users/2/secret.txt
+          echo "team" > workspace/shared/team.txt
+
+      - name: Enable user namespaces for bubblewrap in CI
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Run adversarial tests in Compose
+        run: |
+          docker compose -f docker-compose.ci.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from test-runner
+
+      - name: Tear down Compose stack
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v

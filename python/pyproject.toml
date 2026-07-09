@@ -15,7 +15,6 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "pymupdf>=1.24",
     "pdfplumber>=0.11",
-    "langchain-text-splitters>=0.2",
     "langgraph>=0.5",
     "langchain>=0.3",
     "langchain-litellm>=0.2",

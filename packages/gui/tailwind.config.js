@@ -54,8 +54,8 @@ export default {
       },
       fontFamily: {
         sans: [
-          "General Sans",
           "Inter",
+          "SF Pro Text",
           "system-ui",
           "-apple-system",
           "BlinkMacSystemFont",
@@ -63,7 +63,8 @@ export default {
           "sans-serif",
         ],
         display: [
-          "Archivo Black",
+          "Inter",
+          "SF Pro Display",
           "ui-sans-serif",
           "system-ui",
           "sans-serif",
@@ -84,6 +85,7 @@ export default {
       boxShadow: {
         pop: "var(--shadow-pop)",
         "card-hover": "var(--shadow-card-hover)",
+        composer: "var(--shadow-composer)",
       },
     },
   },

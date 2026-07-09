@@ -36,8 +36,31 @@ class RetrieverConfig(BaseModel):
     """BM25 retriever settings."""
 
     top_k: int = 5
-    chunk_size: int = 1000   # characters (used by RecursiveCharacterTextSplitter)
+    chunk_size: int = 1000
     chunk_overlap: int = 200
+    max_resident_users: int = Field(4, ge=1, le=128)
+    idle_ttl_seconds: int = Field(900, ge=30)
+    build_concurrency: int = Field(1, ge=1, le=8)
+    max_index_bytes: int = Field(25_000_000, ge=1_000_000, le=200_000_000)
+    max_chunks: int = Field(20_000, ge=1_000, le=100_000)
+
+
+class ServerRuntimeConfig(BaseModel):
+    """Limits for expensive in-process multi-user resources."""
+
+    max_live_sessions: int = Field(24, ge=1, le=512)
+    max_live_sessions_per_user: int = Field(8, ge=1, le=128)
+    session_idle_ttl_seconds: int = Field(1800, ge=60)
+    session_eviction_grace_seconds: int = Field(5, ge=1, le=300)
+    agent_init_concurrency: int = Field(2, ge=1, le=16)
+    agent_init_timeout_seconds: int = Field(45, ge=5, le=300)
+    maintenance_interval_seconds: int = Field(60, ge=10, le=600)
+
+    @model_validator(mode="after")
+    def _validate_session_limits(self) -> "ServerRuntimeConfig":
+        if self.max_live_sessions_per_user > self.max_live_sessions:
+            raise ValueError("max_live_sessions_per_user cannot exceed max_live_sessions")
+        return self
 
 
 class CSVSourceConfig(BaseModel):
@@ -311,6 +334,7 @@ class AppConfig(BaseModel):
     data_paths: dict[str, str] = Field(default_factory=dict)
 
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
+    server: ServerRuntimeConfig = Field(default_factory=ServerRuntimeConfig)
     pdf: PDFConfig = Field(default_factory=PDFConfig)
     csv_sources: dict[str, CSVSourceConfig] = Field(default_factory=dict)
     json_sources: dict[str, JSONSourceConfig] = Field(default_factory=dict)

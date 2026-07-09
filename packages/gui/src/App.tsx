@@ -1,11 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { FolderTree } from "lucide-react";
 import { useServer } from "./hooks/useServer";
 import { useChat } from "./hooks/useChat";
 import { useConfig } from "./hooks/useConfig";
 import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
-import type { ToolStep, Artifact, ChatImage } from "scout-core";
+import type { ToolStep, Artifact, ChatImage, FileChangeSet } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView, WelcomeContent, SuggestionChips } from "./components/ChatView";
@@ -22,6 +23,9 @@ import { Login } from "./components/Login";
 import { AdminPanel } from "./components/AdminPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { UploadButton } from "./components/UploadButton";
+import { UserInputCard } from "./components/UserInputCard";
+import { FileChangePanel } from "./components/FileChangePanel";
+import { FileExplorerPanel } from "./components/FileExplorerPanel";
 
 export function App() {
   const { baseUrl, isReady, isMultiUser, error: serverError, warnings: serverWarnings } = useServer();
@@ -65,8 +69,8 @@ export function App() {
   );
 
   const onAssistantMessage = useCallback(
-    async (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[]) => {
-      await appendMessage(sessionId, "assistant", content, { steps, artifacts });
+    async (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[], fileChanges: FileChangeSet[]) => {
+      await appendMessage(sessionId, "assistant", content, { steps, artifacts, file_changes: fileChanges });
     },
     [appendMessage],
   );
@@ -86,7 +90,9 @@ export function App() {
     isLoading,
     error: chatError,
     pendingApproval,
+    pendingUserInput,
     clearApproval,
+    clearUserInput,
     isSessionLoading,
     clearSession,
     sendMessage,
@@ -118,12 +124,50 @@ export function App() {
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
+  const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
+  const [filesExplorerOpen, setFilesExplorerOpen] = useState(false);
 
   const openMemories = useCallback(() => {
     setSettingsTab("memories");
     setSettingsOpen(true);
   }, []);
+
+  /** Right panel is multi-use: opening one mode replaces the previous. Width is preserved. */
+  const openArtifact = useCallback((artifact: Artifact) => {
+    setActiveFileChanges(null);
+    setFilesExplorerOpen(false);
+    setActiveArtifact(artifact);
+  }, []);
+
+  const openFileChanges = useCallback((changeSet: FileChangeSet) => {
+    setActiveArtifact(null);
+    setFilesExplorerOpen(false);
+    setActiveFileChanges(changeSet);
+  }, []);
+
+  const openFilesExplorer = useCallback(() => {
+    setActiveArtifact(null);
+    setActiveFileChanges(null);
+    setFilesExplorerOpen(true);
+  }, []);
+
+  const closeRightPanel = useCallback(() => {
+    setActiveArtifact(null);
+    setActiveFileChanges(null);
+    setFilesExplorerOpen(false);
+  }, []);
+
+  const toggleFilesExplorer = useCallback(() => {
+    if (filesExplorerOpen) {
+      setFilesExplorerOpen(false);
+      return;
+    }
+    openFilesExplorer();
+  }, [filesExplorerOpen, openFilesExplorer]);
+
+  const rightPanelOpen = !!activeArtifact || !!activeFileChanges || filesExplorerOpen;
 
   useEffect(() => {
     if (!activeArtifact) return;
@@ -134,6 +178,41 @@ export function App() {
     if (latest && latest.version !== activeArtifact.version) setActiveArtifact(latest);
   }, [messages, activeArtifact]);
 
+  useEffect(() => {
+    if (!activeFileChanges) return;
+    const latest = [...messages]
+      .reverse()
+      .flatMap((m) => m.fileChanges ?? [])
+      .find((changeSet) => changeSet.id === activeFileChanges.id);
+    if (latest && latest !== activeFileChanges) setActiveFileChanges(latest);
+  }, [messages, activeFileChanges]);
+
+  const markChangeSetUndone = useCallback((changeSetId: string) => {
+    setMessages((prev) => prev.map((message) => ({
+      ...message,
+      fileChanges: message.fileChanges?.map((changeSet) =>
+        changeSet.id === changeSetId ? { ...changeSet, undone: true } : changeSet,
+      ),
+    })));
+    setActiveFileChanges((current) =>
+      current?.id === changeSetId ? { ...current, undone: true } : current,
+    );
+  }, [setMessages]);
+
+  const undoFileChanges = useCallback(async (changeSet: FileChangeSet) => {
+    if (!currentSessionId || changeSet.undone) return;
+    const resp = await fetch(`${baseUrl}/sessions/${currentSessionId}/file-changes/${changeSet.id}/undo`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => null);
+      const detail = body?.detail?.message ?? body?.detail ?? "Undo failed";
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    markChangeSetUndone(changeSet.id);
+  }, [baseUrl, currentSessionId, markChangeSetUndone, token]);
+
   const handleSubmit = useCallback(
     async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void) => {
       if (!isReady || isLoading) return false;
@@ -142,10 +221,19 @@ export function App() {
     [isReady, isLoading, sendMessage],
   );
 
+  const handleUserInputAnswer = useCallback(
+    (text: string) => {
+      clearUserInput();
+      void handleSubmit(text);
+    },
+    [clearUserInput, handleSubmit],
+  );
+
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
     setActiveArtifact(null);
+    setActiveFileChanges(null);
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
@@ -156,6 +244,7 @@ export function App() {
       if (sessionId === sessionRef.current) return;
 
       setActiveArtifact(null);
+      setActiveFileChanges(null);
       const oldSid = sessionRef.current;
       sessionRef.current = sessionId;
       if (window.location.hash !== `#/c/${sessionId}`) {
@@ -180,6 +269,7 @@ export function App() {
             content: m.content,
             steps: m.steps as ToolStep[] | undefined,
             artifacts: m.artifacts as Artifact[] | undefined,
+            fileChanges: m.fileChanges as FileChangeSet[] | undefined,
             attachments: m.attachments,
             chatImages: m.chatImages,
           })),
@@ -236,6 +326,7 @@ export function App() {
             content: m.content,
             steps: m.steps as ToolStep[] | undefined,
             artifacts: m.artifacts as Artifact[] | undefined,
+            fileChanges: m.fileChanges as FileChangeSet[] | undefined,
             attachments: m.attachments,
             chatImages: m.chatImages,
           })),
@@ -254,6 +345,7 @@ export function App() {
       clearSession(sessionId);
       if (sessionRef.current === sessionId) {
         setActiveArtifact(null);
+        setActiveFileChanges(null);
         sessionRef.current = null;
       }
     },
@@ -314,7 +406,7 @@ export function App() {
     [baseUrl, pendingApproval, clearApproval, currentSessionId, token],
   );
 
-  const displayError = serverError || chatError;
+  const displayError = serverError || chatError || operationError;
   const isWelcome = isReady && messages.length === 0 && !isLoading;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
   const sessionTitle =
@@ -339,18 +431,37 @@ export function App() {
         sessionTitle={sessionTitle}
         isConnected={isReady}
         headerActions={
-          isMultiUser ? (
-            <UploadButton
-              uploads={uploads}
-              activeCount={activeCount}
-              errorCount={errorCount}
-              onUpload={uploadFiles}
-              onDismiss={dismissUpload}
-            />
-          ) : undefined
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={toggleFilesExplorer}
+              className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-all ${
+                filesExplorerOpen
+                  ? "border-scout-hairline bg-scout-lift text-scout-text"
+                  : "border-scout-hairline-faint bg-scout-panel/40 text-scout-muted hover:bg-scout-lift/80 hover:text-scout-text"
+              }`}
+              title={filesExplorerOpen ? "Close files" : "Browse workspace files"}
+              aria-label="Browse files"
+              aria-pressed={filesExplorerOpen}
+            >
+              <FolderTree size={16} />
+              <span className="hidden sm:inline">Files</span>
+            </button>
+            {isMultiUser && (
+              <UploadButton
+                uploads={uploads}
+                activeCount={activeCount}
+                errorCount={errorCount}
+                onUpload={uploadFiles}
+                onDismiss={dismissUpload}
+              />
+            )}
+          </div>
         }
-        artifactOpen={!!activeArtifact}
-        artifactDefaultSize={artifactDefaultSize}
+        artifactOpen={rightPanelOpen}
+        artifactDefaultSize={filesExplorerOpen ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
+        artifactMinSize={filesExplorerOpen ? 42 : 20}
+        artifactMaxSize={70}
         onArtifactResize={setArtifactDefaultSize}
         banners={
           <>
@@ -381,13 +492,25 @@ export function App() {
           />
         }
         artifactPanel={
-          activeArtifact ? (
+          filesExplorerOpen ? (
+            <FileExplorerPanel
+              baseUrl={baseUrl}
+              token={token}
+              onClose={closeRightPanel}
+              refreshSignal={`${messages.length}:${isLoading ? "running" : "idle"}`}
+            />
+          ) : activeArtifact ? (
             <ArtifactPanel
               artifact={activeArtifact}
               baseUrl={baseUrl}
               token={token}
-              onClose={() => setActiveArtifact(null)}
+              onClose={closeRightPanel}
               embedded
+            />
+          ) : activeFileChanges ? (
+            <FileChangePanel
+              changeSet={activeFileChanges}
+              onClose={closeRightPanel}
             />
           ) : undefined
         }
@@ -408,7 +531,7 @@ export function App() {
 
           {isWelcome && (
             <div className="flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
-              <div className="w-full max-w-2xl px-4 flex flex-col gap-8">
+              <div className="flex w-full max-w-[42rem] flex-col gap-5 px-5">
                 <WelcomeContent />
                 <InputBar
                   baseUrl={baseUrl}
@@ -430,7 +553,7 @@ export function App() {
                   welcomeMode
                   embedded
                 />
-                <div className="-mt-3">
+                <div>
                   <SuggestionChips onSuggestionClick={handleSubmit} />
                 </div>
               </div>
@@ -447,7 +570,15 @@ export function App() {
               isLoading={isLoading}
               onRetry={retryAt}
               onFork={isMultiUser ? handleFork : undefined}
-              onOpenArtifact={setActiveArtifact}
+              onOpenArtifact={openArtifact}
+              onOpenFileChanges={openFileChanges}
+              onUndoFileChanges={(changeSet) => {
+                setOperationError(null);
+                void undoFileChanges(changeSet).catch((err) => {
+                  console.error("Undo failed:", err);
+                  setOperationError(err instanceof Error ? err.message : "Undo failed");
+                });
+              }}
               onOpenMemories={openMemories}
               baseUrl={baseUrl}
               token={token}
@@ -455,24 +586,35 @@ export function App() {
           )}
 
           {isReady && !isWelcome && (
-            <InputBar
-              baseUrl={baseUrl}
-              onSubmit={handleSubmit}
-              onSlashCommand={handleSlashCommand}
-              disabled={isLoading || !isReady}
-              isLoading={isLoading}
-              onStop={stop}
-              models={models}
-              capabilities={capabilities}
-              requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-              ensureSession={ensureSession}
-              currentModel={currentModel}
-              onSelectModel={(model) => setModel(model, sessionRef.current)}
-              isMultiUser={isMultiUser}
-              token={token}
-              uploadingCount={activeCount}
-              onUpload={isMultiUser ? uploadFiles : undefined}
-            />
+            <div className="shrink-0 bg-scout-canvas/95">
+              {pendingUserInput && (
+                <div className="max-w-[46rem] mx-auto px-4 pb-2">
+                  <UserInputCard
+                    request={pendingUserInput}
+                    onAnswer={handleUserInputAnswer}
+                    onDismiss={clearUserInput}
+                  />
+                </div>
+              )}
+              <InputBar
+                baseUrl={baseUrl}
+                onSubmit={handleSubmit}
+                onSlashCommand={handleSlashCommand}
+                disabled={isLoading || !isReady}
+                isLoading={isLoading}
+                onStop={stop}
+                models={models}
+                capabilities={capabilities}
+                requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
+                ensureSession={ensureSession}
+                currentModel={currentModel}
+                onSelectModel={(model) => setModel(model, sessionRef.current)}
+                isMultiUser={isMultiUser}
+                token={token}
+                uploadingCount={activeCount}
+                onUpload={isMultiUser ? uploadFiles : undefined}
+              />
+            </div>
           )}
         </div>
       </WorkspaceShell>

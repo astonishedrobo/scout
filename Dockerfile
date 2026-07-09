@@ -1,13 +1,20 @@
 # Stage 1: Build the React GUI
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 COPY package.json package-lock.json* ./
+COPY packages/cli/package.json ./packages/cli/package.json
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/gui-app/package.json ./packages/gui-app/package.json
+COPY packages/gui/package.json ./packages/gui/package.json
+COPY packages/scout/package.json ./packages/scout/package.json
+
+RUN npm ci
+
 COPY packages/ ./packages/
 COPY python/ ./python/
-
-RUN npm install
 RUN npm run build:core && npm run build:gui
 
 # Stage 2: Serve the Python backend with the GUI

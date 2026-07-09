@@ -5,13 +5,19 @@ def test_display_path_maps_personal_and_shared_roots(tmp_path):
     personal = tmp_path / "users" / "1"
     shared = tmp_path / "shared"
 
-    assert display_path(personal / "plot.png", personal, shared) == "workspace/plot.png"
-    assert display_path(shared / "report.csv", personal, shared) == "shared/report.csv"
+    assert display_path(personal / "plot.png", personal, shared) == "/workspace/plot.png"
+    assert display_path(shared / "report.csv", personal, shared) == "/shared/report.csv"
 
 
-def test_display_path_hides_unknown_absolute_paths(tmp_path):
+def test_display_path_preserves_unknown_absolute_paths(tmp_path):
     personal = tmp_path / "users" / "1"
-    assert display_path("/etc/passwd", personal) == "[internal path]"
+    assert display_path("/etc/passwd", personal) == "/etc/passwd"
+
+
+def test_display_path_preserves_canonical_sandbox_paths(tmp_path):
+    personal = tmp_path / "users" / "1"
+    assert display_path("/workspace/report.md", personal) == "/workspace/report.md"
+    assert display_path("/shared/data.csv", personal) == "/shared/data.csv"
 
 
 def test_redact_paths_rewrites_model_visible_text(tmp_path):
@@ -20,7 +26,7 @@ def test_redact_paths_rewrites_model_visible_text(tmp_path):
     text = f"Wrote {personal}/plot.png using {shared}/data.csv; failed at /etc/passwd"
 
     assert redact_paths(text, personal, shared) == (
-        "Wrote workspace/plot.png using shared/data.csv; failed at [internal path]"
+        "Wrote /workspace/plot.png using /shared/data.csv; failed at /etc/passwd"
     )
 
 
@@ -32,10 +38,10 @@ def test_redact_paths_preserves_urls(tmp_path):
 
 def test_redact_paths_rewrites_relative_user_directory(tmp_path):
     personal = tmp_path / "users" / "1"
-    assert redact_paths("saved at users/1/plot.png", personal) == "saved at workspace/plot.png"
+    assert redact_paths("saved at users/1/plot.png", personal) == "saved at users/1/plot.png"
 
 
 def test_sanitize_artifacts_preserves_workspace_artifact_path(tmp_path):
     personal = tmp_path / "users" / "1"
-    artifacts = [{"id": "x", "path": "users/1/plot.png", "name": "plot.png"}]
-    assert sanitize_artifacts(artifacts, personal)[0]["path"] == "workspace/plot.png"
+    artifacts = [{"id": "x", "path": "plot.png", "name": "plot.png"}]
+    assert sanitize_artifacts(artifacts, personal)[0]["path"] == "plot.png"

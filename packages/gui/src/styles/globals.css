@@ -11,32 +11,33 @@
    * mapped plainly in the config.
    */
 
-  /* Light mode — warm neutral canvas with quiet, modern surfaces. */
+  /* Light mode — an intentionally quiet neutral canvas. Borders only define
+     genuine boundaries; they are not used as a substitute for hierarchy. */
   :root.light {
-    --scout-canvas: 250 249 246;
+    --scout-canvas: 249 250 251;
     --scout-panel: 255 255 255;
-    --scout-void: 13 13 13;
-    --scout-charcoal: 31 31 31;
-    --scout-text: 13 13 13;
+    --scout-void: 17 19 23;
+    --scout-charcoal: 32 35 41;
+    --scout-text: 24 27 32;
     --scout-text-inverse: 255 255 255;
-    --scout-muted: 107 103 96;
-    --scout-hairline: 226 222 213;
-    --scout-hairline-faint: rgba(13, 13, 13, 0.055);
-    --scout-lift: 244 242 237;
-    --scout-input-bg: 246 244 239;
-    --scout-code-bg: 246 244 239;
+    --scout-muted: 105 112 123;
+    --scout-hairline: 228 231 236;
+    --scout-hairline-faint: rgba(24, 27, 32, 0.052);
+    --scout-lift: 243 245 247;
+    --scout-input-bg: 246 247 249;
+    --scout-code-bg: 245 246 248;
     --scout-peach: 240 168 104;
     --scout-peach-muted: rgba(240, 168, 104, 0.18);
     --scout-lavender: 185 164 247;
     --scout-lavender-muted: rgba(185, 164, 247, 0.2);
     --scout-amber: 240 193 79;
     --scout-amber-muted: rgba(240, 193, 79, 0.2);
-    --scout-card-lavender: 246 244 250;
-    --scout-card-lavender-hover: 241 238 248;
-    --scout-card-peach: 250 245 239;
-    --scout-card-peach-hover: 247 240 232;
-    --scout-card-amber: 250 247 239;
-    --scout-card-amber-hover: 247 243 232;
+    --scout-card-lavender: 246 245 251;
+    --scout-card-lavender-hover: 241 239 249;
+    --scout-card-peach: 251 247 242;
+    --scout-card-peach-hover: 248 242 235;
+    --scout-card-amber: 251 249 242;
+    --scout-card-amber-hover: 248 245 235;
     --scout-action: 245 197 24;
     --scout-action-muted: rgba(245, 197, 24, 0.18);
     --scout-accent-cta: var(--scout-action);
@@ -56,45 +57,47 @@
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
     --shadow-pop:
-      0 24px 80px rgba(30, 24, 10, 0.12),
-      0 2px 12px rgba(30, 24, 10, 0.06);
-    --shadow-card-hover: 0 12px 36px rgba(30, 24, 10, 0.09);
+      0 20px 56px rgba(25, 31, 42, 0.1),
+      0 1px 4px rgba(25, 31, 42, 0.04);
+    --shadow-card-hover: 0 10px 24px rgba(25, 31, 42, 0.08);
+    --shadow-composer: 0 8px 26px rgba(25, 31, 42, 0.075), 0 1px 2px rgba(25, 31, 42, 0.04);
     --radius-pill: 9999px;
-    --radius-hero: 24px;
-    --radius-card: 20px;
-    --radius-btn: 12px;
-    --text-display: clamp(2.5rem, 6vw, 4rem);
+    --radius-hero: 20px;
+    --radius-card: 16px;
+    --radius-btn: 10px;
+    --text-display: clamp(2.15rem, 5vw, 3.25rem);
     --text-body: 16px;
     --text-caption: 12px;
   }
 
-  /* Dark mode — near-black with subtle lifted surfaces and restrained color. */
+  /* Dark mode — neutral graphite with enough separation for navigation, but
+     never so much contrast that the workspace becomes a grid of black boxes. */
   :root.dark,
   :root {
-    --scout-canvas: 16 16 16;
-    --scout-panel: 25 25 25;
-    --scout-void: 13 13 13;
-    --scout-charcoal: 40 40 40;
-    --scout-text: 255 255 255;
-    --scout-text-inverse: 13 13 13;
-    --scout-muted: 165 165 165;
-    --scout-hairline: 48 48 48;
-    --scout-hairline-faint: rgba(255, 255, 255, 0.065);
-    --scout-lift: 33 33 33;
-    --scout-input-bg: 29 29 29;
-    --scout-code-bg: 21 21 21;
+    --scout-canvas: 19 20 21;
+    --scout-panel: 25 26 27;
+    --scout-void: 14 15 16;
+    --scout-charcoal: 40 41 43;
+    --scout-text: 241 243 245;
+    --scout-text-inverse: 15 17 20;
+    --scout-muted: 157 159 164;
+    --scout-hairline: 54 55 58;
+    --scout-hairline-faint: rgba(255, 255, 255, 0.07);
+    --scout-lift: 33 34 36;
+    --scout-input-bg: 29 30 32;
+    --scout-code-bg: 17 18 19;
     --scout-peach: 224 151 90;
     --scout-peach-muted: rgba(224, 151, 90, 0.22);
     --scout-lavender: 178 156 247;
     --scout-lavender-muted: rgba(178, 156, 247, 0.2);
     --scout-amber: 232 181 62;
     --scout-amber-muted: rgba(232, 181, 62, 0.2);
-    --scout-card-lavender: 31 30 35;
-    --scout-card-lavender-hover: 38 36 44;
-    --scout-card-peach: 34 31 28;
-    --scout-card-peach-hover: 43 38 33;
-    --scout-card-amber: 34 32 27;
-    --scout-card-amber-hover: 43 40 32;
+    --scout-card-lavender: 27 27 34;
+    --scout-card-lavender-hover: 34 33 43;
+    --scout-card-peach: 30 27 25;
+    --scout-card-peach-hover: 39 34 30;
+    --scout-card-amber: 30 29 24;
+    --scout-card-amber-hover: 39 37 29;
     --scout-action: 250 204 21;
     --scout-action-muted: rgba(250, 204, 21, 0.16);
     --scout-accent-cta: var(--scout-action);
@@ -108,20 +111,77 @@
     --scout-bg: var(--scout-canvas);
     --scout-surface: var(--scout-panel);
     --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-canvas);
+    --scout-sidebar-bg: var(--scout-panel);
     --scout-sidebar-hover: var(--scout-lift);
     --scout-border: var(--scout-hairline);
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
     --shadow-pop:
-      0 28px 90px rgba(0, 0, 0, 0.5),
+      0 28px 80px rgba(0, 0, 0, 0.34),
       0 1px 0 rgba(255, 255, 255, 0.04) inset;
-    --shadow-card-hover: 0 18px 48px rgba(0, 0, 0, 0.36);
+    --shadow-card-hover: 0 16px 42px rgba(0, 0, 0, 0.24);
+    --shadow-composer: 0 10px 30px rgba(0, 0, 0, 0.18), 0 1px 0 rgba(255, 255,255,0.035) inset;
     --radius-pill: 9999px;
-    --radius-hero: 24px;
-    --radius-card: 20px;
-    --radius-btn: 12px;
-    --text-display: clamp(2.5rem, 6vw, 4rem);
+    --radius-hero: 20px;
+    --radius-card: 16px;
+    --radius-btn: 10px;
+    --text-display: clamp(2.15rem, 5vw, 3.25rem);
+    --text-body: 16px;
+    --text-caption: 12px;
+  }
+
+  /* Soft gray — a neutral, low-contrast workspace for long sessions. */
+  :root.soft {
+    --scout-canvas: 35 36 38;
+    --scout-panel: 42 43 45;
+    --scout-void: 29 30 32;
+    --scout-charcoal: 53 54 57;
+    --scout-text: 237 238 240;
+    --scout-text-inverse: 29 30 32;
+    --scout-muted: 177 180 184;
+    --scout-hairline: 60 61 64;
+    --scout-hairline-faint: rgba(255, 255, 255, 0.065);
+    --scout-lift: 50 51 54;
+    --scout-input-bg: 47 48 51;
+    --scout-code-bg: 31 32 34;
+    --scout-peach: 205 190 174;
+    --scout-peach-muted: rgba(205, 190, 174, 0.14);
+    --scout-lavender: 195 195 202;
+    --scout-lavender-muted: rgba(195, 195, 202, 0.14);
+    --scout-amber: 208 204 191;
+    --scout-amber-muted: rgba(208, 204, 191, 0.14);
+    --scout-card-lavender: 47 48 51;
+    --scout-card-lavender-hover: 54 55 58;
+    --scout-card-peach: 47 48 51;
+    --scout-card-peach-hover: 54 55 58;
+    --scout-card-amber: 47 48 51;
+    --scout-card-amber-hover: 54 55 58;
+    --scout-action: 205 207 211;
+    --scout-action-muted: rgba(205, 207, 211, 0.17);
+    --scout-accent-cta: var(--scout-action);
+    --scout-success: 143 203 160;
+    --scout-success-muted: rgba(143, 203, 160, 0.13);
+    --scout-error: 218 143 145;
+    --scout-error-muted: rgba(218, 143, 145, 0.13);
+    --scout-warning: 205 194 146;
+    --scout-warning-muted: rgba(205, 194, 146, 0.14);
+    --scout-cyan: 178 185 187;
+    --scout-bg: var(--scout-canvas);
+    --scout-surface: var(--scout-panel);
+    --scout-surface-hover: var(--scout-lift);
+    --scout-sidebar-bg: var(--scout-panel);
+    --scout-sidebar-hover: var(--scout-lift);
+    --scout-border: var(--scout-hairline);
+    --scout-text-primary: var(--scout-text);
+    --scout-text-secondary: var(--scout-muted);
+    --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.28);
+    --shadow-card-hover: 0 12px 28px rgba(0, 0, 0, 0.2);
+    --shadow-composer: 0 10px 28px rgba(0, 0, 0, 0.2);
+    --radius-pill: 9999px;
+    --radius-hero: 16px;
+    --radius-card: 12px;
+    --radius-btn: 8px;
+    --text-display: clamp(2.15rem, 5vw, 3.25rem);
     --text-body: 16px;
     --text-caption: 12px;
   }
@@ -153,22 +213,41 @@
     letter-spacing: -0.011em;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    min-width: 320px;
+    min-height: 100vh;
+    overscroll-behavior: none;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--scout-muted) / 0.45);
+    outline-offset: 2px;
   }
 }
 
 @layer components {
   .font-display {
     font-family: ui-sans-serif, system-ui, sans-serif;
-    font-weight: 650;
-    letter-spacing: -0.045em;
-    line-height: 1;
+    font-weight: 620;
+    letter-spacing: -0.04em;
+    line-height: 1.05;
     text-wrap: balance;
   }
 
   .text-display {
     font-size: var(--text-display);
-    line-height: 1;
-    letter-spacing: -0.045em;
+    line-height: 1.05;
+    letter-spacing: -0.04em;
   }
 
   .text-body {

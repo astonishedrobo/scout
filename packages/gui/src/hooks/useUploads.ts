@@ -9,6 +9,15 @@ export interface UploadItem {
   error?: string;
 }
 
+/** Successful upload result — enough to insert an @ reference in chat. */
+export interface UploadResult {
+  filename: string;
+  path: string;
+  abs_path: string;
+  scope: "personal" | "shared" | null;
+  size: number;
+}
+
 const DONE_FADE_MS = 4000;
 
 /**
@@ -37,10 +46,12 @@ export function useUploads(baseUrl: string, token: string | null) {
   }, []);
 
   const uploadFiles = useCallback(
-    async (files: FileList | File[] | null) => {
-      if (!files) return;
+    async (files: FileList | File[] | null): Promise<UploadResult[]> => {
+      if (!files) return [];
       const list = Array.from(files);
-      if (list.length === 0) return;
+      if (list.length === 0) return [];
+
+      const succeeded: UploadResult[] = [];
 
       for (const file of list) {
         const id = `up_${counterRef.current++}`;
@@ -65,6 +76,24 @@ export function useUploads(baseUrl: string, token: string | null) {
             }
             update(id, { status: "error", error: detail });
           } else {
+            const body = (await r.json()) as {
+              filename?: string;
+              path?: string;
+              abs_path?: string;
+              scope?: "personal" | "shared" | null;
+              size?: number;
+            };
+            const filename = body.filename || file.name;
+            const path = body.path || filename;
+            const abs_path = body.abs_path || path;
+            const scope = body.scope ?? "personal";
+            succeeded.push({
+              filename,
+              path,
+              abs_path,
+              scope,
+              size: body.size ?? file.size,
+            });
             update(id, { status: "done" });
             scheduleFade(id);
           }
@@ -72,6 +101,8 @@ export function useUploads(baseUrl: string, token: string | null) {
           update(id, { status: "error", error: e?.message ?? "Network error" });
         }
       }
+
+      return succeeded;
     },
     [baseUrl, token, update, scheduleFade],
   );

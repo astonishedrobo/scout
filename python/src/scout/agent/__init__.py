@@ -43,7 +43,30 @@ def preview_tool_output(content: object, max_chars: int = _TOOL_OUTPUT_PREVIEW_C
         f"({len(hidden):,} characters hidden)"
     )
 
-__all__ = ["ScoutAgent", "ProviderRateLimitError"]
+
+def thinking_block_from_args(args: dict) -> tuple[str, str]:
+    """Return (title, content) for a think tool call."""
+    content = str(args.get("content") or args.get("reflection") or "").strip()
+    title = str(args.get("title") or "").strip()
+    if not content and title:
+        content = title
+        title = ""
+    if not content:
+        return "", ""
+    if not title:
+        first_line = content.split("\n", 1)[0].strip()
+        # Prefer first sentence as the collapsed header.
+        for sep in (". ", "? ", "! "):
+            idx = first_line.find(sep)
+            if 0 < idx <= 90:
+                title = first_line[: idx + 1].strip()
+                break
+        if not title:
+            title = first_line if len(first_line) <= 90 else first_line[:87].rstrip() + "..."
+    return title, content
+
+
+__all__ = ["ScoutAgent", "ProviderRateLimitError", "thinking_block_from_args"]
 
 
 def _tool_arg_summary(name: str, args: dict) -> str:
@@ -74,7 +97,7 @@ def _tool_arg_summary(name: str, args: dict) -> str:
         first_line = code.split("\n", 1)[0][:60]
         return f"`{first_line}`" if first_line else f"ran {name}"
     if name == "think":
-        text = args.get("reflection", "")
+        text = str(args.get("content") or args.get("reflection") or args.get("title") or "")
         return text[:80] + ("..." if len(text) > 80 else "")
     return ", ".join(f"{k}={str(v)[:30]}" for k, v in list(args.items())[:3]) or ""
 
@@ -408,12 +431,20 @@ class ScoutAgent:
                 for msg in state_update.get("messages", []):
                     new_messages.append(msg)
                     if isinstance(msg, AIMessage):
+                        user_input_request = msg.additional_kwargs.get("user_input_request")
+                        if user_input_request:
+                            response_emitted = True
+                            events.append(user_input_request)
+                            continue
                         visible_text = _message_text(msg.content).strip()
                         if msg.tool_calls:
+                            # User-facing prose that accompanies tool calls belongs
+                            # in the interleaved timeline, not as a collapsed
+                            # "activity group" title.
                             if visible_text:
                                 safe_text = redact_paths(visible_text, self._cwd, self._shared_dir)
                                 events.append({
-                                    "type": "reflection",
+                                    "type": "assistant_text",
                                     "content": safe_text,
                                     "tool_call_id": msg.tool_calls[0]["id"],
                                 })
@@ -424,14 +455,15 @@ class ScoutAgent:
                                     "args": args,
                                 }
                                 if tc["name"] == "think":
-                                    reflection = str(args.get("reflection", "")).strip()
-                                    if reflection:
+                                    title, body = thinking_block_from_args(args)
+                                    if body:
                                         events.append({
-                                            "type": "reflection",
+                                            "type": "thinking",
+                                            "title": redact_paths(
+                                                title, self._cwd, self._shared_dir,
+                                            ),
                                             "content": redact_paths(
-                                                reflection,
-                                                self._cwd,
-                                                self._shared_dir,
+                                                body, self._cwd, self._shared_dir,
                                             ),
                                             "tool_call_id": tc["id"],
                                         })
@@ -463,6 +495,7 @@ class ScoutAgent:
                             "output": full_output,
                             "output_preview": output_preview,
                             "artifacts": msg.additional_kwargs.get("artifacts", []),
+                            "file_changes": msg.additional_kwargs.get("file_changes", []),
                             "tool_call_id": msg.tool_call_id,
                         })
             return events

@@ -1,6 +1,9 @@
 {
   "name": "scout-workspace",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "workspaces": ["packages/*"],
   "scripts": {
     "build:core": "npm run build --workspace=packages/core",

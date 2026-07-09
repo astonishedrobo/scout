@@ -76,6 +76,7 @@ class UnifiedExecCommandRequest:
     session_id: str
     command: str
     cwd: Path
+    workspace_root: Path
     policy: ExecutionPolicy
     staging_dir: Path | None
     work_dir: Path | None
@@ -87,6 +88,9 @@ class UnifiedExecCommandRequest:
     allow_insecure_fallback: bool = False
     sandbox_python: str = ""
     personal_write: bool = False
+    sandbox_cwd: Path | None = None
+    sandbox_personal_dir: Path | None = None
+    sandbox_shared_dir: Path | None = None
 
 
 @dataclass
@@ -130,6 +134,7 @@ class _ProcessEntry:
     execution_id: str
     command: str
     cwd: Path
+    workspace_root: Path
     policy: ExecutionPolicy
     staging_dir: Path | None
     work_dir: Path | None
@@ -222,53 +227,32 @@ class UnifiedExecManager:
         env: dict[str, str],
         proxy_url: str | None,
     ) -> list[str] | None:
+        """Build a container launch command via the single sandbox argv builder.
+
+        *env* from the local/bwrap path is ignored: container env is always built
+        in sandbox coordinates by ``build_sandbox_container_args``.
+        """
         try:
-            from .container_backend import (
-                _env_args,
-                _limit_args,
-                _mount_args,
-                _network_args,
-                container_engine_binary,
-                sandbox_image,
-            )
-            from .models import ExecutionRequest
+            from .container_backend import build_sandbox_container_args, sandbox_image
+            from .worker_roots import SANDBOX_PERSONAL
         except ImportError:
             return None
-        binary = container_engine_binary()
         image = sandbox_image()
-        if not binary or not image:
+        if not image:
             return None
-        exec_req = ExecutionRequest(
-            execution_id=request.execution_id,
-            user_id=request.user_id,
-            session_id=request.session_id,
-            runtime="shell",
-            command=None,
-            code=None,
-            cwd=request.cwd,
-            policy=request.policy,
-            environment=env,
-        )
-        net_args, net_env = _network_args(proxy_url, request.policy.network.domains)
-        merged = dict(env)
-        merged.update(net_env)
-        return [
-            binary, "run", "--rm", "-i",
-            *net_args,
-            "--user", f"{os.getuid()}:{os.getgid()}",
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--read-only",
-            "--tmpfs", "/tmp:rw,mode=1777",
-            *_limit_args(request.policy),
-            *_mount_args(request.user_id),
-            "-w", str(request.cwd),
-            *_env_args(merged),
-            "--label", "scout.execution=1",
-            "--label", f"scout.user={request.user_id}",
-            image,
-            *cmd,
-        ]
+        sandbox_cwd = Path(request.sandbox_cwd or SANDBOX_PERSONAL)
+        try:
+            args, _sandbox_env, _ctx = build_sandbox_container_args(
+                user_id=request.user_id,
+                policy=request.policy,
+                sandbox_cwd=sandbox_cwd,
+                proxy_url=proxy_url,
+                interactive=True,
+                network_domains=request.policy.network.domains,
+            )
+        except RuntimeError:
+            return None
+        return [*args, image, *cmd]
 
     def _start_reader(self, entry: _ProcessEntry) -> None:
         def _read() -> None:
@@ -298,19 +282,6 @@ class UnifiedExecManager:
         request: UnifiedExecCommandRequest,
         process_id: int,
     ) -> _ProcessEntry:
-        cache = request.cwd
-        while cache.name in {"work", "tmp", ".scout-executions"} or cache.parent.name == ".scout-executions":
-            cache = cache.parent
-        cache = cache / ".scout-cache"
-        cache.mkdir(parents=True, exist_ok=True)
-        exec_home = cache / "home"
-        exec_home.mkdir(parents=True, exist_ok=True)
-        env = build_execution_env(home=exec_home, cache_dir=cache)
-        env["TERM"] = "xterm-256color"
-        env["NO_COLOR"] = "1"
-        sandbox_python = request.sandbox_python or resolve_sandbox_python(None)
-        env = enrich_execution_env(env, sandbox_python=sandbox_python, cache_dir=cache)
-
         cmd = ["/bin/sh", "-c", request.command]
         private_tmp = request.staging_dir / "tmp" if request.staging_dir else None
         net: IsolatedNetwork | None = None
@@ -321,6 +292,19 @@ class UnifiedExecManager:
 
         launch_cmd: list[str]
         if use_bwrap:
+            # Local/bwrap path: worker-visible paths + interpreter PATH enrichment.
+            cache = request.cwd
+            while cache.name in {"work", "tmp", ".scout-executions"} or cache.parent.name == ".scout-executions":
+                cache = cache.parent
+            cache = cache / ".scout-cache"
+            cache.mkdir(parents=True, exist_ok=True)
+            exec_home = cache / "home"
+            exec_home.mkdir(parents=True, exist_ok=True)
+            env = build_execution_env(home=exec_home, cache_dir=cache)
+            env["TERM"] = "xterm-256color"
+            env["NO_COLOR"] = "1"
+            sandbox_python = request.sandbox_python or resolve_sandbox_python(None)
+            env = enrich_execution_env(env, sandbox_python=sandbox_python, cache_dir=cache)
             # bwrap shares the host network namespace; an isolated netns is what
             # ENFORCES the domain allowlist, so it is required here.
             if request.policy.network.mode == "allow_domains" and request.proxy_url:
@@ -342,9 +326,9 @@ class UnifiedExecManager:
             )
             launch_cmd = wrap_command_in_netns(bwrap_cmd, net) if net else bwrap_cmd
         else:
-            # Docker path: egress is enforced by `--network scout-internal` + the
-            # egress proxy (see _docker_launch_cmd / _network_args). No netns needed.
-            docker_cmd = self._docker_launch_cmd(request, cmd, env, request.proxy_url)
+            # Docker path: sandbox env is built in sandbox coordinates by the
+            # shared container launcher (ignore worker PATH enrichment).
+            docker_cmd = self._docker_launch_cmd(request, cmd, {}, request.proxy_url)
             if docker_cmd:
                 launch_cmd = docker_cmd
             elif request.allow_insecure_fallback:
@@ -382,6 +366,7 @@ class UnifiedExecManager:
             execution_id=request.execution_id,
             command=request.command,
             cwd=request.cwd,
+            workspace_root=request.workspace_root,
             policy=request.policy,
             staging_dir=request.staging_dir,
             work_dir=request.work_dir,
@@ -458,7 +443,7 @@ class UnifiedExecManager:
         start = time.time()
         before = snapshot_writable_roots(
             tuple(request.policy.write_roots),
-            workspace_root=request.cwd,
+            workspace_root=request.workspace_root,
         )
         try:
             entry = self._spawn(request, process_id)
@@ -635,18 +620,18 @@ def format_tool_response(
 
 def _changes_and_artifacts(entry: _ProcessEntry) -> tuple[list, list[dict]]:
     write_roots = tuple(entry.policy.write_roots)
-    after = snapshot_writable_roots(write_roots, workspace_root=entry.cwd)
+    after = snapshot_writable_roots(write_roots, workspace_root=entry.workspace_root)
     changes = diff_snapshots(
         entry.before_snapshot,
         after,
         write_roots,
-        workspace_root=entry.cwd,
+        workspace_root=entry.workspace_root,
     )
     artifacts: list[dict] = []
     for change in changes:
         if change.status == "deleted":
             continue
-        artifact = describe_artifact(Path(change.path), entry.cwd)
+        artifact = describe_artifact(Path(change.path), entry.workspace_root)
         if artifact:
             artifacts.append(artifact)
     return changes, artifacts

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import base64
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal
 
@@ -43,8 +44,99 @@ PromotionApprovalFn = ApprovalFn
 _EXECUTION_TOOLS = frozenset({
     "run_code", "run_python", "run_shell", "exec_command", "write_stdin", "run_node",
 })
+_MAX_CHANGE_BYTES = 2_000_000
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_user_input_options(raw_options: object) -> list[dict[str, str]]:
+    if not isinstance(raw_options, list):
+        return []
+    options: list[dict[str, str]] = []
+    for item in raw_options[:5]:
+        if isinstance(item, str):
+            label = item.strip()
+            description = ""
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("title") or "").strip()
+            description = str(item.get("description") or item.get("desc") or "").strip()
+        else:
+            continue
+        if not label:
+            continue
+        options.append({"label": label[:80], "description": description[:160]})
+    return options
+
+
+def _build_user_input_request(tool_call: dict) -> AIMessage:
+    args = tool_call.get("args", {}) or {}
+    question = str(args.get("question") or "").strip()
+    header = str(args.get("header") or "Question").strip() or "Question"
+    request = {
+        "type": "user_input_request",
+        "request_id": tool_call.get("id", ""),
+        "questions": [
+            {
+                "id": "question",
+                "header": header[:40],
+                "question": question,
+                "options": _normalize_user_input_options(args.get("options")),
+                "is_other": True,
+            }
+        ],
+    }
+    return AIMessage(
+        content=question,
+        additional_kwargs={"user_input_request": request},
+    )
+
+
+def _change_hash(content: bytes | None) -> str | None:
+    return None if content is None else content_hash(content)
+
+
+def _change_content_b64(content: bytes | None) -> str | None:
+    if content is None or len(content) > _MAX_CHANGE_BYTES:
+        return None
+    return base64.b64encode(content).decode("ascii")
+
+
+def _summarize_file_changes(diffs: list[FileDiff]) -> str:
+    if len(diffs) == 1:
+        d = diffs[0]
+        verb = {"added": "Created", "modified": "Edited", "deleted": "Deleted"}.get(d.status, "Changed")
+        return f"{verb} {d.path}"
+    return f"Edited {len(diffs)} files"
+
+
+def _file_change_sets(tool_name: str, diffs: list[FileDiff], summary: str = "") -> list[dict]:
+    if not diffs:
+        return []
+    entries = []
+    for d in diffs:
+        old_b64 = _change_content_b64(d.old_bytes)
+        new_b64 = _change_content_b64(d.new_bytes)
+        reversible = (
+            (d.old_bytes is None or old_b64 is not None)
+            and (d.new_bytes is None or new_b64 is not None)
+        )
+        entries.append({
+            "path": d.path,
+            "status": d.status,
+            "diff": d.diff,
+            "old_hash": _change_hash(d.old_bytes),
+            "new_hash": _change_hash(d.new_bytes),
+            "old_content_base64": old_b64,
+            "new_content_base64": new_b64,
+            "reversible": reversible,
+        })
+    return [{
+        "id": str(uuid.uuid4()),
+        "tool_name": tool_name,
+        "summary": summary or _summarize_file_changes(diffs),
+        "created_at": "",
+        "entries": entries,
+    }]
 
 
 def _init_chat_model(
@@ -351,6 +443,7 @@ def build_graph(
                 continue
 
             artifacts: list[dict] = []
+            file_changes: list[dict] = []
             if tool_name == "apply_patch":
                 root = Path(data_dir or cwd or ".").resolve()
                 patch_text = str(tool_args.get("patch") or tool_args.get("input") or "")
@@ -360,13 +453,13 @@ def build_graph(
                     output = f"[Patch preparation failed: {exc}]"
                 else:
                     diffs: list[FileDiff] = []
-                    pending: list[tuple[Path, bytes | None, bytes]] = []
+                    pending: list[tuple[Path, bytes | None, bytes | None]] = []
                     for fp in file_patches:
                         target = Path(fp.path)
                         old = target.read_bytes() if target.exists() else None
-                        if fp.new_content == b"" and target.exists():
+                        if fp.delete:
                             diffs.append(exact_file_diff(target, root, old, None))
-                            pending.append((target, old, b""))
+                            pending.append((target, old, None))
                         else:
                             diffs.append(exact_file_diff(target, root, old, fp.new_content))
                             pending.append((target, old, fp.new_content))
@@ -389,18 +482,19 @@ def build_graph(
                                 if content_hash(target.read_bytes() if target.exists() else None) != content_hash(old):
                                     output = "[WRITE CONFLICT] A file changed after approval was requested. No changes applied."
                                     break
-                                if proposed == b"":
+                                if proposed is None:
                                     if target.exists():
                                         target.unlink()
                                 else:
                                     target.parent.mkdir(parents=True, exist_ok=True)
                                     target.write_bytes(proposed)
                                 applied += 1
-                                art = describe_artifact(target, root) if proposed else None
+                                art = describe_artifact(target, root) if proposed is not None else None
                                 if art:
                                     artifacts.append(art)
                             else:
                                 output = f"Applied patch to {applied} file(s)"
+                                file_changes = _file_change_sets(tool_name, diffs)
             elif tool_name in {"write_file", "write_binary_artifact"}:
                 target = Path(str(tool_args.get("path", "")))
                 if not target.is_absolute():
@@ -449,6 +543,7 @@ def build_graph(
                             artifact = describe_artifact(target, root)
                             if artifact:
                                 artifacts.append(artifact)
+                            file_changes = _file_change_sets(tool_name, [diff])
             else:
                 if tool_name in _EXECUTION_TOOLS and execution_service is not None:
                     execution_service.set_active_tool_call_id(tool_id)
@@ -462,10 +557,14 @@ def build_graph(
                     last = getattr(execution_service, "last_tool_result", None)
                     if last and last.artifacts:
                         artifacts.extend(last.artifacts)
+                    if last and getattr(last, "promotion_diffs", None):
+                        file_changes = _file_change_sets(tool_name, last.promotion_diffs)
 
             content = str(output) if output is not None else ""
             content = redact_paths(content, data_dir or cwd or ".", shared_dir)
             artifacts = sanitize_artifacts(artifacts, data_dir or cwd or ".", shared_dir)
+            for change_set in file_changes:
+                change_set["created_at"] = ""
             if len(content) > _MAX_TOOL_RESULT_CHARS:
                 content = (
                     content[:_MAX_TOOL_RESULT_CHARS]
@@ -481,11 +580,16 @@ def build_graph(
                 enabled=hooks_enabled,
             )
 
+            extra = {}
+            if artifacts:
+                extra["artifacts"] = artifacts
+            if file_changes:
+                extra["file_changes"] = file_changes
             results.append(ToolMessage(
                 content=content,
                 name=tool_name,
                 tool_call_id=tool_id,
-                additional_kwargs={"artifacts": artifacts} if artifacts else {},
+                additional_kwargs=extra,
             ))
 
         return {"messages": results}
@@ -597,17 +701,16 @@ def build_graph(
             else:
                 raise
 
-        # ── Intercept ask_human → convert to plain text response ─────
-        # The model wants to ask the user a question.  Strip the tool
-        # call and return the question as a regular AIMessage so the
-        # graph terminates and the REPL shows it to the user.
+        # ── Intercept ask_user_choice → structured user input request ─────
+        # Option B: pause this turn and let the UI send the answer as the
+        # next normal user turn. This avoids LangGraph checkpoint/resume
+        # plumbing while still preserving a structured MCQ/freeform UI.
         if response.tool_calls:
             for tc in response.tool_calls:
-                if tc["name"] == "ask_human":
-                    question = tc.get("args", {}).get("question", "")
-                    logger.info("ask_human intercepted — pausing for user input.")
+                if tc["name"] == "ask_user_choice":
+                    logger.info("ask_user_choice intercepted — requesting structured user input.")
                     return {
-                        "messages": [AIMessage(content=question)],
+                        "messages": [_build_user_input_request(tc)],
                         "iteration": iteration + 1,
                     }
 

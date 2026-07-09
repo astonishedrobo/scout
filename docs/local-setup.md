@@ -4,7 +4,7 @@ Use this setup when Scout is for one person on one computer. Local launches do n
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+
 - Python 3.11+
 - An API key for a model provider, or a locally running model
 - Bubblewrap on Linux if you want Scout to run generated code
