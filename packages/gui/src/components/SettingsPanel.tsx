@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, Eye, EyeOff, Sun, Moon, Cloud, Plus } from "lucide-react";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import { Button } from "./ui/Button";
+import { APP_VERSION, SHORTCUTS } from "../appMeta";
+import { PixelBook } from "./PixelArt";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -246,7 +248,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
 
   return (
     <div className="fixed inset-0 z-50 bg-scout-canvas flex flex-col">
-      <div className="flex items-center gap-3 px-4 sm:px-6 h-14 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/90 backdrop-blur-xl">
+      <div className="flex items-center gap-3 px-4 sm:px-6 h-[52px] shrink-0 border-b border-scout-hairline-faint bg-scout-canvas">
         <button
           onClick={onClose}
           className="p-2 rounded-btn hover:bg-scout-lift text-scout-muted hover:text-scout-text transition-colors"
@@ -321,7 +323,12 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                 {memoriesLoading ? (
                   <p className="text-[13px] text-scout-muted">Loading…</p>
                 ) : memoryEntries.length === 0 ? (
-                  <p className="text-[13px] text-scout-muted mb-3">No memories yet.</p>
+                  <div className="mb-3 flex items-center gap-3">
+                    <PixelBook size={34} />
+                    <p className="text-[13px] text-scout-muted">
+                      No memories yet. Scout saves useful facts here as you chat, or add one below.
+                    </p>
+                  </div>
                 ) : (
                   <ul className="space-y-2 mb-4">
                     {memoryEntries.map((entry, i) => (
@@ -465,11 +472,9 @@ function GeneralTab({
       <section>
         <h2 className="text-[15px] font-semibold text-scout-text mb-4">Keyboard Shortcuts</h2>
         <div className="space-y-0 divide-y divide-scout-hairline-faint">
-          <ShortcutRow keys="Enter" desc="Send message" />
-          <ShortcutRow keys="Shift+Enter" desc="New line" />
-          <ShortcutRow keys="/" desc="Open commands menu" />
-          <ShortcutRow keys="@" desc="Reference a file" />
-          <ShortcutRow keys="Esc" desc="Dismiss dropdowns" />
+          {SHORTCUTS.map((s) => (
+            <ShortcutRow key={s.keys} keys={s.keys} desc={s.desc} />
+          ))}
         </div>
       </section>
 
@@ -477,7 +482,7 @@ function GeneralTab({
       <section>
         <h2 className="text-[15px] font-semibold text-scout-text mb-2">About</h2>
         <div className="space-y-1.5 text-[13px] font-medium text-scout-muted">
-          <p><span className="text-scout-text font-semibold">Scout</span> v0.1.0</p>
+          <p><span className="text-scout-text font-semibold">Scout</span> {APP_VERSION}</p>
           <p>Configuration: <code className="text-xs bg-scout-input-bg border border-scout-hairline-faint px-1.5 py-0.5 rounded-md font-mono text-scout-text">~/.config/scout/config.yaml</code></p>
           <p>Project overrides: <code className="text-xs bg-scout-input-bg border border-scout-hairline-faint px-1.5 py-0.5 rounded-md font-mono text-scout-text">.scout/config.yaml</code></p>
         </div>

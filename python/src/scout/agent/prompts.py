@@ -24,19 +24,17 @@ logger = logging.getLogger(__name__)
 # ── Static template ──────────────────────────────────────────────────────
 
 TOOL_DESCRIPTIONS = {
-    "run_python": "**`run_python`** — Execute a small Python snippet in a persistent sandboxed session. Variables and imports persist across calls, so avoid it for large or multi-step data analysis when terminal execution is available.",
-    "run_code": "**`run_code`** — Alias for `run_python` (backwards compatible).",
-    "exec_command": "**`exec_command`** — Run a command in a PTY. Returns output or a session ID for long-running commands. Commands run from `/workspace` by default; use bare relative filenames for personal workspace files and `/shared/...` for shared files. Network and sensitive operations may require approval.",
+    "exec_command": "**`exec_command`** — Run a command in a PTY. Returns output or a session ID for long-running commands. Commands run from `/workspace` by default; use bare relative filenames for personal workspace files and `/shared/...` for shared files. Network and sensitive operations may require approval. For Python, write a script and run `python script.py`.",
     "write_stdin": "**`write_stdin`** — Send input to or poll a running `exec_command` session. Poll required sessions until they finish before responding.",
     "run_node": "**`run_node`** — Execute JavaScript/Node.js in an isolated sandbox.",
     "apply_patch": "**`apply_patch`** — Apply unified-diff patches to one or more files in a single approval.",
     "write_file": "**`write_file`** — Create or overwrite a text file with a clear approval preview.",
     "write_binary_artifact": "**`write_binary_artifact`** — Save valid base64-encoded binary output supplied by a trusted source. For generated images, prefer writing the file directly from a script or execution tool.",
+    "present_files": "**`present_files`** — Queue existing workspace file(s) as openable cards for the user. Use when they should *view* a file you are not currently editing. Writes/edits already surface cards automatically — do not re-present those unless asked. Does not modify files.",
     "read_file": "**`read_file`** — Read file contents.",
     "list_files": "**`list_files`** — List directory contents.",
-    "search_documents": "**`search_documents`** — Keyword search across indexed text, Markdown, JSON, CSV, and PDF files.",
-    "read_pdf": "**`read_pdf`** — Read content from a PDF.",
-    "ask_user_choice": "**`ask_user_choice`** — Ask the user a structured question in the UI. Use it for explicit interactive MCQs/quizzes, pick-one decisions, and genuinely blocking choices. Include `options` for multiple-choice questions.",
+    "search_documents": "**`search_documents`** — Keyword search across indexed text, Markdown, JSON, CSV, and PDF files. Optional `path` limits the search to one file (including PDFs). Prefer this over shell/grep for document retrieval.",
+    "ask_user_choice": "**`ask_user_choice`** — Ask the user a structured question in the UI. Use it for explicit interactive MCQs/quizzes, pick-one decisions, and genuinely blocking choices. Include `options` for multiple-choice questions; each option label is the answer text itself (\"Paris\"), never a letter like \"A\", and descriptions are optional — omit them when they'd repeat the label.",
     "think": "**`think`** — Name the next tool phase and optionally narrate it. `title` is a short phase label for the tool-activity card (e.g. `Plan demo`, `Inspect workspace`). `content` is normal user-visible prose shown in the main transcript (not a private panel).",
     "memory_search": "**`memory_search`** — Search long-term memory when workspace history or prior decisions matter.",
     "memory_read": "**`memory_read`** — Read a specific relevant memory item.",
@@ -47,7 +45,7 @@ TOOL_DESCRIPTIONS = {
     "request_permissions": "**`request_permissions`** — Request permission for a blocked operation when it is necessary to complete the task.",
 }
 
-DEFAULT_TOOLS = frozenset(TOOL_DESCRIPTIONS) - {"run_python", "run_code"}
+DEFAULT_TOOLS = frozenset(TOOL_DESCRIPTIONS)
 WRITE_TOOLS = frozenset({"apply_patch", "write_file", "write_binary_artifact"})
 
 
@@ -71,22 +69,11 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
     if "think" in enabled_tools:
         tips.append("- **Interleave, then close short.** Mid-task: brief prose + `think` title for the next tool card + tools. End only with a retrospective takeaway — the user already saw the cards. Never end with future-tense plans, Phase lists, or Thought/Action recaps.")
     if "ask_user_choice" in enabled_tools:
-        tips.append("- **Use structured questions for MCQs.** When the user asks to quiz them, ask multiple-choice questions through `ask_user_choice` instead of printing A/B/C options in a normal message. After the user answers, grade it, explain briefly, and ask the next question with the same tool if the quiz should continue.")
+        tips.append("- **Use structured questions for MCQs.** When the user asks to quiz them, ask multiple-choice questions through `ask_user_choice` instead of printing A/B/C options in a normal message. Option labels are the answer text itself (e.g. \"Paris\") — never letters — and the user's reply quotes the chosen label verbatim. After the user answers, grade it, explain briefly, and ask the next question with the same tool if the quiz should continue.")
     if "exec_command" in enabled_tools:
         tips.append("- **Prefer bare Python for data work.** Write a script under `/workspace` when needed, then run `python script.py` (cwd is already `/workspace`). Use preinstalled packages offline; do not reinstall them.")
         tips.append("- **Use the real sandbox paths.** Personal files are under `/workspace` and shared files are under `/shared`. Prefer relative names such as `script.py` or `plot.png`; never use `/app/workspace/...`, `/srv/scout-source/...`, `users/<id>/...`, or duplicated `workspace/workspace/...` paths.")
         tips.append("- **Install only after a real import failure.** On `ModuleNotFoundError`, request narrow PyPI network permission, then run `python -m pip install <package>` once (packages land in `/workspace/.scout-cache/python-packages`). Do not use `pip install --user` or invent `./.local` targets. Do not `uv init` unless the user asked for a managed project.")
-    if ("run_python" in enabled_tools or "run_code" in enabled_tools) and "exec_command" not in enabled_tools:
-        tips.extend([
-            "- **Python variables persist.** Import once and reuse state. Print expected results explicitly.",
-            "- **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.",
-            "- **Use simple relative paths for generated Python outputs.** For example, save a plot as `histogram.png`, not an absolute workspace path. Relative outputs are staged and surfaced for approval automatically.",
-        ])
-    elif "run_python" in enabled_tools or "run_code" in enabled_tools:
-        tips.extend([
-            "- **Use `run_python` only for quick checks.** For large files, joins, plotting, model fitting, or iterative debugging, use a Python script run through `exec_command` so memory is reclaimed after each run.",
-            "- **Use `low_memory=False`** when reading CSVs with `pd.read_csv`.",
-        ])
     if "exec_command" in enabled_tools and "write_stdin" in enabled_tools:
         tips.append("- **Finish command sessions.** Poll required long-running commands with `write_stdin` until they finish before responding.")
     if enabled_tools & WRITE_TOOLS:
@@ -95,6 +82,13 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.append("- **Deliver generated files through artifacts.** When the user asks for an image, chart, markdown document, HTML page, CSV, or other generated file, create/save a real workspace-relative file so the UI can surface it as an artifact. Do not print binary bytes, raw image bytes, or model-invented base64 in the final answer.")
         tips.append("- **Save requested visualizations as artifacts.** Use a plotting library for data plots and self-contained offline HTML for HTML artifacts. When asked to embed an image inside HTML, inline its bytes as a `data:image/...;base64,...` URI from an actual saved/read file; a relative `<img src=\"file.png\">` only references the image and is not embedded.")
         tips.append("- **Markdown artifacts may reference sibling workspace images.** Use normal relative Markdown image syntax such as `![Plot](plot.png)`; external image URLs and path traversal are blocked.")
+    if "present_files" in enabled_tools:
+        tips.append(
+            "- **Present existing files with `present_files`.** Creating or editing a file already shows an artifact card. "
+            "When the user asks to open/show/share a file you are not changing (or to re-show one), call `present_files` "
+            "with the workspace path(s). Batch related paths in one call; duplicates are ignored. "
+            "Do not dump long file contents into chat when a card is better."
+        )
     if "run_node" in enabled_tools and "write_binary_artifact" in enabled_tools:
         tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from scripts or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
     return "\n".join(tips)
@@ -167,9 +161,10 @@ For non-trivial tasks, work like an effective agent:
 
 ## Tool Choice Rules
 
-- Use `read_file`, `list_files`, `search_documents`, and `read_pdf` before shell commands when they answer the question directly.
+- Use `read_file`, `list_files`, and `search_documents` before shell commands when they answer the question directly. For PDFs and other indexed documents, use `search_documents` (with optional `path` to focus on one file) — there is no separate PDF tool.
 - Use `exec_command` for scripts, tests, package-managed runs, shell inspection, and anything where process isolation matters.
 - Use `write_file`, `apply_patch`, or execution-created files for durable outputs. Do not paste long generated files into chat when an artifact is better.
+- Use `present_files` when the user should open an existing file in the UI without you rewriting it. Edits already surface cards; presentation is for show/share/view requests.
 - Use `run_node` only for JavaScript/Node-specific generation or checks.
 - Use memory tools only when prior user preferences or previous workspace decisions are relevant.
 - Use `request_permissions` only after a real operation is blocked by missing permission or network access.

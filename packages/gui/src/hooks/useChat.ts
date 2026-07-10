@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import type {
   ChatEvent, ToolStep, Message, FileDiffEntry, Artifact,
-  CapabilityRequestPayload, ChatImage, UserInputRequest, FileChangeSet,
+  CapabilityRequestPayload, ChatImage, UserInputRequest, FileChangeSet, ResponseAnnotation,
 } from "scout-core";
 
 export interface PermissionElevationPayload {
@@ -41,9 +41,31 @@ interface UseChatOptions {
   sessionId: string;
   token: string | null;
   onUserMessage?: () => Promise<string | void> | string | void;
-  onUserAccepted?: (sessionId: string, text: string, attachments: string[], chatImages: ChatImage[]) => Promise<void> | void;
-  onAssistantMessage?: (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[], fileChanges: FileChangeSet[]) => Promise<void> | void;
+  onUserAccepted?: (sessionId: string, text: string, attachments: string[], chatImages: ChatImage[], annotations: ResponseAnnotation[]) => Promise<void> | void;
+  onAssistantMessage?: (
+    sessionId: string,
+    content: string,
+    steps: ToolStep[],
+    artifacts: Artifact[],
+    fileChanges: FileChangeSet[],
+    extra?: { stopped?: boolean },
+  ) => Promise<void> | void;
   onSessionTitle?: (sessionId: string, title: string) => void;
+}
+
+/** Mark in-flight tools as interrupted so the timeline stays after Stop. */
+function sealSteps(steps: ToolStep[]): ToolStep[] {
+  return steps.map((step) =>
+    step.status === "executing"
+      ? {
+          ...step,
+          status: "interrupted" as const,
+          output: step.output?.trim()
+            ? `${step.output}\n\n[Interrupted]`
+            : "[Interrupted — tool did not finish]",
+        }
+      : step,
+  );
 }
 
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
@@ -173,7 +195,7 @@ export function useChat({
   }, []);
 
   const sendMessage = useCallback(async (
-    text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void,
+    text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, annotations: ResponseAnnotation[] = [],
   ) => {
     let requestSessionId = sessionId;
     try {
@@ -192,8 +214,41 @@ export function useChat({
     let finalContent = "";
     let accepted = false;
     let userInputRequested = false;
+    let interrupted = false;
+    let committed = false;
     const artifacts: Artifact[] = [];
     const fileChanges: FileChangeSet[] = [];
+
+    const commitAssistant = async (opts: { stopped?: boolean } = {}) => {
+      if (committed || userInputRequested) return;
+      const sealed = opts.stopped ? sealSteps(steps) : [...steps];
+      steps = sealed;
+      if (!finalContent && !sealed.length && !artifacts.length && !fileChanges.length) return;
+      committed = true;
+      const content = finalContent || (opts.stopped ? "" : "(no text response)");
+      update(requestSessionId, (state) => ({
+        ...state,
+        messages: [...state.messages, {
+          role: "assistant",
+          content,
+          steps: sealed,
+          artifacts: [...artifacts],
+          fileChanges: [...fileChanges],
+          ...(opts.stopped ? { stopped: true } : {}),
+        }],
+        pendingApproval: opts.stopped ? null : state.pendingApproval,
+      }));
+      try {
+        await onAssistantMessage?.(
+          requestSessionId,
+          content,
+          sealed,
+          [...artifacts],
+          [...fileChanges],
+          opts.stopped ? { stopped: true } : undefined,
+        );
+      } catch { /* best effort */ }
+    };
 
     try {
       const resp = await fetch(`${baseUrl}/chat`, {
@@ -230,14 +285,32 @@ export function useChat({
               if (!accepted) {
                 accepted = true;
                 update(requestSessionId, (state) => ({
-                  ...state, messages: [...state.messages, { role: "user", content: text, attachments, chatImages }],
+                  ...state, messages: [...state.messages, { role: "user", content: text, attachments, chatImages, annotations }],
                 }));
                 try { onAccepted?.(); } catch { /* best effort */ }
-                try { await onUserAccepted?.(requestSessionId, text, attachments, chatImages); } catch { /* best effort */ }
+                try { await onUserAccepted?.(requestSessionId, text, attachments, chatImages, annotations); } catch { /* best effort */ }
               }
               continue;
             }
+            if (event.type === "interrupted") {
+              interrupted = true;
+              if (event.content) finalContent = event.content;
+              update(requestSessionId, (state) => ({
+                ...state,
+                pendingApproval: null,
+                streamingText: finalContent || state.streamingText,
+                statusMessage: undefined,
+              }));
+              streamDone = true;
+              break;
+            }
             if (event.type === "error") {
+              // Back-compat: older servers signaled stop as an error.
+              if ((event.message ?? "").toLowerCase().includes("interrupted by user")) {
+                interrupted = true;
+                streamDone = true;
+                break;
+              }
               update(requestSessionId, (state) => ({ ...state, error: event.message ?? "Unknown server error" }));
               streamDone = true;
               break;
@@ -313,38 +386,51 @@ export function useChat({
           } catch { /* skip malformed event */ }
         }
       }
-      if (!userInputRequested && (finalContent || steps.length > 0)) {
-        const content = finalContent || "(no text response)";
-        update(requestSessionId, (state) => ({
-          ...state, messages: [...state.messages, {
-            role: "assistant",
-            content,
-            steps: [...steps],
-            artifacts: [...artifacts],
-            fileChanges: [...fileChanges],
-          }],
-        }));
-        try { await onAssistantMessage?.(requestSessionId, content, [...steps], [...artifacts], [...fileChanges]); } catch { /* best effort */ }
+      if (interrupted) {
+        await commitAssistant({ stopped: true });
+      } else if (!userInputRequested && (finalContent || steps.length > 0)) {
+        await commitAssistant();
       }
     } catch (err) {
-      if (!(err instanceof DOMException && err.name === "AbortError")) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (aborted) {
+        interrupted = true;
+        // Client aborted after /chat/stop (or user navigated away) — keep partial turn.
+        const live = statesRef.current[requestSessionId];
+        if (!finalContent && live?.streamingText) finalContent = live.streamingText;
+        if (!steps.length && live?.streamingSteps?.length) steps = [...live.streamingSteps];
+        await commitAssistant({ stopped: true });
+      } else {
         update(requestSessionId, (state) => ({ ...state, error: err instanceof Error ? err.message : String(err) }));
       }
     } finally {
       abortRefs.current.delete(requestSessionId);
       update(requestSessionId, (state) => ({
-        ...state, isLoading: false, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
+        ...state,
+        isLoading: false,
+        streamingSteps: [],
+        streamingText: "",
+        currentTool: undefined,
+        statusMessage: undefined,
+        pendingApproval: interrupted ? null : state.pendingApproval,
       }));
     }
     return accepted;
   }, [baseUrl, sessionId, token, onUserMessage, onUserAccepted, onAssistantMessage, onSessionTitle, update]);
 
   const stop = useCallback(async () => {
-    abortRefs.current.get(sessionId)?.abort();
+    // Clear approval UI immediately; server declines pending approval on /chat/stop.
+    update(sessionId, (state) => ({ ...state, pendingApproval: null }));
+    // Signal server first so it can seal agent history and emit `interrupted`.
     await fetch(`${baseUrl}/chat/stop?session_id=${sessionId}`, {
       method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     }).catch(() => {});
-  }, [baseUrl, sessionId, token]);
+    // Fallback: if the SSE stream does not end promptly, abort the client reader.
+    // Partial turn is still committed in the AbortError path.
+    window.setTimeout(() => {
+      abortRefs.current.get(sessionId)?.abort();
+    }, 1500);
+  }, [baseUrl, sessionId, token, update]);
 
   const reset = useCallback(async () => {
     abortRefs.current.get(sessionId)?.abort();
@@ -370,7 +456,7 @@ export function useChat({
         body: JSON.stringify({ messages: remaining }),
       }).catch(() => {});
     }
-    await sendMessage(user.content, user.attachments, user.chatImages);
+    await sendMessage(user.content, user.attachments, user.chatImages, undefined, user.annotations);
   }, [baseUrl, sessionId, token, sendMessage, setMessagesForSession]);
 
   return {

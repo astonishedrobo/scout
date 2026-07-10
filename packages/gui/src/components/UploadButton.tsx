@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
 import { Upload, Loader2, Check, AlertCircle, X } from "lucide-react";
 import { AnchoredPopover } from "./ui/AnchoredPopover";
+import {
+  headerActionActiveClass,
+  headerActionButtonClass,
+  headerActionIdleClass,
+} from "./ui/headerControls";
 import type { UploadItem } from "../hooks/useUploads";
 
 interface UploadButtonProps {
@@ -40,12 +45,14 @@ export function UploadButton({
           if (hasItems) setShowStatus((p) => !p);
           else fileInputRef.current?.click();
         }}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-[13px] font-medium transition-colors ${
+        className={`${headerActionButtonClass} ${
           busy
-            ? "bg-scout-action-muted text-scout-text"
+            ? "border-scout-action/30 bg-scout-action-muted text-scout-text"
             : errorCount > 0
-              ? "bg-scout-error-muted text-scout-error"
-              : "text-scout-muted hover:text-scout-text hover:bg-scout-lift"
+              ? "border-scout-error/30 bg-scout-error-muted text-scout-error"
+              : hasItems
+                ? headerActionActiveClass
+                : headerActionIdleClass
         }`}
         title={
           busy
@@ -55,18 +62,20 @@ export function UploadButton({
       >
         {busy ? (
           <>
-            <Loader2 size={14} className="animate-spin" />
-            {activeCount} uploading…
+            <Loader2 size={15} className="animate-spin" />
+            <span className="hidden sm:inline">{activeCount} uploading…</span>
+            <span className="sm:hidden">{activeCount}</span>
           </>
         ) : errorCount > 0 ? (
           <>
-            <AlertCircle size={14} />
-            {errorCount} failed
+            <AlertCircle size={15} />
+            <span className="hidden sm:inline">{errorCount} failed</span>
+            <span className="sm:hidden">{errorCount}</span>
           </>
         ) : (
           <>
-            <Upload size={14} />
-            Upload
+            <Upload size={15} />
+            <span className="hidden sm:inline">Upload</span>
           </>
         )}
       </button>

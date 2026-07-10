@@ -27,9 +27,9 @@ export function FileChangeCards({
         return (
           <div
             key={changeSet.id}
-            className="flex w-full max-w-[45rem] items-center gap-3 rounded-lg border border-scout-hairline-faint bg-scout-panel/50 px-3.5 py-2.5"
+            className="flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-peach px-3.5 py-3"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center text-scout-muted">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-btn bg-[#f0a058]/15 text-[#f0a058]">
               <FilePenLine size={17} />
             </span>
             <span className="min-w-0 flex-1">
@@ -50,7 +50,7 @@ export function FileChangeCards({
               <button
                 type="button"
                 onClick={() => onReview(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift"
               >
                 <GitCompareArrows size={13} />
                 Review
@@ -59,7 +59,7 @@ export function FileChangeCards({
                 type="button"
                 disabled={!reversible || !!changeSet.undone}
                 onClick={() => onUndo(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift disabled:cursor-not-allowed disabled:opacity-45"
                 title={reversible ? "Undo these file edits" : "This change is too large or binary to undo safely"}
               >
                 {changeSet.undone ? <Check size={13} /> : <RotateCcw size={13} />}

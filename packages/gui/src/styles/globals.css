@@ -2,6 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .annotation-highlight {
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
+    border-radius: 2px;
+    background: rgb(var(--scout-cyan) / 0.28);
+    box-shadow: inset 0 -1px 0 rgb(var(--scout-cyan) / 0.78);
+  }
+
+  .annotation-marker {
+    position: absolute;
+    z-index: 3;
+    display: inline-flex;
+    height: 23px;
+    min-width: 23px;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid rgb(var(--scout-panel));
+    border-radius: 9999px;
+    background: rgb(37 136 238);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 2px 7px rgb(0 0 0 / 0.24);
+  }
+
+  .annotation-marker:hover { transform: scale(1.06); }
+
+  .annotation-selection-action {
+    width: auto;
+    background: rgb(var(--scout-panel));
+    color: rgb(var(--scout-text));
+    border: 1px solid rgb(var(--scout-hairline));
+    box-shadow: var(--shadow-pop);
+  }
+
+  .annotation-selection-action:hover { background: rgb(var(--scout-lift)); }
+}
+
 @layer base {
   /*
    * Colors are stored as space-separated RGB CHANNELS (not hex) so Tailwind
@@ -56,6 +97,15 @@
     --scout-border: var(--scout-hairline);
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
+    --glass-bg: rgba(255, 255, 255, 0.55);
+    --glass-bg-strong: rgba(255, 255, 255, 0.75);
+    --glass-border: rgba(24, 27, 32, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.9);
+    --glass-card-bg: rgba(255, 255, 255, 0.45);
+    --ambient:
+      radial-gradient(1150px 750px at 10% -12%, rgba(172, 148, 250, 0.16), transparent 62%),
+      radial-gradient(1050px 700px at 94% 0%, rgba(240, 168, 104, 0.13), transparent 60%),
+      radial-gradient(950px 750px at 58% 115%, rgba(240, 193, 79, 0.1), transparent 62%);
     --shadow-pop:
       0 20px 56px rgba(25, 31, 42, 0.1),
       0 1px 4px rgba(25, 31, 42, 0.04);
@@ -116,6 +166,16 @@
     --scout-border: var(--scout-hairline);
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
+    --glass-bg: rgba(22, 23, 26, 0.5);
+    --glass-bg-strong: rgba(22, 23, 26, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-highlight: rgba(255, 255, 255, 0.09);
+    --glass-card-bg: rgba(255, 255, 255, 0.045);
+    --ambient:
+      radial-gradient(1150px 750px at 10% -12%, rgba(168, 142, 250, 0.17), transparent 62%),
+      radial-gradient(1050px 700px at 94% 0%, rgba(228, 148, 82, 0.13), transparent 60%),
+      radial-gradient(850px 620px at 50% 46%, rgba(178, 156, 247, 0.055), transparent 65%),
+      radial-gradient(950px 750px at 58% 115%, rgba(250, 204, 21, 0.07), transparent 62%);
     --shadow-pop:
       0 28px 80px rgba(0, 0, 0, 0.34),
       0 1px 0 rgba(255, 255, 255, 0.04) inset;
@@ -174,6 +234,14 @@
     --scout-border: var(--scout-hairline);
     --scout-text-primary: var(--scout-text);
     --scout-text-secondary: var(--scout-muted);
+    --glass-bg: rgba(40, 41, 43, 0.58);
+    --glass-bg-strong: rgba(40, 41, 43, 0.76);
+    --glass-border: rgba(255, 255, 255, 0.07);
+    --glass-highlight: rgba(255, 255, 255, 0.045);
+    --glass-card-bg: rgba(255, 255, 255, 0.03);
+    --ambient:
+      radial-gradient(1100px 700px at 12% -8%, rgba(195, 195, 202, 0.06), transparent 60%),
+      radial-gradient(1000px 650px at 92% 4%, rgba(205, 190, 174, 0.05), transparent 58%);
     --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.28);
     --shadow-card-hover: 0 12px 28px rgba(0, 0, 0, 0.2);
     --shadow-composer: 0 10px 28px rgba(0, 0, 0, 0.2);
@@ -218,6 +286,7 @@
     overscroll-behavior: none;
   }
 
+
   button,
   input,
   textarea,
@@ -236,6 +305,55 @@
 }
 
 @layer components {
+  /*
+   * Matte glass system. Two tiers, chosen by cost:
+   *  - .glass-chrome — real backdrop blur. Reserve for persistent chrome
+   *    (sidebar, header, composer, modals): few, large, mostly static layers.
+   *  - .glass-card — matte translucency + inner highlight, NO backdrop-filter.
+   *    Safe to use on any number of cards; costs nothing.
+   * Blur radius stays modest (14px) — matte frost, not liquid gloss, and far
+   * cheaper to composite than 30px+.
+   */
+  .glass-chrome {
+    background: var(--glass-bg);
+    -webkit-backdrop-filter: blur(14px) saturate(1.5);
+    backdrop-filter: blur(14px) saturate(1.5);
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+  }
+
+  .glass-chrome-strong {
+    background: var(--glass-bg-strong);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    backdrop-filter: blur(18px) saturate(1.5);
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+  }
+
+  .glass-card {
+    background: var(--glass-card-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+  }
+
+  /* No backdrop-filter support (or user opted out of transparency):
+     fall back to solid panels so text never sits on unblurred noise. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass-chrome,
+    .glass-chrome-strong {
+      background: rgb(var(--scout-panel));
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass-chrome,
+    .glass-chrome-strong {
+      background: rgb(var(--scout-panel));
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    .glass-card {
+      background: rgb(var(--scout-lift));
+    }
+  }
+
   .font-display {
     font-family: ui-sans-serif, system-ui, sans-serif;
     font-weight: 620;
@@ -390,6 +508,47 @@
   }
 }
 
+/* The final frame MUST be `transform: none` — a persistent transform (even
+   translateY(0)) turns the element into a containing block, which breaks
+   position:fixed overlays (annotation pill/editor) rendered inside messages. */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-enter {
+  animation: fade-in-up 200ms ease-out both;
+}
+
+/* Card hover lift — transform+shadow only, GPU-composited, cheap. */
+.lift-hover {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+.lift-hover:hover {
+  transform: translateY(-1.5px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter {
+    animation: none;
+  }
+  .lift-hover,
+  .lift-hover:hover {
+    transform: none;
+    transition: none;
+  }
+}
+
 @keyframes pulse-dot {
   0%,
   80%,
@@ -400,6 +559,339 @@
   40% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/* Streaming label: a color sweep travelling through the characters. */
+@keyframes text-shimmer {
+  from {
+    background-position: 200% center;
+  }
+  to {
+    background-position: -200% center;
+  }
+}
+.shimmer-text {
+  font-weight: 600;
+  background-image: linear-gradient(
+    90deg,
+    rgb(var(--scout-muted)) 0%,
+    rgb(var(--scout-muted)) 35%,
+    rgb(var(--scout-text)) 50%,
+    rgb(var(--scout-muted)) 65%,
+    rgb(var(--scout-muted)) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    background: none;
+    color: rgb(var(--scout-muted));
+  }
+}
+
+/* Stars orbiting the dazed character's head. The parent flattens this
+   spinning ring with scaleY so the circle reads as a horizontal halo. */
+@keyframes dazed-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dazed-orbit {
+  animation: dazed-spin 2.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dazed-orbit {
+    animation: none;
+  }
+}
+
+/* Warm glass for the sunset login card — a lit-paper-lantern feel. Fixed
+   colors: it sits on artwork, not on theme surfaces. */
+.glass-warm {
+  background: rgba(46, 28, 14, 0.48);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid rgba(255, 214, 160, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 226, 178, 0.18),
+    0 24px 64px rgba(20, 8, 0, 0.45);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-warm {
+    background: rgba(38, 22, 10, 0.92);
+  }
+}
+
+/* Login "sky" variant: the artwork drifts and breathes very slowly, like
+   watching clouds. Transform-only, GPU-composited; 80s round trip. */
+@keyframes login-sky-drift {
+  0% {
+    transform: scale(1.08) translateX(-1.5%);
+  }
+  50% {
+    transform: scale(1.16) translateX(1.5%);
+  }
+  100% {
+    transform: scale(1.08) translateX(-1.5%);
+  }
+}
+.login-sky-drift {
+  animation: login-sky-drift 80s ease-in-out infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-sky-drift {
+    animation: none;
+    transform: scale(1.08);
+  }
+}
+
+/* ── Welcome scene: drifting pixel clouds + twinkling stars ────── */
+@keyframes cloud-drift {
+  from {
+    transform: translateX(-30vw);
+  }
+  to {
+    transform: translateX(115vw);
+  }
+}
+.cloud-drift {
+  left: 0;
+  animation-name: cloud-drift;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+/* Gentle vertical bob layered on a bird's horizontal drift. */
+@keyframes bird-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+.bird-bob {
+  animation: bird-bob 2.8s ease-in-out infinite;
+}
+
+/* Shooting star: invisible most of the cycle, then a quick diagonal streak. */
+@keyframes shooting-star {
+  0%,
+  92% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  93% {
+    opacity: 0.9;
+  }
+  99% {
+    opacity: 0;
+    transform: translate(-22vw, 16vh);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+}
+.shooting-star {
+  animation: shooting-star 18s linear infinite;
+}
+
+@keyframes star-twinkle {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.star-twinkle {
+  animation: star-twinkle 3.6s ease-in-out infinite;
+}
+
+/* Minecraft grass ledge the pet stands on, atop the composer. */
+.grass-ledge {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.1) 0 2px, transparent 2px 8px),
+    linear-gradient(180deg, #7ec850 0 55%, #4f9a33 55%);
+  image-rendering: pixelated;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cloud-drift,
+  .star-twinkle,
+  .bird-bob,
+  .shooting-star {
+    animation: none;
+  }
+  .shooting-star {
+    opacity: 0;
+  }
+}
+
+/* ── Pixel pet ─────────────────────────────────────────────────── */
+
+/* Sprite pants/shoes: dark values disappear on dark backgrounds, so dark and
+   soft themes get contrasting blue jeans + white sneakers. Skin/hair/shirt
+   stay fixed (they pop everywhere); eyes stay dark in all themes. */
+:root,
+:root.dark,
+:root.soft {
+  --sprite-pants: #5b8dee;
+  --sprite-shoes: #eef1f6;
+}
+:root.light {
+  --sprite-pants: #4a4d57;
+  --sprite-shoes: #17181c;
+}
+
+/* Idle: slow breathing. */
+@keyframes pet-breathe {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(1.035);
+  }
+}
+.pet-breathe {
+  transform-origin: bottom center;
+  animation: pet-breathe 3.2s ease-in-out infinite;
+}
+
+/* Working: mostly still, with an occasional double hop + head tilt. */
+@keyframes pet-goof {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  74% {
+    transform: translateY(-5px) rotate(-4deg);
+  }
+  78% {
+    transform: translateY(0) rotate(0deg);
+  }
+  82% {
+    transform: translateY(-3px) rotate(4deg);
+  }
+  86% {
+    transform: translateY(0) rotate(0deg);
+  }
+}
+.pet-goof {
+  transform-origin: bottom center;
+  animation: pet-goof 4s ease-in-out infinite;
+}
+
+/* Long-task stroll: walk to the left end of the bar, turn, walk back.
+   The sprite faces right by default; scaleX(-1) flips it to face left. */
+@keyframes pet-stroll {
+  0% {
+    right: 10px;
+    transform: scaleX(-1);
+  }
+  44% {
+    right: calc(100% - 44px);
+    transform: scaleX(-1);
+  }
+  50% {
+    right: calc(100% - 44px);
+    transform: scaleX(1);
+  }
+  94% {
+    right: 10px;
+    transform: scaleX(1);
+  }
+  100% {
+    right: 10px;
+    transform: scaleX(1);
+  }
+}
+@keyframes pet-step {
+  0%,
+  100% {
+    margin-bottom: 0;
+  }
+  50% {
+    margin-bottom: 2px;
+  }
+}
+.pet-stroll {
+  animation:
+    pet-stroll 11s linear forwards,
+    pet-step 0.28s steps(2) infinite;
+}
+
+/* Excited flap: both arms extended, flapping from the shoulders like it's
+   trying to take off. Mirrored rotations, chunky steps. */
+.pet-flap-left {
+  transform-origin: 8px 12.5px;
+  transform-box: view-box;
+  animation: pet-flap-l 0.3s steps(2) infinite alternate;
+}
+.pet-flap-right {
+  transform-origin: 16px 12.5px;
+  transform-box: view-box;
+  animation: pet-flap-r 0.3s steps(2) infinite alternate;
+}
+@keyframes pet-flap-l {
+  from {
+    transform: rotate(28deg);
+  }
+  to {
+    transform: rotate(-30deg);
+  }
+}
+@keyframes pet-flap-r {
+  from {
+    transform: rotate(-28deg);
+  }
+  to {
+    transform: rotate(30deg);
+  }
+}
+
+/* Excited hop that goes with the flap. */
+@keyframes pet-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-7px);
+  }
+  60% {
+    transform: translateY(-1px);
+  }
+}
+.pet-hop {
+  transform-origin: bottom center;
+  animation: pet-hop 0.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-breathe,
+  .pet-goof,
+  .pet-stroll,
+  .pet-hop,
+  .pet-flap-left,
+  .pet-flap-right {
+    animation: none;
   }
 }
 

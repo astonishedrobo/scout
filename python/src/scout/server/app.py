@@ -130,6 +130,24 @@ class SessionTitleRequest(BaseModel):
     title: str
 
 
+APPROVAL_MODES = frozenset({"ask_always", "allow_edits", "full_access"})
+DEFAULT_APPROVAL_MODE = "ask_always"
+
+
+class SessionApprovalModeRequest(BaseModel):
+    mode: str
+
+
+def approval_required(mode: str, kind: str) -> bool:
+    """Return whether an allowed action needs an interactive decision."""
+    normalized = mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
+    if normalized == "full_access":
+        return False
+    if normalized == "allow_edits" and kind in {"file_changes", "execution_promotion"}:
+        return False
+    return True
+
+
 class ApprovalResponse(BaseModel):
     approval_id: str
     action: str       # "yes", "no", "suggest", "edit", "always", "shared", "allow_once", "allow_session", "deny"
@@ -165,6 +183,8 @@ class SessionMessageRequest(BaseModel):
     artifacts: list[dict] | None = None
     file_changes: list[dict] | None = None
     chat_images: list[dict] | None = None
+    annotations: list[dict] | None = None
+    stopped: bool | None = None
 
 
 # ── Session store helpers (matches Node.js JSONL format) ─────────────────
@@ -293,7 +313,7 @@ def _parse_session_file(path: Path) -> dict | None:
         except json.JSONDecodeError:
             continue
         if entry.get("type") == "user":
-            messages.append({"role": "user", "content": entry.get("content", ""), "attachments": entry.get("attachments"), "chatImages": entry.get("chat_images")})
+            messages.append({"role": "user", "content": entry.get("content", ""), "attachments": entry.get("attachments"), "chatImages": entry.get("chat_images"), "annotations": entry.get("annotations")})
             updated_at = entry.get("timestamp", updated_at)
         elif entry.get("type") == "assistant":
             messages.append({
@@ -302,6 +322,7 @@ def _parse_session_file(path: Path) -> dict | None:
                 "steps": entry.get("steps"),
                 "artifacts": entry.get("artifacts"),
                 "fileChanges": entry.get("file_changes"),
+                **({"stopped": True} if entry.get("stopped") else {}),
             })
             updated_at = entry.get("timestamp", updated_at)
 
@@ -409,7 +430,11 @@ def create_app(
             self.approval_response: ApprovalResponse | None = None
             self.edit_done_event: asyncio.Event | None = None
             self.declined_this_turn = False
-            self.auto_approve = False
+            # Approval policy is independent of the user's authorization role.
+            # It persists across turns and controls prompts, never hard denies.
+            self.approval_mode = DEFAULT_APPROVAL_MODE
+            self.pending_approval_id: str | None = None
+            self.pending_approval_diffs: list[Any] = []
             self.abort_event: asyncio.Event | None = None
             self.active_permission_profile: str | None = None
             self.created_at = time.monotonic()
@@ -625,7 +650,13 @@ def create_app(
             if role != "assistant":
                 continue
             steps = message.get("steps") or []
-            if not steps:
+            # Only real tools become tool_calls — thinking/text blocks are prose.
+            tool_steps = [
+                step for step in steps
+                if step.get("name") not in ("think", "text")
+                and step.get("kind") not in ("thinking", "reflection", "text")
+            ]
+            if not tool_steps:
                 restored.append(AIMessage(content=content))
                 continue
             tool_calls = [
@@ -634,12 +665,15 @@ def create_app(
                     "args": step.get("args") or {},
                     "id": f"restore-{index}-{step_index}",
                 }
-                for step_index, step in enumerate(steps)
+                for step_index, step in enumerate(tool_steps)
             ]
             restored.append(AIMessage(content=content or "", tool_calls=tool_calls))
-            for step_index, step in enumerate(steps):
+            for step_index, step in enumerate(tool_steps):
+                output = str(step.get("output", ""))
+                if step.get("status") == "interrupted" and not output:
+                    output = "[Interrupted by user — tool did not finish]"
                 restored.append(ToolMessage(
-                    content=str(step.get("output", ""))[:500],
+                    content=output[:500],
                     name=step.get("name", "unknown"),
                     tool_call_id=f"restore-{index}-{step_index}",
                 ))
@@ -715,6 +749,8 @@ def create_app(
                 if snap and snap.get("active_profile"):
                     s.active_permission_profile = snap["active_profile"]
                     agent.set_active_profile(snap["active_profile"])
+                if snap and snap.get("approval_mode") in APPROVAL_MODES:
+                    s.approval_mode = snap["approval_mode"]
                 if snap and snap.get("grants"):
                     _state["grant_store"].import_session(
                         str(user_id), session_id, snap["grants"],
@@ -937,6 +973,29 @@ def create_app(
             state.touch()
             return state
 
+    def _persist_runtime_session_state(
+        session_id: str,
+        user_id: str | int,
+        state: SessionState,
+    ) -> None:
+        """Persist security-relevant session preferences without dropping grants."""
+        cwd = _session_cwd(user_id)
+        sdir = _session_dir(cwd, user_id)
+        existing = load_session_snapshot(sdir, session_id) or {}
+        grants = _state["grant_store"].export_session(str(user_id), session_id)
+        exec_rules = existing.get("exec_rules", [])
+        if state.agent._execution and state.agent._execution._orchestrator:
+            exec_rules = list(state.agent._execution._orchestrator._session_exec_rules)
+        save_session_snapshot(
+            sdir,
+            session_id,
+            grants=grants or existing.get("grants", []),
+            exec_rules=exec_rules,
+            active_profile=state.active_permission_profile,
+            approval_mode=state.approval_mode,
+            parent_session_id=existing.get("parent_session_id"),
+        )
+
     # Helper to enforce auth if multi_user is True
     async def get_user_context(user: User | None = Depends(get_current_user_optional)):
         if _state["multi_user"] and not user:
@@ -966,7 +1025,8 @@ def create_app(
         if s.declined_this_turn:
             return ("no", "")
 
-        if s.auto_approve:
+        kind = "execution_promotion" if tool_name == "execution_promotion" else "file_changes"
+        if not approval_required(s.approval_mode, kind):
             return ("yes", "")
 
         # No queue means we're not in an SSE /chat flow (e.g. /init-skill).
@@ -981,10 +1041,14 @@ def create_app(
             diff_entries.append({
                 "path": d.path,
                 "status": d.status,
-                "diff": d.diff[:2000],
+                # Enough for the collapsed UI. Exact content is available from
+                # the authenticated approval-diffs endpoint while this request
+                # is pending, so truncation is always explicit.
+                "diff": d.diff[:12000],
+                "truncated": len(d.diff) > 12000,
+                "original_chars": len(d.diff),
             })
 
-        kind = "execution_promotion" if tool_name == "execution_promotion" else "file_changes"
         event_data = {
             "type": "approval_request",
             "kind": kind,
@@ -996,6 +1060,8 @@ def create_app(
 
         s.approval_event = asyncio.Event()
         s.approval_response = None
+        s.pending_approval_id = approval_id
+        s.pending_approval_diffs = list(diffs)
 
         await s.approval_queue.put(event_data)
 
@@ -1004,6 +1070,8 @@ def create_app(
         resp: ApprovalResponse = s.approval_response
         s.approval_event = None
         s.approval_response = None
+        s.pending_approval_id = None
+        s.pending_approval_diffs = []
 
         if resp.action == "edit":
             # Wait for the CLI to finish editing and signal us
@@ -1042,7 +1110,8 @@ def create_app(
         if resp.action == "no":
             s.declined_this_turn = True
         elif resp.action == "always":
-            s.auto_approve = True
+            s.approval_mode = "allow_edits"
+            _persist_runtime_session_state(session_id, user_id, s)
             # Files were written — schedule a retriever rebuild for next search
             proxy = _state["retrievers"].get(str(user_id))
             if proxy:
@@ -1060,7 +1129,13 @@ def create_app(
         """Request user approval for a narrowly scoped capability."""
         key = (str(user_id), session_id)
         s = _state["sessions"].get(key)
-        if not s or s.approval_queue is None:
+        if not s:
+            return ("deny", "Session expired")
+
+        if not approval_required(s.approval_mode, "capability"):
+            # The orchestrator records the scoped grant from this response.
+            return ("allow_session", "")
+        if s.approval_queue is None:
             return ("deny", "No active approval channel")
 
         approval_id = str(uuid.uuid4())
@@ -1110,11 +1185,21 @@ def create_app(
     ) -> str:
         key = (str(user_id), session_id)
         s = _state["sessions"].get(key)
-        if not s or s.approval_queue is None:
-            return "[REQUEST DENIED] No active approval channel."
+        if not s:
+            return "[REQUEST DENIED] Session expired."
         profile = s.agent._profile
         if not profile.can_request_permissions:
             return "[REQUEST DENIED] Your permission profile cannot request elevation."
+
+        if not approval_required(s.approval_mode, "permission_elevation"):
+            if domains:
+                _state["grant_store"].add(
+                    str(uuid.uuid4()), str(user_id), session_id,
+                    "network_domain", {"domains": domains}, grant_scope="session",
+            )
+            return "Permissions granted automatically by Full access mode."
+        if s.approval_queue is None:
+            return "[REQUEST DENIED] No active approval channel."
 
         approval_id = str(uuid.uuid4())
         event_data = {
@@ -1150,9 +1235,9 @@ def create_app(
             )
 
         if resp.action in {"allow_session", "always"}:
-            s.active_permission_profile = "admin"
-            s.agent.set_active_profile("admin")
-            return "Permissions elevated for this session (admin profile, network granted where requested)."
+            # A runtime network grant must never silently change the user's
+            # authorization profile or shared-workspace privileges.
+            return "Permissions granted for this session."
         return "Permissions granted for this request."
 
     async def _resource_maintenance() -> None:
@@ -1318,7 +1403,6 @@ def create_app(
 
         s.approval_queue = asyncio.Queue()
         s.declined_this_turn = False
-        s.auto_approve = False
         s.abort_event = asyncio.Event()
 
         cwd = _session_cwd(uid)
@@ -1417,9 +1501,32 @@ def create_app(
 
                         elif task is abort_get:
                             logger.info("Chat interrupted by user (session %s)", req.session_id)
+                            # Drain any already-queued agent events (partial tools /
+                            # text) so the client can keep them, then signal stop.
+                            while True:
+                                try:
+                                    kind, payload = agent_events.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    break
+                                if kind == "event" and isinstance(payload, dict):
+                                    if payload.get("file_changes"):
+                                        now = _now_iso()
+                                        for change_set in payload.get("file_changes") or []:
+                                            if not change_set.get("created_at"):
+                                                change_set["created_at"] = now
+                                    if payload.get("type") == "response" and payload.get("content"):
+                                        first_assistant_response = payload["content"]
+                                    event_count += 1
+                                    yield ServerSentEvent(
+                                        data=json.dumps(session_event(payload)),
+                                        event=payload.get("type") or "message",
+                                    )
                             yield ServerSentEvent(
-                                data=json.dumps(session_event({"type": "error", "message": "Interrupted by user"})),
-                                event="error",
+                                data=json.dumps(session_event({
+                                    "type": "interrupted",
+                                    "message": "Interrupted by user",
+                                })),
+                                event="interrupted",
                             )
                             done = True
 
@@ -1443,6 +1550,10 @@ def create_app(
                     )
                 if stream_task and not stream_task.done():
                     stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
                 s.approval_queue = None
                 s.abort_event = None
                 s.touch()
@@ -1452,12 +1563,27 @@ def create_app(
 
     @app.post("/chat/stop")
     async def stop_chat(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
-        """Interrupt an active agent execution."""
+        """Interrupt an active agent execution.
+
+        Keeps completed work; only cancels the in-flight tool / model call.
+        Pending approval dialogs are declined so writes waiting on approval
+        never land on disk.
+        """
         uid = user.id if user else "default"
         key = (str(uid), session_id)
         s = _state["sessions"].get(key)
         if s and s.abort_event:
             s.abort_event.set()
+            # Unblock approval / edit waits so the cancelled tool exits without writing.
+            if s.approval_event is not None and not s.approval_event.is_set():
+                s.approval_response = ApprovalResponse(
+                    approval_id="",
+                    action="no",
+                    feedback="Interrupted by user",
+                )
+                s.approval_event.set()
+            if s.edit_done_event is not None and not s.edit_done_event.is_set():
+                s.edit_done_event.set()
             return {"status": "ok", "message": "Interruption signaled"}
         return {"status": "ok", "message": "No active task to stop"}
 
@@ -1501,6 +1627,8 @@ def create_app(
                 _state["grant_store"].import_session(str(uid), session_id, snap["grants"])
             if snap.get("exec_rules") and agent._execution and agent._execution._orchestrator:
                 agent._execution._orchestrator._session_exec_rules = list(snap["exec_rules"])
+            if snap.get("approval_mode") in APPROVAL_MODES:
+                s.approval_mode = snap["approval_mode"]
         s.touch()
         logger.info("Restored %d messages into agent history", restored_count)
         return {"status": "ok", "count": restored_count}
@@ -1798,7 +1926,6 @@ def create_app(
         if s:
             s.agent.reset()
             s.declined_this_turn = False
-            s.auto_approve = False
         return {"status": "ok"}
 
     # ── Session management endpoints ────────────────────────────────
@@ -1877,6 +2004,72 @@ def create_app(
         if not parsed:
             raise HTTPException(status_code=500, detail="Malformed session file")
         return parsed
+
+    @app.get("/sessions/{session_id}/approval-mode")
+    async def get_session_approval_mode(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Return the persisted interactive-approval policy for a session."""
+        uid = user.id if user else "default"
+        cwd = _session_cwd(uid)
+        if not _session_file(cwd, session_id, uid).exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+        state = _state["sessions"].get((str(uid), session_id))
+        if state:
+            return {"mode": state.approval_mode}
+        snap = load_session_snapshot(_session_dir(cwd, uid), session_id) or {}
+        mode = snap.get("approval_mode", DEFAULT_APPROVAL_MODE)
+        return {"mode": mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE}
+
+    @app.put("/sessions/{session_id}/approval-mode")
+    async def set_session_approval_mode(
+        session_id: str,
+        req: SessionApprovalModeRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Persist when this session should pause for user approval."""
+        if req.mode not in APPROVAL_MODES:
+            raise HTTPException(status_code=400, detail="Invalid approval mode")
+        uid = user.id if user else "default"
+        cwd = _session_cwd(uid)
+        if not _session_file(cwd, session_id, uid).exists():
+            raise HTTPException(status_code=404, detail="Session not found")
+        state = _state["sessions"].get((str(uid), session_id))
+        if state:
+            state.approval_mode = req.mode
+            _persist_runtime_session_state(session_id, uid, state)
+        else:
+            sdir = _session_dir(cwd, uid)
+            snap = load_session_snapshot(sdir, session_id) or {}
+            save_session_snapshot(
+                sdir,
+                session_id,
+                grants=snap.get("grants", []),
+                exec_rules=snap.get("exec_rules", []),
+                active_profile=snap.get("active_profile"),
+                approval_mode=req.mode,
+                parent_session_id=snap.get("parent_session_id"),
+            )
+        return {"mode": req.mode}
+
+    @app.get("/sessions/{session_id}/approvals/{approval_id}/diffs")
+    async def get_pending_approval_diffs(
+        session_id: str,
+        approval_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Return exact proposed diffs while an approval request is pending."""
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if not state or state.pending_approval_id != approval_id:
+            raise HTTPException(status_code=404, detail="Pending approval not found")
+        return {
+            "diffs": [
+                {"path": d.path, "status": d.status, "diff": d.diff}
+                for d in state.pending_approval_diffs
+            ],
+        }
 
     @app.post("/sessions/{session_id}/file-changes/{change_set_id}/undo")
     async def undo_file_changes(
@@ -2106,6 +2299,7 @@ def create_app(
                 grants=snap.get("grants", parent_grants),
                 exec_rules=rules,
                 active_profile=parent_state.active_permission_profile,
+                approval_mode=parent_state.approval_mode,
                 parent_session_id=session_id,
             )
         return {"sessionId": new_id, "parentSessionId": session_id}
@@ -2128,6 +2322,8 @@ def create_app(
             entry["attachments"] = req.attachments
         if req.role == "user" and req.chat_images:
             entry["chat_images"] = req.chat_images
+        if req.role == "user" and req.annotations:
+            entry["annotations"] = req.annotations
         if req.role == "assistant" and req.steps:
             entry["steps"] = req.steps
         if req.role == "assistant" and req.model:
@@ -2136,6 +2332,8 @@ def create_app(
             entry["artifacts"] = req.artifacts
         if req.role == "assistant" and req.file_changes:
             entry["file_changes"] = req.file_changes
+        if req.role == "assistant" and req.stopped:
+            entry["stopped"] = True
 
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { Artifact, ChatImage, FileChangeSet, ToolStep } from "scout-core";
+import type { Artifact, ChatImage, FileChangeSet, ResponseAnnotation, ToolStep } from "scout-core";
 
 interface StoredMessage {
   role: string;
@@ -9,6 +9,7 @@ interface StoredMessage {
   fileChanges?: FileChangeSet[];
   attachments?: string[];
   chatImages?: ChatImage[];
+  annotations?: ResponseAnnotation[];
 }
 
 export interface SessionMeta {
@@ -34,7 +35,7 @@ interface UseSessionsReturn {
     sessionId: string,
     role: string,
     content: string,
-    extra?: { steps?: any[]; model?: string; attachments?: string[]; artifacts?: any[]; file_changes?: any[]; chat_images?: any[] },
+    extra?: { steps?: any[]; model?: string; attachments?: string[]; artifacts?: any[]; file_changes?: any[]; chat_images?: any[]; annotations?: ResponseAnnotation[] },
   ) => Promise<void>;
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => Promise<void>;
@@ -164,7 +165,16 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
       sessionId: string,
       role: string,
       content: string,
-      extra?: { steps?: any[]; model?: string; attachments?: string[]; artifacts?: any[]; file_changes?: any[]; chat_images?: any[] },
+      extra?: {
+        steps?: any[];
+        model?: string;
+        attachments?: string[];
+        artifacts?: any[];
+        file_changes?: any[];
+        chat_images?: any[];
+        annotations?: ResponseAnnotation[];
+        stopped?: boolean;
+      },
     ) => {
       const resp = await fetch(`${baseUrl}/sessions/${sessionId}/messages`, {
         method: "POST",

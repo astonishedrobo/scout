@@ -18,6 +18,7 @@ import type { Theme } from "../hooks/useTheme";
 import type { SessionMeta } from "../hooks/useSessions";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
+import { PixelMap } from "./PixelArt";
 
 interface SidebarProps {
   onNewChat: () => void;
@@ -38,6 +39,28 @@ interface SidebarProps {
   isMultiUser?: boolean;
   isAdmin?: boolean;
   onOpenAdmin?: () => void;
+}
+
+function bucketLabel(iso: string): string {
+  const date = new Date(iso);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const t = date.getTime();
+  if (t >= startOfToday) return "Today";
+  if (t >= startOfToday - 86_400_000) return "Yesterday";
+  if (t >= startOfToday - 6 * 86_400_000) return "Previous 7 days";
+  return "Older";
+}
+
+function groupSessions(sessions: SessionMeta[]) {
+  const groups: { label: string; items: SessionMeta[] }[] = [];
+  for (const s of sessions) {
+    const label = bucketLabel(s.updatedAt);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(s);
+    else groups.push({ label, items: [s] });
+  }
+  return groups;
 }
 
 function timeAgo(iso: string): string {
@@ -99,10 +122,10 @@ export function Sidebar({
   };
 
   return (
-    <div className="flex h-full w-[252px] flex-col overflow-hidden border-r border-scout-hairline-faint bg-scout-panel">
+    <div className="flex h-full w-[252px] flex-col overflow-hidden bg-transparent">
       <div className="px-3 pb-2.5">
         <div className="mb-2 flex h-12 items-center justify-between">
-          <div className="min-w-0 text-[15px] font-semibold tracking-[-0.035em] text-scout-text">Scout</div>
+          <div className="min-w-0 font-display text-[16px] font-semibold tracking-[-0.035em] text-scout-text">Scout</div>
           <button
             onClick={onToggleTheme}
             className="rounded-btn p-2 text-scout-muted transition-colors hover:bg-scout-lift/80 hover:text-scout-text"
@@ -125,7 +148,7 @@ export function Sidebar({
       </div>
 
       {!hasModels && isConnected && !isMultiUser && (
-        <div className="mx-4 mb-3 p-3 rounded-2xl bg-scout-warning-muted border border-scout-warning/15">
+        <div className="mx-4 mb-3 p-3 rounded-card bg-scout-warning-muted border border-scout-warning/15">
           <div className="flex items-start gap-2">
             <AlertTriangle size={14} className="text-scout-warning mt-0.5 shrink-0" />
             <div>
@@ -143,21 +166,32 @@ export function Sidebar({
       )}
 
       <div className="flex-1 overflow-y-auto px-3 pt-1">
-        {sessions.length > 0 && (
-          <p className="px-1 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-scout-muted/65">
-            Recent conversations
-          </p>
-        )}
         {sessions.length === 0 ? (
-          <p className="text-caption text-scout-muted leading-relaxed px-1 pt-2">
-            No conversations yet
-          </p>
+          <div className="flex flex-col items-center gap-2.5 px-2 pt-10 text-center">
+            <PixelMap size={40} />
+            <p className="text-caption text-scout-muted leading-relaxed">
+              Uncharted territory.
+              <br />
+              Start a chat and it will show up here.
+            </p>
+            <button
+              onClick={onNewChat}
+              className="text-caption font-semibold text-scout-text underline underline-offset-2 hover:opacity-80"
+            >
+              Start your first chat
+            </button>
+          </div>
         ) : (
+          groupSessions(sessions).map((group) => (
+          <div key={group.label} className="mb-1.5">
+          <p className="px-1 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-scout-muted/65">
+            {group.label}
+          </p>
           <div className="space-y-0.5">
-            {sessions.map((s) => (
+            {group.items.map((s) => (
               <div
                 key={s.sessionId}
-                className={`group flex cursor-pointer items-center rounded-lg px-2.5 py-2 text-sm transition-colors
+                className={`group flex cursor-pointer items-center rounded-btn px-2.5 py-2 text-sm transition-colors
                   ${s.sessionId === currentSessionId
                     ? "bg-scout-lift"
                     : "hover:bg-scout-lift/65"
@@ -222,6 +256,8 @@ export function Sidebar({
               </div>
             ))}
           </div>
+          </div>
+          ))
         )}
       </div>
 
@@ -279,7 +315,7 @@ export function Sidebar({
 
         <button
           onClick={() => setBottomExpanded((p) => !p)}
-          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
+          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-btn text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
           title="Account & app menu"
         >
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-pill border border-scout-hairline-faint bg-scout-input-bg">
@@ -296,7 +332,7 @@ export function Sidebar({
           </span>
           <ChevronUp
             size={14}
-            className={`text-scout-muted transition-transform ${bottomExpanded ? "" : "rotate-180"}`}
+            className={`text-scout-muted transition-transform ${bottomExpanded ? "rotate-180" : ""}`}
           />
         </button>
       </div>
@@ -337,7 +373,7 @@ function BottomNavItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-scout-text hover:bg-scout-lift/80 transition-colors"
+      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-btn text-sm font-medium text-scout-text hover:bg-scout-lift/80 transition-colors"
     >
       {icon}
       {label}

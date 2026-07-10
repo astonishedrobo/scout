@@ -18,13 +18,8 @@ function humanToolName(name: string) {
       return "Checking files";
     case "search_documents":
       return "Searching documents";
-    case "read_pdf":
-      return "Reading PDF";
     case "exec_command":
       return "Running command";
-    case "run_python":
-    case "run_code":
-      return "Running Python";
     case "run_node":
       return "Running JavaScript";
     default:
@@ -52,12 +47,7 @@ export function StreamingIndicator({
 
   return (
     <div className="flex items-center gap-2 py-1.5">
-      <div className="flex space-x-1">
-        <div className="w-1.5 h-1.5 rounded-full bg-scout-muted thinking-dot" />
-        <div className="w-1.5 h-1.5 rounded-full bg-scout-muted thinking-dot" />
-        <div className="w-1.5 h-1.5 rounded-full bg-scout-muted thinking-dot" />
-      </div>
-      <span className="text-xs text-scout-muted">{label}</span>
+      <span className="shimmer-text text-[13px]">{label}</span>
     </div>
   );
 }

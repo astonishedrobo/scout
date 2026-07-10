@@ -62,12 +62,20 @@ function parseUnifiedDiff(diff: string): DiffRow[] {
   return rows;
 }
 
+// GitHub-style tones: content cell gets a soft tint, the line-number gutter a
+// slightly stronger one so changed regions read at a glance while scanning.
 const rowTone = {
   add: "bg-scout-success-muted",
   delete: "bg-scout-error-muted",
   context: "bg-transparent",
-  hunk: "bg-scout-cyan/5 text-scout-cyan",
+  hunk: "bg-scout-cyan/10 text-scout-cyan",
   meta: "bg-scout-lift/45 text-scout-muted italic",
+};
+
+const gutterTone = {
+  add: "bg-scout-success/20 text-scout-success/80",
+  delete: "bg-scout-error/20 text-scout-error/80",
+  context: "text-scout-muted/50",
 };
 
 const prefix = {
@@ -94,47 +102,56 @@ export function DiffViewer({
 
   return (
     <div
-      className={`overflow-auto bg-scout-code-bg/75 font-mono text-[12px] leading-[1.65] ${className}`}
+      className={`overflow-y-auto bg-scout-code-bg/75 font-mono text-[12px] leading-[1.6] ${className}`}
       style={{ maxHeight }}
       role="region"
       aria-label="Unified file diff"
       tabIndex={0}
     >
-      <div className="min-w-max">
-        {rows.map((row, index) => {
-          if (row.kind === "hunk" || row.kind === "meta") {
-            return (
-              <div
-                key={index}
-                className={`grid grid-cols-[44px_44px_minmax(20rem,1fr)] border-b border-scout-hairline-faint ${rowTone[row.kind]}`}
-              >
-                <span className="border-r border-scout-hairline-faint" />
-                <span className="border-r border-scout-hairline-faint" />
-                <span className="px-3 py-1 whitespace-pre">{row.content}</span>
-              </div>
-            );
-          }
+      {rows.map((row, index) => {
+        if (row.kind === "hunk") {
           return (
-            <div
-              key={index}
-              className={`grid grid-cols-[44px_44px_minmax(20rem,1fr)] border-b border-scout-hairline-faint/60 last:border-b-0 ${rowTone[row.kind]}`}
-            >
-              <span className="select-none border-r border-scout-hairline-faint px-2 text-right tabular-nums text-scout-muted/55">
-                {row.oldLine ?? ""}
-              </span>
-              <span className="select-none border-r border-scout-hairline-faint px-2 text-right tabular-nums text-scout-muted/55">
-                {row.newLine ?? ""}
-              </span>
-              <span className="grid grid-cols-[20px_1fr] whitespace-pre px-1">
-                <span className={`select-none text-center ${row.kind === "add" ? "text-scout-success" : row.kind === "delete" ? "text-scout-error" : "text-scout-muted/45"}`}>
-                  {prefix[row.kind]}
-                </span>
-                <span className="pr-3 text-scout-text/90">{row.content || " "}</span>
+            <div key={index} className={`px-3 py-1.5 ${rowTone.hunk}`}>
+              <span className="whitespace-pre-wrap break-words text-scout-cyan/80">
+                {row.content}
               </span>
             </div>
           );
-        })}
-      </div>
+        }
+        if (row.kind === "meta") {
+          return (
+            <div key={index} className={`px-3 py-1 ${rowTone.meta}`}>
+              {row.content}
+            </div>
+          );
+        }
+        return (
+          <div key={index} className={`grid grid-cols-[40px_40px_16px_1fr] ${rowTone[row.kind]}`}>
+            <span className={`select-none px-2 text-right tabular-nums ${gutterTone[row.kind]}`}>
+              {row.oldLine ?? ""}
+            </span>
+            <span className={`select-none px-2 text-right tabular-nums ${gutterTone[row.kind]}`}>
+              {row.newLine ?? ""}
+            </span>
+            <span
+              className={`select-none text-center ${
+                row.kind === "add"
+                  ? "text-scout-success"
+                  : row.kind === "delete"
+                    ? "text-scout-error"
+                    : "text-scout-muted/40"
+              }`}
+            >
+              {prefix[row.kind]}
+            </span>
+            {/* GitHub-style soft wrap: long lines break within the content
+                column instead of forcing horizontal scroll. */}
+            <span className="min-w-0 whitespace-pre-wrap break-words pl-1 pr-3 text-scout-text/90">
+              {row.content || " "}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

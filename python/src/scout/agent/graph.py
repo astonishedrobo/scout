@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import base64
+import re
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal
@@ -42,11 +43,20 @@ CapabilityApprovalFn = Callable[[object], Awaitable[tuple[str, str]]]
 PromotionApprovalFn = ApprovalFn
 
 _EXECUTION_TOOLS = frozenset({
-    "run_code", "run_python", "run_shell", "exec_command", "write_stdin", "run_node",
+    "run_shell", "exec_command", "write_stdin", "run_node",
 })
 _MAX_CHANGE_BYTES = 2_000_000
 
 logger = logging.getLogger(__name__)
+
+
+# Models sometimes prefix options with MCQ letters ("A: Paris", "Option B) Lyon",
+# "1. Nice") even though the UI renders its own numbering — strip them.
+_OPTION_PREFIX_RE = re.compile(r"^(?:option\s+)?(?:[A-Ea-e]|\d{1,2})\s*[):.\-–—]\s+", re.IGNORECASE)
+
+
+def _clean_option_text(text: str) -> str:
+    return _OPTION_PREFIX_RE.sub("", text.strip()).strip()
 
 
 def _normalize_user_input_options(raw_options: object) -> list[dict[str, str]]:
@@ -55,15 +65,24 @@ def _normalize_user_input_options(raw_options: object) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
     for item in raw_options[:5]:
         if isinstance(item, str):
-            label = item.strip()
+            label = _clean_option_text(item)
             description = ""
         elif isinstance(item, dict):
-            label = str(item.get("label") or item.get("title") or "").strip()
-            description = str(item.get("description") or item.get("desc") or "").strip()
+            label = _clean_option_text(str(item.get("label") or item.get("title") or ""))
+            description = _clean_option_text(
+                str(item.get("description") or item.get("desc") or "")
+            )
         else:
             continue
+        # Bare letter/index label with the real answer in the description
+        # ("A" / "Marseille") — promote the description to the label.
+        if description and re.fullmatch(r"(?:option\s+)?(?:[A-Ea-e]|\d{1,2})", label):
+            label, description = description, ""
         if not label:
             continue
+        # A description that just repeats the label ("Paris" / "A: Paris") is noise.
+        if description.lower() == label.lower():
+            description = ""
         options.append({"label": label[:80], "description": description[:160]})
     return options
 
@@ -72,6 +91,7 @@ def _build_user_input_request(tool_call: dict) -> AIMessage:
     args = tool_call.get("args", {}) or {}
     question = str(args.get("question") or "").strip()
     header = str(args.get("header") or "Question").strip() or "Question"
+    options = _normalize_user_input_options(args.get("options"))
     request = {
         "type": "user_input_request",
         "request_id": tool_call.get("id", ""),
@@ -80,13 +100,25 @@ def _build_user_input_request(tool_call: dict) -> AIMessage:
                 "id": "question",
                 "header": header[:40],
                 "question": question,
-                "options": _normalize_user_input_options(args.get("options")),
+                "options": options,
                 "is_other": True,
             }
         ],
     }
+    # The UI renders the structured card from additional_kwargs and hides this
+    # content, but the LLM sees only content on later turns — include the
+    # options so the model remembers exactly what it offered the user.
+    content_lines = [question]
+    if options:
+        content_lines.append("")
+        content_lines.append("Options shown to the user:")
+        for opt in options:
+            line = f"- {opt['label']}"
+            if opt["description"]:
+                line += f" — {opt['description']}"
+            content_lines.append(line)
     return AIMessage(
-        content=question,
+        content="\n".join(content_lines),
         additional_kwargs={"user_input_request": request},
     )
 
@@ -444,7 +476,76 @@ def build_graph(
 
             artifacts: list[dict] = []
             file_changes: list[dict] = []
-            if tool_name == "apply_patch":
+            if tool_name == "present_files":
+                raw_paths = (
+                    tool_args.get("filepaths")
+                    or tool_args.get("paths")
+                    or tool_args.get("path")
+                    or []
+                )
+                if isinstance(raw_paths, str):
+                    raw_paths = [
+                        p.strip()
+                        for p in raw_paths.replace(",", "\n").splitlines()
+                        if p.strip()
+                    ]
+                elif not isinstance(raw_paths, list):
+                    raw_paths = [str(raw_paths)]
+
+                personal_root = Path(data_dir or cwd or ".").resolve()
+                shared_root = Path(shared_dir).resolve() if shared_dir else None
+
+                def _resolve_present_path(raw: str) -> Path:
+                    p = Path(str(raw))
+                    if p.is_absolute():
+                        if p.parts[:2] == ("/", "workspace"):
+                            rel = p.parts[2:]
+                            return personal_root / (Path(*rel) if rel else Path("."))
+                        if p.parts[:2] == ("/", "shared") and shared_root is not None:
+                            rel = p.parts[2:]
+                            return shared_root / (Path(*rel) if rel else Path("."))
+                        return p
+                    if p.parts[:1] == ("shared",) and shared_root is not None:
+                        rel = p.parts[1:]
+                        return shared_root / (Path(*rel) if rel else Path("."))
+                    return personal_root / p
+
+                seen_ids: set[str] = set()
+                presented: list[str] = []
+                skipped: list[str] = []
+                for raw in raw_paths:
+                    if not raw:
+                        continue
+                    try:
+                        target = _resolve_present_path(str(raw)).resolve()
+                    except Exception as exc:
+                        skipped.append(f"{raw} (resolve failed: {exc})")
+                        continue
+                    if not target.is_file():
+                        skipped.append(f"{raw} (not a file)")
+                        continue
+                    art = describe_artifact(target, personal_root)
+                    if art is None and shared_root is not None:
+                        art = describe_artifact(target, shared_root)
+                    if art is None:
+                        skipped.append(f"{raw} (unsupported type or too large)")
+                        continue
+                    if art["id"] in seen_ids:
+                        continue
+                    seen_ids.add(art["id"])
+                    artifacts.append(art)
+                    presented.append(str(art.get("path") or raw))
+
+                if presented:
+                    lines = [f"Queued {len(presented)} file(s) for the user to open:"]
+                    lines.extend(f"- {p}" for p in presented)
+                    if skipped:
+                        lines.append(f"Skipped {len(skipped)}: " + "; ".join(skipped[:5]))
+                    output = "\n".join(lines)
+                else:
+                    detail = "; ".join(skipped[:5]) if skipped else "no paths provided"
+                    output = f"[PRESENT FAILED] Nothing to show ({detail})."
+            elif tool_name == "apply_patch":
                 root = Path(data_dir or cwd or ".").resolve()
                 patch_text = str(tool_args.get("patch") or tool_args.get("input") or "")
                 try:
@@ -486,8 +587,8 @@ def build_graph(
                                     if target.exists():
                                         target.unlink()
                                 else:
-                                    target.parent.mkdir(parents=True, exist_ok=True)
-                                    target.write_bytes(proposed)
+                                    from ..atomic_io import atomic_write_bytes
+                                    atomic_write_bytes(target, proposed)
                                 applied += 1
                                 art = describe_artifact(target, root) if proposed is not None else None
                                 if art:
@@ -534,8 +635,8 @@ def build_graph(
                         elif content_hash(target.read_bytes() if target.exists() else None) != content_hash(old):
                             output = "[WRITE CONFLICT] The target changed after approval was requested. No change was applied."
                         else:
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            target.write_bytes(proposed)
+                            from ..atomic_io import atomic_write_bytes
+                            atomic_write_bytes(target, proposed)
                             output = f"Wrote {len(proposed)} bytes to {target}"
                             warning = html_artifact_warning(target)
                             if warning:

@@ -1,12 +1,13 @@
 import { useState, useCallback } from "react";
-import type { Message } from "scout-core";
+import type { Message, ResponseAnnotation } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { Copy, Check, RotateCcw, GitBranch } from "lucide-react";
 import type { Artifact, FileChangeSet } from "scout-core";
 import { ArtifactCards } from "./ArtifactCards";
-import { AuthenticatedImage } from "./AuthenticatedImage";
 import { MemoryUpdateChip } from "./MemoryUpdateChip";
 import { FileChangeCards } from "./FileChangeCards";
+import { AnnotationRegion } from "./AnnotationRegion";
+import { AttachmentCard } from "./AttachmentCard";
 
 interface MessageBubbleProps {
   message: Message;
@@ -18,6 +19,12 @@ interface MessageBubbleProps {
   onOpenMemories?: () => void;
   baseUrl?: string;
   token?: string | null;
+  sourceId?: string;
+  annotations?: ResponseAnnotation[];
+  annotationNumbers?: Map<string, number>;
+  onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
+  onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
+  onRemoveAnnotation?: (id: string) => void;
 }
 
 export function MessageBubble({
@@ -30,6 +37,12 @@ export function MessageBubble({
   onOpenMemories,
   baseUrl = "",
   token = null,
+  sourceId,
+  annotations = [],
+  annotationNumbers = new Map(),
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const hasMemoryUpdate = message.steps?.some(
@@ -47,26 +60,41 @@ export function MessageBubble({
   }, [message.content]);
 
   if (message.role === "user") {
+    const additionalRequest = message.annotations?.length
+      ? message.content.split("\n\nAdditional request:\n")[1]?.trim()
+      : message.content;
     return (
       <div className="flex justify-end group w-full">
-        <div className="max-w-[min(75%,34rem)]">
-          <div className="bg-scout-input-bg/90 border border-scout-hairline-faint rounded-2xl px-4 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
-            {!!message.chatImages?.length && (
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {message.chatImages.map((image) => (
-                  <AuthenticatedImage key={image.id} src={`${baseUrl}${image.url}`} token={token} alt={image.name} className="h-28 max-w-48 rounded-btn object-cover border border-scout-hairline-faint" />
-                ))}
-              </div>
-            )}
-            {message.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)) && (
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {message.attachments.filter((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)).map((path) => (
-                  <AuthenticatedImage key={path} src={`${baseUrl}/files/content?path=${encodeURIComponent(path)}`} token={token} alt={path.split("/").pop() ?? path} className="h-28 max-w-48 rounded-btn object-cover border border-scout-hairline-faint" />
-                ))}
+        <div className="flex max-w-[min(75%,34rem)] flex-col items-end">
+          {/* Attachments stack above the bubble, ChatGPT-style — cards are
+              siblings of the message, not wrapped inside it. */}
+          {(!!message.chatImages?.length || !!message.attachments?.length) && (
+            <div className="mb-1.5 flex flex-col items-end gap-1.5">
+              {message.chatImages?.map((image) => (
+                <AttachmentCard key={image.id} path={image.name} name={image.name} size={image.size} baseUrl={baseUrl} token={token} previewUrl={`${baseUrl}${image.url}`} />
+              ))}
+              {message.attachments?.map((path) => (
+                <AttachmentCard key={path} path={path} baseUrl={baseUrl} token={token} />
+              ))}
+            </div>
+          )}
+          <div className="w-fit max-w-full rounded-card border border-scout-hairline-faint bg-scout-input-bg px-4 py-2.5">
+            {!!message.annotations?.length && (
+              <div className="mb-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/70 p-2.5">
+                <p className="text-xs font-semibold text-scout-text">{message.annotations.length} annotation{message.annotations.length === 1 ? "" : "s"}</p>
+                <div className="mt-1.5 space-y-1.5">
+                  {message.annotations.map((annotation, index) => (
+                    <div key={annotation.id} className="text-xs leading-snug text-scout-muted">
+                      <span className="mr-1 font-semibold text-scout-text">{index + 1}.</span>
+                      <span>“{annotation.quote}”</span>
+                      {annotation.comment.trim() && <span className="text-scout-text"> — {annotation.comment}</span>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <p className="text-scout-text text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-              {message.content}
+              {additionalRequest || (message.annotations?.length ? "Please address these notes." : message.content)}
             </p>
           </div>
           <div className="mt-1 flex justify-end">
@@ -85,12 +113,32 @@ export function MessageBubble({
   }
 
   return (
-    <div>
+    <div className="group/assistant">
+      {message.stopped && (
+        <div className="mb-2 inline-flex items-center rounded-btn border border-scout-hairline-faint bg-scout-panel/60 px-2 py-0.5 text-[11px] font-medium text-scout-muted">
+          Stopped
+        </div>
+      )}
       {!!message.content?.trim() && (
         <div className="min-w-0 overflow-hidden">
-          <div className="prose-scout text-[15px] overflow-x-auto">
-            <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
-          </div>
+          {sourceId && onAddAnnotation && onUpdateAnnotation && onRemoveAnnotation ? (
+            <AnnotationRegion
+              sourceId={sourceId}
+              annotations={annotations}
+              annotationNumbers={annotationNumbers}
+              onAdd={onAddAnnotation}
+              onUpdate={onUpdateAnnotation}
+              onRemove={onRemoveAnnotation}
+            >
+              <div className="prose-scout text-[15px] overflow-x-auto">
+                <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
+              </div>
+            </AnnotationRegion>
+          ) : (
+            <div className="prose-scout text-[15px] overflow-x-auto">
+              <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
+            </div>
+          )}
         </div>
       )}
       {message.artifacts && message.artifacts.length > 0 && onOpenArtifact && (
@@ -111,7 +159,7 @@ export function MessageBubble({
       )}
       {hasMemoryUpdate && <MemoryUpdateChip onOpenMemories={onOpenMemories} className="mt-3" />}
 
-      <div className="flex items-center gap-0.5 mt-2 -ml-1">
+      <div className="flex items-center gap-0.5 mt-2 -ml-1 opacity-0 group-hover/assistant:opacity-100 focus-within:opacity-100 transition-opacity">
         <button
           onClick={handleCopy}
           className="p-2 rounded-btn text-scout-muted hover:text-scout-text

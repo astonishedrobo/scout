@@ -69,8 +69,22 @@ class BM25Retriever:
         """Conservative estimate including chunk text and BM25 token maps."""
         return self._estimated_bytes
 
-    def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-        """Return top-k chunks matching *query* via BM25."""
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        source_file: str | None = None,
+    ) -> list[RetrievedChunk]:
+        """Return top-k chunks matching *query* via BM25.
+
+        Parameters
+        ----------
+        source_file :
+            When set, only chunks from matching indexed paths are considered.
+            Matching is path-suffix / basename based so callers can pass a
+            workspace-relative path, absolute path, or bare filename.
+        """
         if self._bm25 is None or self.is_empty:
             return []
 
@@ -78,9 +92,19 @@ class BM25Retriever:
         tokens = _tokenize(query)
         scores = self._bm25.get_scores(tokens)
 
-        # Get indices of top-k scores
+        # Filter candidates *before* top-k so a single-file query is not
+        # crowded out by higher-scoring chunks from other files.
+        if source_file:
+            candidate_idxs = [
+                i
+                for i in range(len(scores))
+                if source_file_matches(self._chunks[i].source_file, source_file)
+            ]
+        else:
+            candidate_idxs = list(range(len(scores)))
+
         ranked_idxs = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
+            candidate_idxs, key=lambda i: scores[i], reverse=True
         )[:k]
 
         results: list[RetrievedChunk] = []
@@ -99,7 +123,12 @@ class BM25Retriever:
                 )
             )
 
-        logger.info("BM25 search for '%s' returned %d chunks", query, len(results))
+        logger.info(
+            "BM25 search for '%s'%s returned %d chunks",
+            query,
+            f" in '{source_file}'" if source_file else "",
+            len(results),
+        )
         return results
 
     # ── Indexing ────────────────────────────────────────────────────────
@@ -519,6 +548,33 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def source_file_matches(indexed: str, requested: str) -> bool:
+    """Return True when an indexed source path refers to the requested file.
+
+    Accepts workspace-relative paths, absolute paths, or bare filenames.
+    Comparison is case-sensitive on the path body but tolerant of ``\\`` vs
+    ``/`` and leading ``./``.
+    """
+    a = indexed.replace("\\", "/").strip().lstrip("./")
+    b = requested.replace("\\", "/").strip().lstrip("./")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # Absolute / longer path ends with the shorter relative path.
+    if a.endswith("/" + b) or b.endswith("/" + a):
+        return True
+    # Bare filename: match any indexed path with that name.
+    b_name = Path(b).name
+    a_name = Path(a).name
+    if "/" not in b and a_name == b_name:
+        return True
+    # Absolute path whose basename + trailing relative segment align.
+    if a_name == b_name and (b.endswith("/" + a) or b.endswith(a)):
+        return True
+    return False
+
+
 class RetrieverProxy:
     """Shared BM25 retriever for one user, lazily rebuilt when dirty.
 
@@ -571,12 +627,20 @@ class RetrieverProxy:
         with self._lock:
             self._last_access = time.monotonic()
 
-    def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        source_file: str | None = None,
+    ) -> list[RetrievedChunk]:
         with self._lock:
             self._last_access = time.monotonic()
             if self._inner is None or self.dirty:
                 self._rebuild_locked()
-            return self._inner.search(query, top_k)  # type: ignore[union-attr]
+            return self._inner.search(  # type: ignore[union-attr]
+                query, top_k, source_file=source_file
+            )
 
     def mark_dirty(self) -> None:
         with self._lock:

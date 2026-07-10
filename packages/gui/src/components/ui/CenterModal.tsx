@@ -64,7 +64,7 @@ export function CenterModal({
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel/95 backdrop-blur-xl border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
+        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
         onClick={(e) => e.stopPropagation()}
       >
         {(title || showClose) && (

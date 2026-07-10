@@ -47,7 +47,7 @@ def build_attachment_notes(file_paths: list[str]) -> str:
 
 
 def _handle_pdf(p: Path, size_str: str) -> str:
-    """PDF: count pages, suggest read_pdf."""
+    """PDF: count pages, suggest search_documents with path filter."""
     page_count = "?"
     try:
         import fitz
@@ -58,7 +58,8 @@ def _handle_pdf(p: Path, size_str: str) -> str:
     return (
         f"[Attached: {p.name} (PDF, {page_count} pages, {size_str})] "
         f"Path: {p}\n"
-        f"Use `read_pdf` to explore this document."
+        f"Use `search_documents` with query keywords and path=`{p.name}` "
+        f"to search this document (PDFs are indexed with other workspace files)."
     )
 
 

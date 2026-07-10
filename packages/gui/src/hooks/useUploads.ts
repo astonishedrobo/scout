@@ -9,7 +9,7 @@ export interface UploadItem {
   error?: string;
 }
 
-/** Successful upload result — enough to insert an @ reference in chat. */
+/** Successful upload result — retained as hidden composer attachment metadata. */
 export interface UploadResult {
   filename: string;
   path: string;

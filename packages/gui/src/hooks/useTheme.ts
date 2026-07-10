@@ -12,7 +12,8 @@ export type Theme = "dark" | "soft" | "light";
 function readInitial(): Theme {
   const saved =
     typeof localStorage !== "undefined" ? localStorage.getItem("scout-theme") : null;
-  return saved === "light" || saved === "soft" || saved === "dark" ? saved : "dark";
+  // New users / no preference: soft gray (not pure black).
+  return saved === "light" || saved === "soft" || saved === "dark" ? saved : "soft";
 }
 
 let currentTheme: Theme = readInitial();
@@ -21,7 +22,8 @@ const listeners = new Set<() => void>();
 function readPreferredDarkTheme(): Exclude<Theme, "light"> {
   const saved =
     typeof localStorage !== "undefined" ? localStorage.getItem("scout-dark-theme") : null;
-  return saved === "soft" ? "soft" : "dark";
+  if (saved === "dark" || saved === "soft") return saved;
+  return "soft";
 }
 
 let preferredDarkTheme = readPreferredDarkTheme();

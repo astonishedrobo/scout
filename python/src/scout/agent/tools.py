@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from langchain_core.tools import tool
 
-from .file_guard import is_path_denied, is_name_denied, scan_code_for_denied_paths, WorkspaceGuard
+from .file_guard import is_path_denied, is_name_denied, WorkspaceGuard
 
 if TYPE_CHECKING:
     from ..execution.service import ExecutionService
@@ -40,7 +40,11 @@ def make_tools(
     allow_request_permissions: bool = True,
     request_permissions_fn=None,
 ) -> list:
-    """Create tool functions, binding resources via closures."""
+    """Create tool functions, binding resources via closures.
+
+    ``session`` is accepted for call-site compatibility but unused
+    (persistent ``run_python`` / ``run_code`` tools were removed).
+    """
 
     data_dir = str(Path(data_dir).resolve())
     _fallback_exts = {".txt", ".md", ".json", ".csv"}
@@ -76,7 +80,14 @@ def make_tools(
                 return shared
         return Path(data_dir) / p
 
-    def _fallback_search_documents(query: str, top_k: int) -> str:
+    def _fallback_search_documents(
+        query: str,
+        top_k: int,
+        *,
+        path_filter: str = "",
+    ) -> str:
+        from ..retriever import source_file_matches
+
         root = Path(data_dir)
         q = query.strip().lower()
         if not q:
@@ -92,6 +103,17 @@ def make_tools(
                 continue
             if ".scout-executions" in fpath.parts or ".scout-cache" in fpath.parts:
                 continue
+            if path_filter:
+                try:
+                    rel = str(fpath.relative_to(root))
+                except Exception:
+                    rel = str(fpath)
+                if not (
+                    source_file_matches(rel, path_filter)
+                    or source_file_matches(str(fpath), path_filter)
+                    or source_file_matches(fpath.name, path_filter)
+                ):
+                    continue
             try:
                 if fpath.stat().st_size > 100_000_000:
                     continue
@@ -122,7 +144,8 @@ def make_tools(
             hits.append((score, src, snippet))
 
         if not hits:
-            return "(no matching documents found)"
+            scope = f" in '{path_filter}'" if path_filter else ""
+            return f"(no matching documents found{scope})"
 
         hits.sort(key=lambda x: (-x[0], x[1]))
         parts = [
@@ -132,24 +155,6 @@ def make_tools(
         return "\n\n---\n\n".join(parts)
 
     # ── Execution tools ──────────────────────────────────────────────
-
-    @tool
-    async def run_python(code: str, description: str = "") -> str:
-        """Execute Python code in a persistent sandboxed session.
-
-        Variables, imports, and DataFrames persist across calls.
-        Use for data analysis, computation, and coding tasks. Save generated
-        outputs such as plots with simple relative paths; they are staged for approval.
-        """
-        if execution_service:
-            result = await execution_service.run_python(code, description)
-            return result.text
-        return _legacy_run_code(code)
-
-    @tool
-    async def run_code(code: str, description: str = "") -> str:
-        """Backwards-compatible alias for run_python."""
-        return await run_python.ainvoke({"code": code, "description": description})
 
     @tool
     async def exec_command(
@@ -212,24 +217,6 @@ def make_tools(
             return "[SANDBOX UNAVAILABLE] Node execution requires an active execution sandbox."
         result = await execution_service.run_node(code, description)
         return result.text
-
-    def _legacy_run_code(code: str) -> str:
-        if session is None:
-            return "[SANDBOX UNAVAILABLE] Code execution is disabled."
-        path_checker = guard.is_read_denied if guard else None
-        denied = scan_code_for_denied_paths(code, base_dir=data_dir, path_checker=path_checker)
-        if denied:
-            return (
-                f"[Access denied: your code attempts to access protected files: "
-                f"{', '.join(denied)}]"
-            )
-        try:
-            output, success = session.run(code, timeout=15)
-        except Exception as exc:
-            return f"[Session error: {exc}]"
-        if not output:
-            return "[Code ran successfully but produced no output. Use explicit print(...).]"
-        return output
 
     # ── 2. read_file ─────────────────────────────────────────────────
 
@@ -295,11 +282,27 @@ def make_tools(
         return result
 
     @tool
-    def search_documents(query: str, top_k: int = 5) -> str:
-        """Search text, PDF, and JSON documents using keyword matching."""
-        chunks = retriever.search(query, top_k=top_k)
+    def search_documents(query: str, path: str = "", top_k: int = 5) -> str:
+        """Search indexed workspace documents (text, Markdown, JSON, CSV, PDF).
+
+        Uses the shared BM25 index over the workspace. Pass *query* with keywords
+        to match. Optionally pass *path* (workspace path, relative path, or
+        basename) to search within a single file only — including PDFs. There is
+        no separate PDF reader; use this tool for all document types.
+        """
+        source_file: str | None = None
+        if path and path.strip():
+            p = _resolve_workspace_path(path.strip())
+            if _read_denied(p):
+                return f"[Access denied: {p.name} is a protected file]"
+            # Prefer resolved path so absolute/relative forms match the index.
+            source_file = str(p) if p.exists() else path.strip()
+
+        chunks = retriever.search(query, top_k=top_k, source_file=source_file)
         if not chunks:
-            return _fallback_search_documents(query, top_k=top_k)
+            return _fallback_search_documents(
+                query, top_k=top_k, path_filter=source_file or path.strip()
+            )
 
         parts: list[str] = []
         for i, c in enumerate(chunks, 1):
@@ -339,69 +342,18 @@ def make_tools(
         [{"label": "...", "description": "..."}] when the answer can be
         expressed as a small multiple-choice decision. Omit options only when
         free-form input is required.
+
+        Option rules:
+        - `label` is the literal answer text itself (e.g. "Paris"), NEVER a
+          letter or index like "A", "Option B", or "1." — the UI adds its own
+          numbering.
+        - `description` is optional extra context; omit it entirely when it
+          would just repeat the label. For quiz questions, plain labels with
+          no descriptions are usually correct.
+        - The user's reply arrives as the chosen label text verbatim (or their
+          own free-form text), so refer to answers by label, not by letter.
         """
         return question
-
-    _pdf_cache: dict[str, tuple[str, int]] = {}
-
-    @tool
-    def read_pdf(
-        path: str,
-        query: str = "",
-        pages: str = "",
-        max_chars: int = 3000,
-    ) -> str:
-        """Extract and search PDF content (in-memory, nothing saved to disk)."""
-        from ..pdf_reader import extract_pdf_text, search_pdf_text
-
-        p = _resolve_workspace_path(path)
-
-        if _read_denied(p):
-            return f"[Access denied: {p.name} is a protected file]"
-
-        abs_key = str(p.resolve())
-
-        if abs_key in _pdf_cache:
-            full_text, total_pages = _pdf_cache[abs_key]
-        else:
-            try:
-                full_text, total_pages = extract_pdf_text(p, pages=pages)
-            except FileNotFoundError:
-                parent = p.parent
-                if parent.is_dir():
-                    siblings = sorted(
-                        f.name for f in parent.iterdir()
-                        if f.is_file() and f.suffix.lower() == ".pdf"
-                    )
-                    listing = "\n  ".join(siblings[:20]) or "(none)"
-                    return (
-                        f"[PDF not found: {p.name}]\n"
-                        f"PDFs in {parent}:\n  {listing}"
-                    )
-                return f"[PDF not found: {p}]"
-            except Exception as exc:
-                return f"[Error reading PDF: {exc}]"
-
-            if not pages:
-                _pdf_cache[abs_key] = (full_text, total_pages)
-
-        if query:
-            chunks = search_pdf_text(full_text, query, top_k=5)
-            if not chunks:
-                return f"(no passages matching '{query}' in {p.name})"
-            parts = [f"[{i+1}] {chunk}" for i, chunk in enumerate(chunks)]
-            result = f"Search results for '{query}' in {p.name}:\n\n" + "\n\n---\n\n".join(parts)
-            return result[:max_chars]
-
-        word_count = len(full_text.split())
-        header = (
-            f"**{p.name}**\n"
-            f"Pages: {total_pages}, Words: ~{word_count}\n\n"
-        )
-        body = full_text[:max_chars - len(header)]
-        if len(full_text) > max_chars - len(header):
-            body += "\n\n… [truncated — use `query` parameter for targeted search]"
-        return header + body
 
     @tool
     def apply_patch(patch: str, description: str = "") -> str:
@@ -411,17 +363,29 @@ def make_tools(
     @tool
     def write_file(path: str, content: str, description: str = "") -> str:
         """Write text content to a file. Requires user approval."""
+        from ..atomic_io import atomic_write_text
         p = _resolve_workspace_path(path)
         if _write_denied(p):
             return f"[Access denied: cannot write to {p}]"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        atomic_write_text(p, content, encoding="utf-8")
         return f"Wrote {len(content)} characters to {p}"
 
     @tool
     def write_binary_artifact(path: str, content_base64: str, mime_type: str, description: str = "") -> str:
         """Save base64-encoded in-memory output such as a PNG or SVG."""
         return "Binary artifact write is handled by the approval layer."
+
+    @tool
+    def present_files(filepaths: list[str]) -> str:
+        """Queue existing workspace files for the user as openable UI cards.
+
+        Use when the user should view files that you are not editing right now.
+        Creates/edits already surface cards automatically — do not re-present those
+        unless the user asks to see them again. Does not modify files.
+        """
+        # Actual queue + artifact emit is handled in the tool node so the UI
+        # receives unique presentable descriptors at the end of the turn.
+        return "Presentation is handled by the presentation layer."
 
     from ..memories_backend import MemoriesBackend
     from ..skills_registry import list_skills, read_skill
@@ -476,15 +440,11 @@ def make_tools(
     memory_tools = [memory_search, memory_read, memory_list, memory_add_note] if use_memories else []
     skill_tools = [skill_list, skill_read]
     perm_tools = [request_permissions] if allow_request_permissions and request_permissions_fn else []
-    python_tools = (
-        [run_python, run_code]
-        if allowed_tools is not None and {"run_python", "run_code"} & allowed_tools
-        else []
-    )
     tools = [
-        *python_tools, *shell_tools, run_node,
+        *shell_tools, run_node,
         *memory_tools, *skill_tools, *perm_tools,
-        read_file, list_files, search_documents, think, ask_user_choice, read_pdf,
+        read_file, list_files, search_documents, think, ask_user_choice,
+        present_files,
     ]
     if not disable_write_tools:
         tools.extend([apply_patch, write_file, write_binary_artifact])

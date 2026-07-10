@@ -60,9 +60,9 @@ export function ArtifactCards({
           <button
             key={artifact.id}
             onClick={() => onOpen(artifact)}
-            className="group flex w-full max-w-[45rem] items-center gap-3 rounded-lg border border-scout-hairline-faint bg-scout-panel/50 px-3.5 py-3 text-left transition-colors hover:bg-scout-lift/65"
+            className="group lift-hover flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-lavender px-3.5 py-3 text-left hover:bg-scout-card-lavender-hover"
           >
-            <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-scout-hairline-faint bg-scout-input-bg">
+            <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-btn border border-scout-hairline-faint bg-scout-lavender-muted">
               {artifact.renderer === "image" ? (
                 <AuthenticatedImage
                   src={`${baseUrl}/artifacts/content?path=${encodeURIComponent(artifact.path)}`}
@@ -72,7 +72,7 @@ export function ArtifactCards({
                 />
               ) : (
                 <>
-                  <Icon size={18} className="relative text-scout-muted" />
+                  <Icon size={18} style={{ color: "#a78bfa" }} className="relative" />
                 </>
               )}
             </span>
@@ -87,7 +87,7 @@ export function ArtifactCards({
               </span>
             </span>
             <span className="flex shrink-0 items-center">
-              <span className="inline-flex rounded-md px-2.5 py-1.5 text-xs font-semibold text-scout-muted transition-colors group-hover:bg-scout-panel group-hover:text-scout-text">
+              <span className="inline-flex rounded-btn px-2.5 py-1.5 text-xs font-semibold text-scout-muted transition-colors group-hover:bg-scout-lavender-muted group-hover:text-scout-text">
                 Open
               </span>
             </span>

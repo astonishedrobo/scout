@@ -31,7 +31,7 @@ async def test_stream_sends_full_tool_output_and_bounded_preview():
                     "messages": [
                         ToolMessage(
                             content=content,
-                            name="read_pdf",
+                            name="search_documents",
                             tool_call_id="call-1",
                         )
                     ]

@@ -19,6 +19,7 @@ def test_analyst_profile_disables_writes_and_shell():
     assert "run_python" not in profile.allowed_tools
     assert "run_code" not in profile.allowed_tools
     assert "ask_user_choice" in profile.allowed_tools
+    assert "present_files" in profile.allowed_tools
 
 
 def test_admin_profile_allows_shared_write():
@@ -41,6 +42,7 @@ def test_contributor_profile_has_shell_not_install_tools():
     assert "install_python_package" not in profile.allowed_tools
     assert "install_node_package" not in profile.allowed_tools
     assert "ask_user_choice" in profile.allowed_tools
+    assert "present_files" in profile.allowed_tools
 
 
 def test_make_tools_filters_by_profile():
@@ -59,7 +61,10 @@ def test_make_tools_filters_by_profile():
     assert "run_code" not in names
     assert "install_python_package" not in names
     assert "read_file" in names
+    assert "search_documents" in names
+    assert "read_pdf" not in names
     assert "ask_user_choice" in names
+    assert "present_files" in names
 
 
 @pytest.mark.asyncio

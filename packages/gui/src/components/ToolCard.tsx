@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Check,
   ChevronRight,
+  CircleStop,
   FileText,
   FolderOpen,
   Loader2,
@@ -9,8 +10,9 @@ import {
   Search,
   Terminal,
 } from "lucide-react";
-import type { ToolStep } from "scout-core";
+import type { ResponseAnnotation, ToolStep } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { AnnotationRegion } from "./AnnotationRegion";
 
 interface ToolCardProps {
   steps: ToolStep[];
@@ -18,6 +20,13 @@ interface ToolCardProps {
   defaultExpanded?: boolean;
   baseUrl?: string;
   token?: string | null;
+  awaitingApproval?: boolean;
+  annotationSourcePrefix?: string;
+  annotations?: ResponseAnnotation[];
+  annotationNumbers?: Map<string, number>;
+  onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
+  onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
+  onRemoveAnnotation?: (id: string) => void;
 }
 
 type TimelineSegment =
@@ -25,6 +34,12 @@ type TimelineSegment =
   | { kind: "tools"; title: string; steps: ToolStep[] };
 
 function pathFrom(step: ToolStep): string {
+  if (step.name === "present_files") {
+    const paths = step.args?.filepaths ?? step.args?.paths;
+    if (Array.isArray(paths) && paths.length > 0) {
+      return String(paths[0] ?? "").trim();
+    }
+  }
   return String(step.args?.path ?? step.args?.file ?? step.args?.directory ?? "").trim();
 }
 
@@ -32,9 +47,38 @@ function filename(path: string): string {
   return path.split("/").filter(Boolean).pop() || path || "";
 }
 
-function displayName(step: ToolStep, tense: "present" | "past" = "past"): string {
+function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "past"): string {
   const path = pathFrom(step);
   const file = filename(path);
+  if (tense === "stopped") {
+    switch (step.name) {
+      case "write_file":
+      case "write_binary_artifact":
+        return `Stopped creating ${file || "a file"}`;
+      case "apply_patch":
+        return "Stopped updating files";
+      case "read_file":
+        return `Stopped reading ${file || "a file"}`;
+      case "list_files":
+        return "Stopped checking files";
+      case "search_documents":
+        return "Stopped searching documents";
+      case "exec_command":
+        return "Stopped running command";
+      case "run_node":
+        return "Stopped running JavaScript";
+      case "write_stdin":
+        return "Stopped checking command output";
+      case "memory_add_note":
+        return "Stopped updating memory";
+      case "present_files":
+        return file
+          ? `Stopped presenting ${file}`
+          : "Stopped presenting files";
+      default:
+        return "Stopped tool";
+    }
+  }
   switch (step.name) {
     case "write_file":
     case "write_binary_artifact":
@@ -43,6 +87,14 @@ function displayName(step: ToolStep, tense: "present" | "past" = "past"): string
         : `Created ${file || "a file"}`;
     case "apply_patch":
       return tense === "present" ? "Updating files" : "Updated files";
+    case "present_files": {
+      const paths = step.args?.filepaths ?? step.args?.paths;
+      const count = Array.isArray(paths) ? paths.length : file ? 1 : 0;
+      if (tense === "present") {
+        return count > 1 ? `Presenting ${count} files` : `Presenting ${file || "a file"}`;
+      }
+      return count > 1 ? `Presented ${count} files` : `Presented ${file || "a file"}`;
+    }
     case "read_file":
       return tense === "present"
         ? `Reading ${file || "a file"}`
@@ -51,17 +103,10 @@ function displayName(step: ToolStep, tense: "present" | "past" = "past"): string
       return tense === "present" ? "Checking files" : "Checked files";
     case "search_documents":
       return tense === "present" ? "Searching documents" : "Searched documents";
-    case "read_pdf":
-      return tense === "present"
-        ? `Reading ${file || "PDF"}`
-        : `Read ${file || "PDF"}`;
     case "exec_command":
       return tense === "present" ? "Running command" : "Ran command";
     case "run_node":
       return tense === "present" ? "Running JavaScript" : "Ran JavaScript";
-    case "run_python":
-    case "run_code":
-      return tense === "present" ? "Running Python" : "Ran Python";
     case "write_stdin":
       return tense === "present" ? "Checking command output" : "Checked command output";
     case "memory_add_note":
@@ -72,11 +117,16 @@ function displayName(step: ToolStep, tense: "present" | "past" = "past"): string
 }
 
 function detailText(step: ToolStep): string {
+  if (step.name === "search_documents") {
+    const q = String(step.args?.query ?? "");
+    const p = String(step.args?.path ?? "");
+    if (q && p) return `${q} · ${p}`;
+    return q || p || pathFrom(step) || "";
+  }
   const path = pathFrom(step);
   if (path) return path;
-  if (step.name === "search_documents") return String(step.args?.query ?? "");
   if (step.name === "exec_command") return String(step.args?.cmd ?? "");
-  if (step.name === "run_python" || step.name === "run_code" || step.name === "run_node") {
+  if (step.name === "run_node") {
     return String(step.args?.description ?? step.args?.code ?? "").split("\n")[0] ?? "";
   }
   return "";
@@ -84,12 +134,14 @@ function detailText(step: ToolStep): string {
 
 function iconFor(step: ToolStep) {
   if (step.status === "executing") return Loader2;
+  if (step.status === "interrupted") return CircleStop;
   if (step.name === "write_file" || step.name === "write_binary_artifact") return FileText;
+  if (step.name === "present_files") return FileText;
   if (step.name === "apply_patch") return PencilLine;
-  if (step.name === "read_file" || step.name === "read_pdf") return FileText;
+  if (step.name === "read_file") return FileText;
   if (step.name === "list_files") return FolderOpen;
   if (step.name === "search_documents") return Search;
-  if (step.name === "exec_command" || step.name === "run_python" || step.name === "run_code" || step.name === "run_node") {
+  if (step.name === "exec_command" || step.name === "run_node") {
     return Terminal;
   }
   return Check;
@@ -107,13 +159,20 @@ function thinkingBody(step: ToolStep): string {
   return (step.reflection ?? step.content ?? "").trim();
 }
 
+function stepTense(step: ToolStep): "present" | "past" | "stopped" {
+  if (step.status === "executing") return "present";
+  if (step.status === "interrupted") return "stopped";
+  return "past";
+}
+
 function deriveToolGroupTitle(tools: ToolStep[]): string {
   if (tools.length === 0) return "Working";
   if (tools.length === 1) {
-    return displayName(tools[0]!, tools[0]!.status === "executing" ? "present" : "past");
+    return displayName(tools[0]!, stepTense(tools[0]!));
   }
-  const running = tools.some((step) => step.status === "executing");
-  return running ? "Running tools" : "Completed tools";
+  if (tools.some((step) => step.status === "executing")) return "Running tools";
+  if (tools.some((step) => step.status === "interrupted")) return "Stopped tools";
+  return "Completed tools";
 }
 
 /**
@@ -204,7 +263,7 @@ function ToolRow({
         />
         <div className="min-w-0">
           <div className="text-scout-text/80">
-            {displayName(step, step.status === "executing" ? "present" : "past")}
+            {displayName(step, stepTense(step))}
           </div>
           {detail && (
             <div className="mt-0.5 truncate font-mono text-[11px] text-scout-muted/75">
@@ -215,9 +274,12 @@ function ToolRow({
         {step.status === "complete" && !hasOutput && (
           <Check size={12} className="ml-auto mt-0.5 shrink-0 text-scout-success" />
         )}
+        {step.status === "interrupted" && (
+          <CircleStop size={12} className="ml-auto mt-0.5 shrink-0 text-scout-muted" />
+        )}
       </button>
       {expanded && hasOutput && (
-        <pre className="ml-8 max-h-40 overflow-auto rounded-xl border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
+        <pre className="ml-8 max-h-40 overflow-auto rounded-btn border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
           {step.output}
         </pre>
       )}
@@ -233,16 +295,24 @@ function ToolGroupCard({
   title,
   steps,
   defaultExpanded,
+  awaitingApproval = false,
 }: {
   title: string;
   steps: ToolStep[];
   defaultExpanded?: boolean;
+  awaitingApproval?: boolean;
 }) {
   const running = steps.some((step) => step.status === "executing");
   const [expanded, setExpanded] = useState(defaultExpanded ?? running);
 
   return (
-    <div className="rounded-xl border border-scout-hairline-faint bg-scout-lift/30">
+    <div
+      className={`rounded-card border bg-scout-lift/30 ${
+        running
+          ? "border-l-2 border-scout-hairline-faint border-l-[#facc15]/60"
+          : "border-scout-hairline-faint"
+      }`}
+    >
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
@@ -254,12 +324,18 @@ function ToolGroupCard({
         />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] uppercase tracking-wide text-scout-muted/70 mb-0.5">
-            {running ? "Working" : "Activity"}
+            {awaitingApproval && running
+              ? "Waiting for approval"
+              : running
+                ? "Working"
+                : `${steps.length} step${steps.length === 1 ? "" : "s"}`}
           </div>
           <div className="text-scout-text/85 leading-relaxed">{title}</div>
         </div>
-        {running ? (
-          <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin" />
+        {awaitingApproval && running ? (
+          <span className="mt-0.5 shrink-0 text-[11px] font-medium text-scout-warning">Paused</span>
+        ) : running ? (
+          <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-[#facc15]" />
         ) : (
           <Check size={13} className="mt-0.5 shrink-0 text-scout-success" />
         )}
@@ -283,17 +359,34 @@ function TextBlock({
   content,
   baseUrl,
   token,
+  sourceId,
+  annotations,
+  annotationNumbers,
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
 }: {
   content: string;
   baseUrl?: string;
   token?: string | null;
+  sourceId?: string;
+  annotations?: ResponseAnnotation[];
+  annotationNumbers?: Map<string, number>;
+  onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
+  onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
+  onRemoveAnnotation?: (id: string) => void;
 }) {
   if (!content.trim()) return null;
-  return (
+  const body = (
     <div className="prose-scout text-[15px] overflow-x-auto">
       <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} />
     </div>
   );
+  return sourceId && onAddAnnotation && onUpdateAnnotation && onRemoveAnnotation ? (
+    <AnnotationRegion sourceId={sourceId} annotations={annotations ?? []} annotationNumbers={annotationNumbers ?? new Map()} onAdd={onAddAnnotation} onUpdate={onUpdateAnnotation} onRemove={onRemoveAnnotation}>
+      {body}
+    </AnnotationRegion>
+  ) : body;
 }
 
 /**
@@ -305,6 +398,13 @@ export function ToolCard({
   defaultExpanded = false,
   baseUrl = "",
   token = null,
+  awaitingApproval = false,
+  annotationSourcePrefix,
+  annotations = [],
+  annotationNumbers = new Map(),
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
 }: ToolCardProps) {
   if (steps.length === 0) return null;
 
@@ -321,6 +421,12 @@ export function ToolCard({
               content={segment.content}
               baseUrl={baseUrl}
               token={token}
+              sourceId={annotationSourcePrefix ? `${annotationSourcePrefix}-timeline-${index}` : undefined}
+              annotations={annotationSourcePrefix ? annotations.filter((annotation) => annotation.sourceId === `${annotationSourcePrefix}-timeline-${index}`) : []}
+              annotationNumbers={annotationNumbers}
+              onAddAnnotation={onAddAnnotation}
+              onUpdateAnnotation={onUpdateAnnotation}
+              onRemoveAnnotation={onRemoveAnnotation}
             />
           );
         }
@@ -330,6 +436,7 @@ export function ToolCard({
             title={segment.title}
             steps={segment.steps}
             defaultExpanded={defaultExpanded}
+            awaitingApproval={awaitingApproval}
           />
         );
       })}

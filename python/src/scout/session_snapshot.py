@@ -18,6 +18,7 @@ def save_session_snapshot(
     grants: list[dict[str, Any]] | None = None,
     exec_rules: list[str] | None = None,
     active_profile: str | None = None,
+    approval_mode: str = "ask_always",
     parent_session_id: str | None = None,
 ) -> None:
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,7 @@ def save_session_snapshot(
         "grants": grants or [],
         "exec_rules": exec_rules or [],
         "active_profile": active_profile,
+        "approval_mode": approval_mode,
         "parent_session_id": parent_session_id,
     }
     snapshot_path(sessions_dir, session_id).write_text(
@@ -52,7 +54,12 @@ def copy_session_snapshot(
 ) -> None:
     snap = load_session_snapshot(sessions_dir, parent_id)
     if snap is None:
-        snap = {"grants": [], "exec_rules": [], "active_profile": None}
+        snap = {
+            "grants": [],
+            "exec_rules": [],
+            "active_profile": None,
+            "approval_mode": "ask_always",
+        }
     snap["session_id"] = child_id
     snap["parent_session_id"] = parent_session_id or parent_id
     save_session_snapshot(
@@ -61,5 +68,6 @@ def copy_session_snapshot(
         grants=snap.get("grants"),
         exec_rules=snap.get("exec_rules"),
         active_profile=snap.get("active_profile"),
+        approval_mode=snap.get("approval_mode", "ask_always"),
         parent_session_id=snap.get("parent_session_id"),
     )

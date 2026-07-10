@@ -11,13 +11,13 @@ import {
   FolderTree,
   Image,
   Loader2,
-  PanelRight,
-  PanelRightClose,
   RefreshCw,
   Search,
   Table2,
   X,
 } from "lucide-react";
+import { PixelChest, PixelDazed } from "./PixelArt";
+import { FolderToggleIcon } from "./ui/PanelToggleIcon";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { useMediaQuery } from "../hooks/usePanelPrefs";
 
@@ -54,8 +54,8 @@ function nodeKey(node: FileTreeNode, scope: string): string {
 function FileKindIcon({ node }: { node: FileTreeNode }) {
   const renderer = node.renderer;
   const className = "shrink-0 text-scout-muted";
-  if (renderer === "image") return <Image size={15} className="shrink-0 text-scout-lavender" />;
-  if (renderer === "csv") return <Table2 size={15} className="shrink-0 text-scout-success" />;
+  if (renderer === "image") return <Image size={15} className="shrink-0 text-[#a78bfa]" />;
+  if (renderer === "csv") return <Table2 size={15} className="shrink-0 text-[#5cb87a]" />;
   if (renderer === "code" || renderer === "json") return <FileCode2 size={15} className={className} />;
   if (renderer === "markdown" || renderer === "text") return <FileText size={15} className={className} />;
   return <File size={15} className={className} />;
@@ -473,7 +473,7 @@ export function FileExplorerPanel({
           aria-label={treeVisible ? "Hide file tree" : "Show file tree"}
           aria-pressed={treeVisible}
         >
-          {treeVisible ? <PanelRightClose size={16} /> : <PanelRight size={16} />}
+          <FolderToggleIcon open={treeVisible} size={16} />
         </button>
         <button
           type="button"
@@ -534,7 +534,13 @@ export function FileExplorerPanel({
                 </div>
               )}
               {!loading && !error && roots.length === 0 && (
-                <div className="px-3 py-10 text-center text-xs text-scout-muted">No files yet</div>
+                <div className="px-3 py-10 text-center">
+                  <div className="mb-3 flex justify-center"><PixelChest size={40} /></div>
+                  <p className="text-xs font-medium text-scout-text">The chest is empty</p>
+                  <p className="mt-1 text-xs leading-relaxed text-scout-muted">
+                    Upload a file or ask Scout to create one — it will appear here.
+                  </p>
+                </div>
               )}
               {!loading && !error && roots.length > 0 && visibleRoots.length === 0 && (
                 <div className="px-3 py-10 text-center text-xs text-scout-muted">
@@ -575,7 +581,7 @@ export function FileExplorerPanel({
           ) : selection ? (
             <div className="flex h-full items-center justify-center px-8 text-center">
               <div className="max-w-xs">
-                <FileQuestion size={23} className="mx-auto mb-4 text-scout-muted/75" />
+                <div className="mb-4 flex justify-center"><PixelDazed size={72} /></div>
                 <p className="truncate text-sm font-medium text-scout-text">{selection.node.name}</p>
                 <p className="mt-1 text-xs leading-relaxed text-scout-muted">
                   This file type does not have an in-app preview yet.

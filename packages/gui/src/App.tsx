@@ -6,12 +6,14 @@ import { useConfig } from "./hooks/useConfig";
 import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
-import type { ToolStep, Artifact, ChatImage, FileChangeSet } from "scout-core";
+import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView, WelcomeContent, SuggestionChips } from "./components/ChatView";
 import { InputBar } from "./components/InputBar";
-import { ApprovalModal } from "./components/ApprovalModal";
+import { PixelPet } from "./components/PixelPet";
+import { WelcomeScene } from "./components/WelcomeScene";
+import { ApprovalDock } from "./components/ApprovalDock";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { InitWizard } from "./components/InitWizard";
 import { HelpDialog } from "./components/HelpDialog";
@@ -26,6 +28,13 @@ import { UploadButton } from "./components/UploadButton";
 import { UserInputCard } from "./components/UserInputCard";
 import { FileChangePanel } from "./components/FileChangePanel";
 import { FileExplorerPanel } from "./components/FileExplorerPanel";
+import { useApprovalMode } from "./hooks/useApprovalMode";
+import { useResponseAnnotations } from "./hooks/useResponseAnnotations";
+import {
+  headerActionActiveClass,
+  headerActionButtonClass,
+  headerActionIdleClass,
+} from "./components/ui/headerControls";
 
 export function App() {
   const { baseUrl, isReady, isMultiUser, error: serverError, warnings: serverWarnings } = useServer();
@@ -62,15 +71,27 @@ export function App() {
   );
 
   const onUserAccepted = useCallback(
-    async (sessionId: string, text: string, attachments: string[] = [], chatImages: ChatImage[] = []) => {
-      await appendMessage(sessionId, "user", text, { attachments, chat_images: chatImages });
+    async (sessionId: string, text: string, attachments: string[] = [], chatImages: ChatImage[] = [], annotations: ResponseAnnotation[] = []) => {
+      await appendMessage(sessionId, "user", text, { attachments, chat_images: chatImages, annotations });
     },
     [appendMessage],
   );
 
   const onAssistantMessage = useCallback(
-    async (sessionId: string, content: string, steps: ToolStep[], artifacts: Artifact[], fileChanges: FileChangeSet[]) => {
-      await appendMessage(sessionId, "assistant", content, { steps, artifacts, file_changes: fileChanges });
+    async (
+      sessionId: string,
+      content: string,
+      steps: ToolStep[],
+      artifacts: Artifact[],
+      fileChanges: FileChangeSet[],
+      extra?: { stopped?: boolean },
+    ) => {
+      await appendMessage(sessionId, "assistant", content, {
+        steps,
+        artifacts,
+        file_changes: fileChanges,
+        ...(extra?.stopped ? { stopped: true } : {}),
+      });
     },
     [appendMessage],
   );
@@ -110,7 +131,26 @@ export function App() {
   });
 
   const { models, currentModel, setModel, reloadConfig, capabilities } = useConfig(baseUrl, isReady, token);
+  const {
+    mode: approvalMode,
+    setMode: setApprovalMode,
+    isChanging: approvalModeChanging,
+    error: approvalModeError,
+  } = useApprovalMode({
+    baseUrl,
+    sessionId: currentSessionId,
+    token,
+    isReady,
+    ensureSession,
+  });
   const { theme, toggle: toggleTheme } = useTheme();
+  const {
+    annotations,
+    add: addAnnotation,
+    update: updateAnnotation,
+    remove: removeAnnotation,
+    clear: clearAnnotations,
+  } = useResponseAnnotations(currentSessionId);
   const {
     sidebarCollapsed,
     setSidebarCollapsed,
@@ -214,11 +254,14 @@ export function App() {
   }, [baseUrl, currentSessionId, markChangeSetUndone, token]);
 
   const handleSubmit = useCallback(
-    async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void) => {
+    async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, submittedAnnotations: ResponseAnnotation[] = []) => {
       if (!isReady || isLoading) return false;
-      return sendMessage(text, attachments, chatImages, onAccepted);
+      return sendMessage(text, attachments, chatImages, () => {
+        if (submittedAnnotations.length) clearAnnotations();
+        onAccepted?.();
+      }, submittedAnnotations);
     },
-    [isReady, isLoading, sendMessage],
+    [isReady, isLoading, sendMessage, clearAnnotations],
   );
 
   const handleUserInputAnswer = useCallback(
@@ -272,6 +315,7 @@ export function App() {
             fileChanges: m.fileChanges as FileChangeSet[] | undefined,
             attachments: m.attachments,
             chatImages: m.chatImages,
+            annotations: m.annotations,
           })),
         );
       } catch {
@@ -329,6 +373,7 @@ export function App() {
             fileChanges: m.fileChanges as FileChangeSet[] | undefined,
             attachments: m.attachments,
             chatImages: m.chatImages,
+            annotations: m.annotations,
           })),
         );
         window.location.hash = `/c/${newId}`;
@@ -388,7 +433,7 @@ export function App() {
   const handleApproval = useCallback(
     async (action: string, feedback?: string, saveExecpolicy?: boolean) => {
       if (!pendingApproval) return;
-      await fetch(`${baseUrl}/approval?session_id=${currentSessionId || "default"}`, {
+      const response = await fetch(`${baseUrl}/approval?session_id=${currentSessionId || "default"}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -400,13 +445,17 @@ export function App() {
           feedback: feedback ?? "",
           save_execpolicy: saveExecpolicy ?? false,
         }),
-      }).catch(() => {});
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.detail ?? "Could not send approval response");
+      }
       clearApproval();
     },
     [baseUrl, pendingApproval, clearApproval, currentSessionId, token],
   );
 
-  const displayError = serverError || chatError || operationError;
+  const displayError = serverError || chatError || operationError || approvalModeError;
   const isWelcome = isReady && messages.length === 0 && !isLoading;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
   const sessionTitle =
@@ -416,7 +465,7 @@ export function App() {
 
   if (isReady && isMultiUser && !token && !serverError) {
     return (
-      <div className="flex flex-col min-h-screen">
+      <div className="flex h-screen flex-col">
         <WarningBanner warnings={serverWarnings} />
         <Login onLogin={login} onRegister={register} error={authError || null} />
       </div>
@@ -429,22 +478,21 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         sessionTitle={sessionTitle}
-        isConnected={isReady}
         headerActions={
-          <div className="flex items-center gap-1">
+          <>
             <button
               type="button"
               onClick={toggleFilesExplorer}
-              className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-all ${
+              className={`${headerActionButtonClass} ${
                 filesExplorerOpen
-                  ? "border-scout-hairline bg-scout-lift text-scout-text"
-                  : "border-scout-hairline-faint bg-scout-panel/40 text-scout-muted hover:bg-scout-lift/80 hover:text-scout-text"
+                  ? headerActionActiveClass
+                  : headerActionIdleClass
               }`}
               title={filesExplorerOpen ? "Close files" : "Browse workspace files"}
               aria-label="Browse files"
               aria-pressed={filesExplorerOpen}
             >
-              <FolderTree size={16} />
+              <FolderTree size={15} />
               <span className="hidden sm:inline">Files</span>
             </button>
             {isMultiUser && (
@@ -456,7 +504,7 @@ export function App() {
                 onDismiss={dismissUpload}
               />
             )}
-          </div>
+          </>
         }
         artifactOpen={rightPanelOpen}
         artifactDefaultSize={filesExplorerOpen ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
@@ -530,9 +578,16 @@ export function App() {
           )}
 
           {isWelcome && (
-            <div className="flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
-              <div className="flex w-full max-w-[42rem] flex-col gap-5 px-5">
+            <div className="relative flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
+              <WelcomeScene />
+              <div className="relative z-10 flex w-full max-w-[42rem] flex-col gap-5 px-5">
                 <WelcomeContent />
+                {/* Extra headroom so the pet standing on the composer doesn't
+                    crowd the hero title; he strolls this ledge while idle. */}
+                <div className="relative mt-9">
+                  <div className="absolute inset-x-0 top-0 h-0">
+                    <PixelPet working={isLoading} size={40} idleStrollEveryMs={90_000} />
+                  </div>
                 <InputBar
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
@@ -546,13 +601,20 @@ export function App() {
                   ensureSession={ensureSession}
                   currentModel={currentModel}
                   onSelectModel={(model) => setModel(model, sessionRef.current)}
+                  approvalMode={approvalMode}
+                  onSelectApprovalMode={setApprovalMode}
+                  approvalModeChanging={approvalModeChanging}
                   isMultiUser={isMultiUser}
                   token={token}
                   uploadingCount={activeCount}
                   onUpload={isMultiUser ? uploadFiles : undefined}
+                  annotations={annotations}
+                  onUpdateAnnotation={updateAnnotation}
+                  onRemoveAnnotation={removeAnnotation}
                   welcomeMode
                   embedded
                 />
+                </div>
                 <div>
                   <SuggestionChips onSuggestionClick={handleSubmit} />
                 </div>
@@ -568,6 +630,11 @@ export function App() {
               currentTool={currentTool}
               statusMessage={statusMessage}
               isLoading={isLoading}
+              awaitingApproval={!!pendingApproval}
+              annotations={annotations}
+              onAddAnnotation={addAnnotation}
+              onUpdateAnnotation={updateAnnotation}
+              onRemoveAnnotation={removeAnnotation}
               onRetry={retryAt}
               onFork={isMultiUser ? handleFork : undefined}
               onOpenArtifact={openArtifact}
@@ -587,6 +654,11 @@ export function App() {
 
           {isReady && !isWelcome && (
             <div className="shrink-0 bg-scout-canvas/95">
+              {!pendingUserInput && !pendingApproval && annotations.length === 0 && (
+                <div className="relative z-10 mx-auto h-0 w-full max-w-[46rem] px-4">
+                  <PixelPet working={isLoading} />
+                </div>
+              )}
               {pendingUserInput && (
                 <div className="max-w-[46rem] mx-auto px-4 pb-2">
                   <UserInputCard
@@ -596,32 +668,46 @@ export function App() {
                   />
                 </div>
               )}
-              <InputBar
-                baseUrl={baseUrl}
-                onSubmit={handleSubmit}
-                onSlashCommand={handleSlashCommand}
-                disabled={isLoading || !isReady}
-                isLoading={isLoading}
-                onStop={stop}
-                models={models}
-                capabilities={capabilities}
-                requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-                ensureSession={ensureSession}
-                currentModel={currentModel}
-                onSelectModel={(model) => setModel(model, sessionRef.current)}
-                isMultiUser={isMultiUser}
-                token={token}
-                uploadingCount={activeCount}
-                onUpload={isMultiUser ? uploadFiles : undefined}
-              />
+              {pendingApproval && currentSessionId ? (
+                <div className="mx-auto w-full max-w-[46rem] px-4 pb-3 pt-1">
+                  <ApprovalDock
+                    request={pendingApproval}
+                    baseUrl={baseUrl}
+                    sessionId={currentSessionId}
+                    token={token}
+                    onRespond={handleApproval}
+                  />
+                </div>
+              ) : (
+                <InputBar
+                  baseUrl={baseUrl}
+                  onSubmit={handleSubmit}
+                  onSlashCommand={handleSlashCommand}
+                  disabled={isLoading || !isReady}
+                  isLoading={isLoading}
+                  onStop={stop}
+                  models={models}
+                  capabilities={capabilities}
+                  requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
+                  ensureSession={ensureSession}
+                  currentModel={currentModel}
+                  onSelectModel={(model) => setModel(model, sessionRef.current)}
+                  approvalMode={approvalMode}
+                  onSelectApprovalMode={setApprovalMode}
+                  approvalModeChanging={approvalModeChanging}
+                  isMultiUser={isMultiUser}
+                  token={token}
+                  uploadingCount={activeCount}
+                  onUpload={isMultiUser ? uploadFiles : undefined}
+                  annotations={annotations}
+                  onUpdateAnnotation={updateAnnotation}
+                  onRemoveAnnotation={removeAnnotation}
+                />
+              )}
             </div>
           )}
         </div>
       </WorkspaceShell>
-
-      {pendingApproval && (
-        <ApprovalModal request={pendingApproval} onRespond={handleApproval} />
-      )}
 
       <SettingsPanel
         open={settingsOpen}

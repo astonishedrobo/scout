@@ -22,7 +22,7 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
 
   return (
     <div className="w-full max-w-[46rem] mx-auto">
-      <div className="rounded-[18px] bg-scout-panel/95 border border-scout-hairline shadow-card overflow-hidden">
+      <div className="rounded-card bg-scout-panel/95 border border-scout-hairline shadow-card overflow-hidden">
         <div className="flex items-start gap-3 px-4 py-3">
           <div className="min-w-0 flex-1">
             {question.header && question.header !== "Question" && (

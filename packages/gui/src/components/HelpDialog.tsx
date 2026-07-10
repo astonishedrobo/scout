@@ -1,21 +1,16 @@
 import { Keyboard } from "lucide-react";
 import { CenterModal } from "./ui/CenterModal";
+import { APP_VERSION, SHORTCUTS } from "../appMeta";
 
 interface HelpDialogProps {
   open: boolean;
   onClose: () => void;
 }
 
-const SHORTCUTS = [
-  { keys: "Enter", desc: "Send message" },
-  { keys: "Shift + Enter", desc: "New line in input" },
-  { keys: "@file", desc: "Attach a file for analysis" },
-];
-
 const FEATURES = [
   { title: "Chat", desc: "Ask questions about your data. The agent can run Python code, search documents, and read files." },
   { title: "Tool Steps", desc: "Click the tool steps summary to expand and see what the agent did behind the scenes." },
-  { title: "File Approvals", desc: "When the agent writes files, you'll see a diff and can approve, reject, or suggest changes." },
+  { title: "Approvals", desc: "Use the composer approval menu to ask every time, allow workspace edits, or grant full access. When Scout pauses, review proposed diffs in the composer before approving." },
   { title: "Settings", desc: "Configure LLM providers (API keys and models), agent parameters, and more." },
   { title: "Init Workspace", desc: "Generate .scout/skills/workspace.md to give the agent context about your project." },
 ];
@@ -54,7 +49,7 @@ export function HelpDialog({ open, onClose }: HelpDialogProps) {
         </section>
 
         <p className="text-xs font-medium text-scout-muted pt-3 border-t border-scout-hairline-faint">
-          Scout v0.1.0
+          Scout {APP_VERSION}
         </p>
       </div>
     </CenterModal>

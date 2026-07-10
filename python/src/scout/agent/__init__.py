@@ -72,17 +72,24 @@ __all__ = ["ScoutAgent", "ProviderRateLimitError", "thinking_block_from_args"]
 def _tool_arg_summary(name: str, args: dict) -> str:
     if name in {"read_file"}:
         return f"read `{args.get('path', '?')}`"
+    if name == "present_files":
+        paths = args.get("filepaths") or args.get("paths") or args.get("path") or []
+        if isinstance(paths, str):
+            paths = [paths]
+        if isinstance(paths, list) and paths:
+            shown = ", ".join(f"`{p}`" for p in paths[:3])
+            extra = f" +{len(paths) - 3} more" if len(paths) > 3 else ""
+            return f"present {shown}{extra}"
+        return "present files"
     if name == "write_file":
         return f"wrote `{args.get('path', '?')}`"
     if name == "list_files":
         return f"listed `{args.get('directory', '.')}`"
-    if name == "read_pdf":
-        p = args.get("path", "?")
-        q = args.get("query", "")
-        return f"searched `{p}`" if q else f"read `{p}`"
     if name == "search_documents":
-        return f"query: {args.get('query', '?')}"
-    if name in {"run_code", "run_python", "run_shell", "exec_command", "write_stdin", "run_node"}:
+        q = args.get("query", "?")
+        p = args.get("path") or ""
+        return f"query: {q} in `{p}`" if p else f"query: {q}"
+    if name in {"run_shell", "exec_command", "write_stdin", "run_node"}:
         desc = args.get("description", "")
         if desc:
             return desc[:80]
@@ -500,7 +507,24 @@ class ScoutAgent:
                         })
             return events
 
+        def _seal_pending_tools() -> None:
+            """Close open tool calls so history stays valid for the next turn."""
+            for tc_id, pending in list(_pending_calls.items()):
+                name = pending.get("name") or "unknown"
+                _pending_calls.pop(tc_id, None)
+                if name == "think":
+                    continue
+                note = "[Interrupted by user — tool did not finish]"
+                new_messages.append(ToolMessage(
+                    content=note,
+                    name=name,
+                    tool_call_id=tc_id,
+                ))
+                tool_steps.append((name, pending.get("args", {}), note))
+
         graph_done = False
+        committed = False
+        discard_turn = False
         try:
             while not graph_done:
                 graph_get = asyncio.ensure_future(graph_q.get())
@@ -534,10 +558,24 @@ class ScoutAgent:
                     yield output_q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+
+            if not response_emitted and new_messages:
+                content = last_ai_content or _build_tool_summary(tool_steps)
+                yield {"type": "response", "content": content}
+
+            self._messages.extend(new_messages)
+            committed = True
         except ProviderRateLimitError:
+            # Drop the user turn that never got a model reply.
+            discard_turn = True
             self._messages.pop()
             raise
         except Exception:
+            # Keep partial progress on tool/model errors (not rate-limit).
+            if not committed:
+                _seal_pending_tools()
+                self._messages.extend(new_messages)
+                committed = True
             if not response_emitted and tool_steps:
                 yield {"type": "response", "content": _build_tool_summary(tool_steps)}
             raise
@@ -546,12 +584,12 @@ class ScoutAgent:
                 self._execution.set_output_sink(None)
             if not graph_task.done():
                 graph_task.cancel()
-
-        if not response_emitted and new_messages:
-            content = last_ai_content or _build_tool_summary(tool_steps)
-            yield {"type": "response", "content": content}
-
-        self._messages.extend(new_messages)
+            # Cancel / GeneratorExit often bypasses except CancelledError on
+            # async generators — always seal partial history so Stop keeps context.
+            if not committed and not discard_turn:
+                _seal_pending_tools()
+                self._messages.extend(new_messages)
+                committed = True
 
     def reset(self) -> None:
         self._messages.clear()

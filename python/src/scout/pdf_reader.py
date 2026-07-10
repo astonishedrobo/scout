@@ -6,10 +6,10 @@ This module provides two capabilities:
    them on disk.  Used at init time so the BM25 retriever can index
    the resulting text files.
 
-2. **extract_pdf_text()** — In-memory extraction for on-demand PDF
-   reading (e.g. the ``read_pdf`` agent tool).  Nothing is saved to
-   disk.  Supports page-range selection and BM25 search within the
-   extracted text.
+2. **extract_pdf_text()** — In-memory extraction for batch conversion
+   and offline use.  Workspace search goes through the shared BM25
+   index via ``search_documents`` (optional ``path`` filter), not a
+   separate PDF tool.
 
 Two parser backends are supported (selectable via ``config.yaml``):
 
@@ -26,6 +26,7 @@ Two parser backends are supported (selectable via ``config.yaml``):
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -315,7 +316,7 @@ class PDFConverter:
         return "\n".join(kept)
 
 
-# ── In-memory extraction (for the read_pdf agent tool) ───────────────────
+# ── In-memory extraction (batch convert / offline helpers) ───────────────
 
 
 def extract_pdf_text(
@@ -421,11 +422,11 @@ def search_pdf_text(
 ) -> list[str]:
     """BM25-search over in-memory PDF text, returning the top-k chunks.
 
-    This creates a temporary index each time — suitable for ad-hoc
-    searches on attached PDFs, not for large-scale retrieval.
+    Prefer ``search_documents`` (shared workspace BM25 + optional path).
+    This helper is for offline/ad-hoc extraction paths only.
     """
     from .text_splitter import OverlappingTextSplitter
-    from rank_bm25 import BM25Okapi
+    from rank_bm25 import BM25Plus
 
     splitter = OverlappingTextSplitter(
         chunk_size=chunk_size,
@@ -435,12 +436,22 @@ def search_pdf_text(
     if not chunks:
         return []
 
-    tokenized = [c.lower().split() for c in chunks]
-    bm25 = BM25Okapi(tokenized)
-    scores = bm25.get_scores(query.lower().split())
+    # Match the workspace retriever tokenizer / BM25Plus scorer so fallback
+    # rankings stay consistent with search_documents when possible.
+    tokenized = [re.findall(r"[a-z0-9]+", c.lower()) for c in chunks]
+    # Drop empty token lists so BM25Plus does not see zero-length docs.
+    kept = [(chunk, toks) for chunk, toks in zip(chunks, tokenized) if toks]
+    if not kept:
+        return []
+    kept_chunks, kept_tokens = zip(*kept)
+    bm25 = BM25Plus(list(kept_tokens))
+    q_tokens = re.findall(r"[a-z0-9]+", query.lower())
+    if not q_tokens:
+        return []
+    scores = bm25.get_scores(q_tokens)
 
     ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    return [chunks[i] for i in ranked if scores[i] > 0]
+    return [kept_chunks[i] for i in ranked if scores[i] > 0]
 
 
 def _count_pages(pdf_path: Path) -> int:

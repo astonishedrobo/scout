@@ -1,4 +1,4 @@
-import { Brain, ExternalLink } from "lucide-react";
+import { Brain, ChevronRight } from "lucide-react";
 
 export function MemoryUpdateChip({
   onOpenMemories,
@@ -11,18 +11,12 @@ export function MemoryUpdateChip({
     <button
       type="button"
       onClick={onOpenMemories}
-      className={`flex items-center gap-2 max-w-xs rounded-xl bg-scout-panel border border-scout-hairline-faint px-3 py-2 text-left hover:bg-scout-lift transition-colors ${className}`}
+      className={`inline-flex items-center gap-2 rounded-pill bg-scout-card-amber border border-scout-hairline-faint px-3 py-1.5 text-left hover:bg-scout-card-amber-hover transition-colors ${className}`}
+      title="Open memories"
     >
-      <Brain size={16} className="text-scout-muted shrink-0" />
-      <span className="min-w-0">
-        <span className="block text-xs font-normal text-scout-text truncate">
-          Memory updated
-        </span>
-        <span className="block text-[11px] text-scout-muted truncate">
-          Open memories
-        </span>
-      </span>
-      <ExternalLink size={13} className="text-scout-muted shrink-0" />
+      <Brain size={15} className="shrink-0 text-[#f5c542]" />
+      <span className="text-[13px] text-scout-text truncate">Memory updated</span>
+      <ChevronRight size={13} className="text-scout-muted shrink-0" />
     </button>
   );
 }

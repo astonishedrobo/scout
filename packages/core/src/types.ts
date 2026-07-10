@@ -49,6 +49,26 @@ export interface Message {
   fileChanges?: FileChangeSet[];
   attachments?: string[];
   chatImages?: ChatImage[];
+  /** Follow-up annotations attached to this user turn. */
+  annotations?: ResponseAnnotation[];
+  /** True when the user stopped generation mid-turn; keep partial content. */
+  stopped?: boolean;
+}
+
+/** A note on a precise excerpt of a previous assistant response. */
+export interface ResponseAnnotation {
+  id: string;
+  /** Stable client-side key for the rendered assistant text block. */
+  sourceId: string;
+  /** Exact text selected by the user. */
+  quote: string;
+  /** A little surrounding prose makes repeated quotes unambiguous to the agent. */
+  contextBefore?: string;
+  contextAfter?: string;
+  /** Optional instruction/question supplied by the user. */
+  comment: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type VisionSupport = "supported" | "unsupported" | "unverified";
@@ -78,7 +98,7 @@ export interface Artifact {
 
 // ── Chat events (server → client via SSE) ────────────────────────
 
-export type ToolStepStatus = "executing" | "complete";
+export type ToolStepStatus = "executing" | "complete" | "interrupted";
 /** Chronological turn blocks. `reflection` is a legacy alias for `thinking`. */
 export type ActivityStepKind = "tool" | "thinking" | "text" | "reflection";
 
@@ -86,7 +106,12 @@ export interface FileDiffEntry {
   path: string;
   status: "added" | "modified" | "deleted";
   diff: string;
+  /** Approval previews may be shortened; the exact diff is fetched on review. */
+  truncated?: boolean;
+  original_chars?: number;
 }
+
+export type ApprovalMode = "ask_always" | "allow_edits" | "full_access";
 
 export interface FileChangeEntry extends FileDiffEntry {
   old_hash?: string | null;
@@ -142,6 +167,7 @@ export interface ChatEvent {
     | "tool_output_chunk"
     | "response"
     | "error"
+    | "interrupted"
     | "approval_request"
     | "user_input_request"
     | "session_title";

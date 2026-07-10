@@ -31,7 +31,8 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
         personal_write=False,
         can_request_permissions=False,
         allowed_tools=frozenset({
-            "read_file", "list_files", "search_documents", "read_pdf",
+            "read_file", "list_files", "search_documents",
+            "present_files",
             "think", "ask_user_choice",
             "memory_search", "memory_read", "memory_list",
             "skill_list", "skill_read",
@@ -45,7 +46,8 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
         personal_write=True,
         can_request_permissions=True,
         allowed_tools=frozenset({
-            "read_file", "list_files", "search_documents", "read_pdf",
+            "read_file", "list_files", "search_documents",
+            "present_files",
             "exec_command", "write_stdin", "run_node",
             "write_file", "write_binary_artifact", "apply_patch",
             "memory_search", "memory_read", "memory_list", "memory_add_note",
@@ -61,7 +63,8 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
         personal_write=True,
         can_request_permissions=True,
         allowed_tools=frozenset({
-            "read_file", "list_files", "search_documents", "read_pdf",
+            "read_file", "list_files", "search_documents",
+            "present_files",
             "exec_command", "write_stdin", "run_node",
             "write_file", "write_binary_artifact", "apply_patch",
             "memory_search", "memory_read", "memory_list", "memory_add_note",

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  Send,
+  ArrowUp,
   Plus,
   AtSign,
   FileText,
@@ -13,11 +13,17 @@ import {
   X,
   Camera,
   AlertTriangle,
+  Hand,
+  ShieldCheck,
+  ShieldAlert,
+  MessageSquare,
+  Trash2,
 } from "lucide-react";
 import { AnchoredPopover } from "./ui/AnchoredPopover";
-import type { ChatImage } from "scout-core";
-import { AuthenticatedImage } from "./AuthenticatedImage";
+import type { ApprovalMode, ChatImage, ResponseAnnotation } from "scout-core";
 import type { UploadResult } from "../hooks/useUploads";
+import { formatAnnotatedFollowUp } from "../hooks/useResponseAnnotations";
+import { AttachmentCard, isImageAttachment } from "./AttachmentCard";
 
 interface SlashCommand {
   name: string;
@@ -40,7 +46,7 @@ interface FileEntry {
 
 interface InputBarProps {
   baseUrl: string;
-  onSubmit: (text: string, attachments?: string[], chatImages?: ChatImage[], onAccepted?: () => void) => Promise<boolean>;
+  onSubmit: (text: string, attachments?: string[], chatImages?: ChatImage[], onAccepted?: () => void, annotations?: ResponseAnnotation[]) => Promise<boolean>;
   onSlashCommand?: (command: string) => void;
   disabled: boolean;
   isLoading?: boolean;
@@ -49,6 +55,9 @@ interface InputBarProps {
   capabilities: Record<string, { vision: "supported" | "unsupported" | "unverified" }>;
   currentModel: string;
   onSelectModel: (model: string) => void;
+  approvalMode: ApprovalMode;
+  onSelectApprovalMode: (mode: ApprovalMode) => Promise<void> | void;
+  approvalModeChanging?: boolean;
   isMultiUser?: boolean;
   token?: string | null;
   uploadingCount?: number;
@@ -59,6 +68,9 @@ interface InputBarProps {
   embedded?: boolean;
   requiresVision?: boolean;
   ensureSession: () => Promise<string>;
+  annotations?: ResponseAnnotation[];
+  onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
+  onRemoveAnnotation?: (id: string) => void;
 }
 
 export function InputBar({
@@ -72,6 +84,9 @@ export function InputBar({
   capabilities,
   currentModel,
   onSelectModel,
+  approvalMode,
+  onSelectApprovalMode,
+  approvalModeChanging = false,
   token,
   uploadingCount = 0,
   onUpload,
@@ -79,15 +94,20 @@ export function InputBar({
   embedded = false,
   requiresVision = false,
   ensureSession,
+  annotations = [],
+  onUpdateAnnotation,
+  onRemoveAnnotation,
 }: InputBarProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const plusBtnRef = useRef<HTMLButtonElement>(null);
+  const approvalBtnRef = useRef<HTMLButtonElement>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [showApprovalMenu, setShowApprovalMenu] = useState(false);
   const [showSlash, setShowSlash] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [showAt, setShowAt] = useState(false);
@@ -96,9 +116,12 @@ export function InputBar({
   const [atPrefix, setAtPrefix] = useState("");
   const [atStartPos, setAtStartPos] = useState(0);
   const [showModelMenu, setShowModelMenu] = useState(false);
-  const [imageAttachments, setImageAttachments] = useState<FileEntry[]>([]);
+  const [fileAttachments, setFileAttachments] = useState<UploadResult[]>([]);
   const [chatImages, setChatImages] = useState<ChatImage[]>([]);
   const [pastingImages, setPastingImages] = useState(false);
+  const [showAnnotationReview, setShowAnnotationReview] = useState(false);
+  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+  const [annotationComment, setAnnotationComment] = useState("");
 
   const fetchIdRef = useRef(0);
   const cursorPosRef = useRef(0);
@@ -196,16 +219,15 @@ export function InputBar({
 
   const acceptFileRef = useCallback(
     (file: FileEntry) => {
-      const insertPath = file.abs_path;
+      // The picked file becomes an attachment card (same as uploads); the
+      // typed "@prefix" token is removed from the draft — no raw paths.
       const before = value.slice(0, atStartPos);
       const after = value.slice(atStartPos + 1 + atPrefix.length);
-      const newValue = before + "@" + insertPath + " " + after;
-      const newPos = before.length + 1 + insertPath.length + 1;
+      const newPos = before.length;
       cursorPosRef.current = newPos;
-      setValue(newValue);
-      if (/\.(png|jpe?g|webp|gif)$/i.test(file.abs_path)) {
-        setImageAttachments((prev) => prev.some((p) => p.abs_path === file.abs_path) ? prev : [...prev, file]);
-      }
+      setValue(before + after);
+      const attachment: UploadResult = { filename: file.path.split("/").pop() || file.path, path: file.path, abs_path: file.abs_path, scope: file.scope, size: 0 };
+      setFileAttachments((prev) => prev.some((item) => item.abs_path === file.abs_path) ? prev : [...prev, attachment]);
       setShowAt(false);
       setTimeout(() => {
         const ta = textareaRef.current;
@@ -218,49 +240,22 @@ export function InputBar({
     [value, atStartPos, atPrefix],
   );
 
-  /** Insert @refs for files just uploaded via the chat plus menu. */
-  const insertUploadRefs = useCallback((results: UploadResult[]) => {
+  /** Keep uploaded paths as attachment metadata; never expose them in prompt text. */
+  const addUploadedFiles = useCallback((results: UploadResult[]) => {
     if (results.length === 0) return;
-    const ta = textareaRef.current;
-    const pos = ta?.selectionStart ?? cursorPosRef.current ?? value.length;
-    const before = value.slice(0, pos);
-    const after = value.slice(pos);
-    let needsSpace = before.length > 0 && !/\s$/.test(before);
-    let insert = "";
-    for (const result of results) {
-      const refPath = result.abs_path || result.path || result.filename;
-      insert += (needsSpace ? " " : "") + "@" + refPath;
-      needsSpace = true;
-    }
-    // Trailing space so the user can keep typing cleanly.
-    insert += " ";
-    const newValue = before + insert + after;
-    const newPos = before.length + insert.length;
-    cursorPosRef.current = newPos;
-    setValue(newValue);
-
-    for (const result of results) {
-      const abs = result.abs_path || result.path;
-      if (/\.(png|jpe?g|webp|gif)$/i.test(abs)) {
-        const entry: FileEntry = {
-          path: result.path || result.filename,
-          abs_path: abs,
-          scope: result.scope ?? "workspace",
-        };
-        setImageAttachments((prev) =>
-          prev.some((p) => p.abs_path === entry.abs_path) ? prev : [...prev, entry],
-        );
-      }
-    }
+    setFileAttachments((current) => {
+      const next = [...current];
+      results.forEach((result) => {
+        if (!next.some((item) => item.abs_path === result.abs_path)) next.push(result);
+      });
+      return next;
+    });
 
     setTimeout(() => {
       const el = textareaRef.current;
-      if (el) {
-        el.focus();
-        el.setSelectionRange(newPos, newPos);
-      }
+      el?.focus();
     }, 0);
-  }, [value]);
+  }, []);
 
   const handleChatUpload = useCallback(
     async (files: FileList | null) => {
@@ -270,10 +265,10 @@ export function InputBar({
         ? await (maybe as Promise<UploadResult[] | void>)
         : undefined;
       if (Array.isArray(results) && results.length > 0) {
-        insertUploadRefs(results);
+        addUploadedFiles(results);
       }
     },
-    [onUpload, insertUploadRefs],
+    [onUpload, addUploadedFiles],
   );
 
   const insertAtSymbol = useCallback(() => {
@@ -309,8 +304,8 @@ export function InputBar({
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
-    if ((!trimmed && imageAttachments.length === 0 && chatImages.length === 0) || disabled) return;
-    if ((imageAttachments.length > 0 || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported") return;
+    if ((!trimmed && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || disabled) return;
+    if ((fileAttachments.some((file) => isImageAttachment(file.filename || file.path)) || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported") return;
 
     if (showSlash && filteredCommands.length > 0) {
       acceptSlashCommand(filteredCommands[slashIndex]!);
@@ -335,7 +330,7 @@ export function InputBar({
     const clearAcceptedDraft = () => {
       cleared = true;
       setValue("");
-      setImageAttachments([]);
+      setFileAttachments([]);
       setChatImages([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     };
@@ -345,14 +340,15 @@ export function InputBar({
       .map((m) => m[1]!)
       .filter(Boolean);
     const attachmentSet = new Set<string>([
-      ...imageAttachments.map((a) => a.abs_path),
+      ...fileAttachments.map((attachment) => attachment.abs_path),
       ...atPaths,
     ]);
     const accepted = await onSubmit(
-      trimmed,
+      annotations.length ? formatAnnotatedFollowUp(annotations, trimmed) : trimmed,
       [...attachmentSet],
       chatImages,
       clearAcceptedDraft,
+      annotations,
     );
     if (accepted && !cleared) {
       clearAcceptedDraft();
@@ -370,10 +366,11 @@ export function InputBar({
     atFiles,
     atIndex,
     acceptFileRef,
-    imageAttachments,
+    fileAttachments,
     capabilities,
     currentModel,
     chatImages,
+    annotations,
   ]);
 
   const handleKeyDown = useCallback(
@@ -475,15 +472,24 @@ export function InputBar({
   }, [disabled]);
 
   const hasText = value.trim().length > 0;
-  const visionBlocked = (imageAttachments.length > 0 || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported";
+  const hasImageAttachment = fileAttachments.some((file) => isImageAttachment(file.filename || file.path));
+  const visionBlocked = (hasImageAttachment || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported";
   const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
   const popoverMenuItem =
     "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium hover:bg-scout-lift/80 transition-colors text-left";
 
-  const sendBtnClass = welcomeMode
-    ? "flex items-center gap-2 px-4 py-2 rounded-pill flex-shrink-0 transition-all text-sm font-semibold"
-    : "flex items-center gap-1.5 px-3 py-1.5 rounded-pill flex-shrink-0 transition-all text-xs font-semibold";
+  const sendBtnClass = "flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 transition-all";
+  const approvalLabel = approvalMode === "ask_always"
+    ? "Ask every time"
+    : approvalMode === "allow_edits"
+      ? "Allow edits"
+      : "Full access";
+  const ApprovalIcon = approvalMode === "ask_always"
+    ? Hand
+    : approvalMode === "allow_edits"
+      ? ShieldCheck
+      : ShieldAlert;
 
   return (
     <div
@@ -502,23 +508,57 @@ export function InputBar({
       )}
 
       <div
-      className={`flex flex-col overflow-visible rounded-card border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${disabled ? "opacity-60" : ""}`}
+      className={`relative flex flex-col overflow-visible rounded-[26px] border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${disabled ? "opacity-60" : ""}`}
       >
-        {(imageAttachments.length > 0 || chatImages.length > 0) && (
-          <div className="flex gap-2 overflow-x-auto px-3 pt-3">
+        {showAnnotationReview && annotations.length > 0 && (
+          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 rounded-card border border-scout-hairline bg-scout-panel p-3 shadow-pop">
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {annotations.map((annotation, index) => (
+                <div key={annotation.id} className="rounded-btn p-2 hover:bg-scout-lift/40">
+                  <div className="flex items-start gap-2.5">
+                    <span className="mt-0.5 text-[13px] font-medium text-scout-muted">{index + 1}.</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-scout-muted">Selected text:</p>
+                      <button type="button" onClick={() => { setEditingAnnotationId(annotation.id); setAnnotationComment(annotation.comment); }} className="mt-0.5 block w-full text-left text-[13px] leading-snug text-scout-text hover:underline">{annotation.quote}</button>
+                    </div>
+                    <button type="button" onClick={() => onRemoveAnnotation?.(annotation.id)} className="rounded p-1 text-scout-error/80 hover:bg-scout-error-muted hover:text-scout-error" aria-label={`Remove annotation ${index + 1}`}><Trash2 size={13} /></button>
+                  </div>
+                  {editingAnnotationId === annotation.id ? (
+                    <div className="mt-2 pl-5">
+                      <textarea value={annotationComment} onChange={(event) => setAnnotationComment(event.target.value)} rows={2} placeholder="Add an optional comment…" className="w-full resize-none rounded-btn border border-scout-hairline-faint bg-scout-panel px-2 py-1.5 text-xs text-scout-text outline-none" />
+                      <div className="mt-1.5 flex justify-end gap-1.5"><button type="button" onClick={() => setEditingAnnotationId(null)} className="rounded-btn px-2 py-1 text-xs text-scout-muted hover:bg-scout-lift">Cancel</button><button type="button" onClick={() => { onUpdateAnnotation?.(annotation.id, { comment: annotationComment }); setEditingAnnotationId(null); }} className="rounded-btn bg-scout-text px-2 py-1 text-xs font-semibold text-scout-bg">Save</button></div>
+                    </div>
+                  ) : annotation.comment.trim() ? (
+                    <div className="mt-1.5 pl-6">
+                      <p className="text-xs font-medium text-scout-muted">User comment:</p>
+                      <p className="mt-0.5 text-[13px] leading-snug text-scout-text">{annotation.comment}</p>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {annotations.length > 0 && (
+          <div className="flex items-center px-4 pt-3">
+            <div className="flex h-9 items-center rounded-full border border-scout-hairline-faint bg-scout-lift/70 text-[14px] font-semibold text-scout-text">
+              <button type="button" onClick={() => setShowAnnotationReview((open) => !open)} className="flex h-full items-center gap-2 rounded-l-full pl-3.5 pr-1.5 hover:bg-scout-lift" aria-expanded={showAnnotationReview}>
+                <MessageSquare size={15} strokeWidth={1.8} />
+                <span>{annotations.length} annotation{annotations.length === 1 ? "" : "s"}</span>
+              </button>
+              <button type="button" onClick={() => { annotations.forEach((annotation) => onRemoveAnnotation?.(annotation.id)); setShowAnnotationReview(false); }} className="mr-1 flex h-7 w-7 items-center justify-center rounded-full text-scout-muted hover:bg-scout-input-bg hover:text-scout-text" aria-label="Clear annotations">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+        {(fileAttachments.length > 0 || chatImages.length > 0) && (
+          <div className="flex gap-2.5 overflow-x-auto px-4 pt-3 pb-0.5">
             {chatImages.map((image) => (
-              <div key={image.id} className="relative shrink-0 w-20 rounded-xl border border-scout-hairline-faint bg-scout-input-bg overflow-hidden">
-                <AuthenticatedImage src={`${baseUrl}${image.url}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.name} />
-                <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.name}</div>
-                <button onClick={() => setChatImages((p) => p.filter((x) => x.id !== image.id))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
-              </div>
+              <AttachmentCard key={image.id} path={image.name} name={image.name} size={image.size} baseUrl={baseUrl} token={token} previewUrl={`${baseUrl}${image.url}`} onRemove={() => setChatImages((current) => current.filter((item) => item.id !== image.id))} />
             ))}
-            {imageAttachments.map((image) => (
-              <div key={image.abs_path} className="relative shrink-0 w-20 rounded-xl border border-scout-hairline-faint bg-scout-input-bg overflow-hidden">
-                <AuthenticatedImage src={`${baseUrl}/files/content?path=${encodeURIComponent(image.abs_path)}`} token={token ?? null} className="h-14 w-full object-cover" alt={image.path} />
-                <div className="truncate px-1.5 py-1 text-[10px] text-scout-muted">{image.path.split("/").pop()}</div>
-                <button onClick={() => setImageAttachments((p) => p.filter((x) => x.abs_path !== image.abs_path))} className="absolute right-1 top-1 rounded-full bg-scout-void/70 p-0.5 text-white" aria-label="Remove image"><X size={11} /></button>
-              </div>
+            {fileAttachments.map((file) => (
+              <AttachmentCard key={file.abs_path} path={file.abs_path} name={file.filename} size={file.size} baseUrl={baseUrl} token={token} onRemove={() => setFileAttachments((current) => current.filter((item) => item.abs_path !== file.abs_path))} />
             ))}
           </div>
         )}
@@ -537,7 +577,9 @@ export function InputBar({
               ? "Waiting for response..."
               : welcomeMode
                 ? "Describe what you want to explore…"
-                : "How can I help you?"
+                : annotations.length > 0
+                  ? "Ask for follow-up changes"
+                  : "How can I help you?"
           }
           rows={1}
           className={`flex-1 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
@@ -549,17 +591,34 @@ export function InputBar({
         />
 
         <div className="flex items-center justify-between px-3 pb-3 pt-0">
-          <div className="flex items-center gap-1">
+          <div className="flex min-w-0 items-center gap-0.5">
             <button
               ref={plusBtnRef}
               onClick={() => setShowPlusMenu((p) => !p)}
               disabled={disabled}
-              className={`flex items-center justify-center rounded-xl bg-scout-input-bg/90 text-scout-text border border-scout-hairline-faint hover:bg-scout-lift transition disabled:opacity-30 ${
+              className={`flex items-center justify-center rounded-full text-scout-muted hover:bg-scout-lift hover:text-scout-text transition disabled:opacity-30 ${
                 welcomeMode ? "w-9 h-9" : "w-8 h-8"
               }`}
               aria-label="Attach files and more"
             >
               <Plus size={welcomeMode ? 18 : 16} />
+            </button>
+            <button
+              ref={approvalBtnRef}
+              type="button"
+              onClick={() => setShowApprovalMenu((open) => !open)}
+              disabled={approvalModeChanging || disabled}
+              className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1.5 text-[13px] font-medium transition-colors hover:bg-scout-lift disabled:opacity-45 ${
+                approvalMode === "full_access"
+                  ? "text-scout-warning"
+                  : "text-scout-muted hover:text-scout-text"
+              }`}
+              aria-label={`Approval mode: ${approvalLabel}`}
+              aria-expanded={showApprovalMenu}
+            >
+              <ApprovalIcon size={15} className="shrink-0" />
+              <span className="hidden truncate sm:inline">{approvalLabel}</span>
+              <ChevronDown size={13} className={`hidden shrink-0 transition-transform sm:block ${showApprovalMenu ? "rotate-180" : ""}`} />
             </button>
             <input
               ref={fileInputRef}
@@ -579,7 +638,7 @@ export function InputBar({
             <button
               ref={modelBtnRef}
               onClick={() => setShowModelMenu((p) => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-medium text-scout-text/70 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent hover:border-scout-hairline-faint transition-all"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-bold text-scout-text/80 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent transition-all"
             >
               <span className="truncate max-w-[160px]">{shortModel}</span>
               <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
@@ -591,22 +650,20 @@ export function InputBar({
                 className={`${sendBtnClass} bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]`}
                 aria-label="Stop execution"
               >
-                <Square size={welcomeMode ? 14 : 12} fill="currentColor" />
-                {welcomeMode && <span>Stop</span>}
+                <Square size={13} fill="currentColor" />
               </button>
             ) : (
               <button
                 onClick={() => void handleSubmit()}
-                disabled={disabled || pastingImages || (!hasText && imageAttachments.length === 0 && chatImages.length === 0) || visionBlocked}
+                disabled={disabled || pastingImages || (!hasText && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || visionBlocked}
                 className={`${sendBtnClass} ${
-                  (hasText || imageAttachments.length > 0 || chatImages.length > 0) && !disabled && !visionBlocked
+                  (hasText || fileAttachments.length > 0 || chatImages.length > 0 || annotations.length > 0) && !disabled && !visionBlocked
                     ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
                     : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
                 }`}
                 aria-label="Send message"
               >
-                <Send size={welcomeMode ? 16 : 14} />
-                {welcomeMode && <span>Send</span>}
+                <ArrowUp size={18} strokeWidth={2.3} />
               </button>
             )}
           </div>
@@ -625,6 +682,63 @@ export function InputBar({
           Scout can make mistakes. Check important work.
         </p>
       )}
+
+      <AnchoredPopover
+        open={showApprovalMenu}
+        onClose={() => setShowApprovalMenu(false)}
+        anchorRef={approvalBtnRef}
+        placement="top-start"
+        maxHeight={360}
+        className="w-[min(28rem,calc(100vw-1rem))] p-2"
+      >
+        <div className="px-2 pb-1.5 pt-1 text-xs font-medium text-scout-muted">
+          How should Scout actions be approved?
+        </div>
+        {([
+          {
+            mode: "ask_always" as const,
+            label: "Ask every time",
+            description: "Ask before workspace edits, network access, and elevated actions.",
+            icon: Hand,
+          },
+          {
+            mode: "allow_edits" as const,
+            label: "Allow edits",
+            description: "Edit workspace files automatically; still ask for network access.",
+            icon: ShieldCheck,
+          },
+          {
+            mode: "full_access" as const,
+            label: "Full access",
+            description: "Perform allowed edits and network actions without asking.",
+            icon: ShieldAlert,
+          },
+        ]).map((option) => {
+          const Icon = option.icon;
+          const active = option.mode === approvalMode;
+          return (
+            <button
+              key={option.mode}
+              type="button"
+              onClick={() => {
+                setShowApprovalMenu(false);
+                void Promise.resolve(onSelectApprovalMode(option.mode)).catch(() => {});
+              }}
+              className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${active ? "bg-scout-lift" : "hover:bg-scout-lift/70"}`}
+            >
+              <Icon size={18} className="mt-0.5 shrink-0 text-scout-muted" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-scout-text">{option.label}</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-scout-muted">{option.description}</span>
+              </span>
+              {active && <Check size={17} className="mt-0.5 shrink-0 text-scout-text" />}
+            </button>
+          );
+        })}
+        <p className="px-3 pb-1 pt-2 text-[11px] leading-relaxed text-scout-muted/80">
+          Protected files, account permissions, and hard safety rules always remain enforced.
+        </p>
+      </AnchoredPopover>
 
       <AnchoredPopover
         open={showSlash && filteredCommands.length > 0}
@@ -713,7 +827,7 @@ export function InputBar({
           const provider = slash > -1 ? m.slice(0, slash + 1) : "";
           const name = slash > -1 ? m.slice(slash + 1) : m;
           const vision = capabilities[m]?.vision ?? "unverified";
-          const incompatible = (imageAttachments.length > 0 || chatImages.length > 0 || requiresVision) && vision !== "supported";
+          const incompatible = (hasImageAttachment || chatImages.length > 0 || requiresVision) && vision !== "supported";
           return (
             <button
               key={m}

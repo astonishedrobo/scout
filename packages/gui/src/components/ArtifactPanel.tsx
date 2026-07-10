@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Artifact } from "scout-core";
 import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { PixelDazed } from "./PixelArt";
 
 const artifactScrollPositions = new Map<string, number>();
 
@@ -158,7 +159,7 @@ export function ArtifactPanel({
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <div className={`${compact ? "h-12 px-3" : "h-14 px-4"} flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas/85 backdrop-blur-xl`}>
+      <div className={`h-[52px] ${compact ? "px-3" : "px-4"} flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas`}>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <div className="truncate text-sm font-medium text-scout-text">{artifact.title}</div>
@@ -224,7 +225,12 @@ export function ArtifactPanel({
             External assets were blocked. HTML previews must be self-contained.
           </p>
         )}
-        {error && <p className="text-sm text-scout-error">{error}</p>}
+        {error && (
+          <div className="flex flex-col items-center gap-3 py-10 text-center">
+            <PixelDazed size={72} />
+            <p className="text-sm text-scout-error">{error}</p>
+          </div>
+        )}
         {!error && !url && <p className="text-sm text-scout-muted">Loading artifact...</p>}
         {artifact.renderer === "image" && url && (
           <div className="flex min-h-full items-start justify-center">

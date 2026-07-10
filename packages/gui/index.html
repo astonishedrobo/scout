@@ -1,12 +1,17 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en" class="soft">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Scout — AI Data Research Agent</title>
     <script>
-      const saved = localStorage.getItem("scout-theme");
-      if (saved === "light") document.documentElement.classList.replace("dark", "light");
+      // Avoid FOUC: apply saved theme before paint. Default for new users is soft gray.
+      (function () {
+        var saved = localStorage.getItem("scout-theme");
+        var theme = saved === "light" || saved === "soft" || saved === "dark" ? saved : "soft";
+        document.documentElement.classList.remove("dark", "soft", "light");
+        document.documentElement.classList.add(theme);
+      })();
     </script>
   </head>
   <body class="bg-scout-canvas text-scout-text font-sans antialiased">

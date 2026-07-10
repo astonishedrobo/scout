@@ -1,9 +1,10 @@
 import { useRef, useEffect } from "react";
 import { FileText, BarChart3, Compass, type LucideIcon } from "lucide-react";
-import type { FileChangeSet, Message, ToolStep } from "scout-core";
+import type { FileChangeSet, Message, ResponseAnnotation, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
+import { PixelSparkle } from "./ScoutMark";
 import type { Artifact } from "scout-core";
 
 interface ChatViewProps {
@@ -13,6 +14,7 @@ interface ChatViewProps {
   currentTool: string | undefined;
   statusMessage?: string;
   isLoading: boolean;
+  awaitingApproval?: boolean;
   onSuggestionClick?: (text: string) => void;
   onRetry?: (assistantIndex: number) => void;
   onFork?: (messageIndex: number) => void;
@@ -22,39 +24,52 @@ interface ChatViewProps {
   onOpenMemories?: () => void;
   baseUrl: string;
   token: string | null;
+  annotations?: ResponseAnnotation[];
+  onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
+  onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
+  onRemoveAnnotation?: (id: string) => void;
 }
 
+// Fixed vivid icon colors — theme tokens desaturate in the soft/dark themes
+// and wash these out to gray.
 const SUGGESTIONS: {
   title: string;
   description: string;
   prompt: string;
   icon: LucideIcon;
+  iconColor: string;
 }[] = [
   {
     title: "Summarize workspace",
     description: "Get an overview of the files in your project",
     prompt: "Summarize the files in my workspace",
     icon: FileText,
+    iconColor: "#f0a058",
   },
   {
     title: "Visualize data",
     description: "Create charts and plots from your datasets",
     prompt: "Create a chart from my data",
     icon: BarChart3,
+    iconColor: "#a78bfa",
   },
   {
     title: "Explore a dataset",
     description: "Investigate patterns, stats, and outliers",
     prompt: "Help me explore a dataset",
     icon: Compass,
+    iconColor: "#2cb8d8",
   },
 ];
 
 export function WelcomeContent() {
   return (
     <div className="w-full text-center">
-      <h1 className="font-display text-[clamp(1.85rem,3.2vw,2.35rem)] text-scout-text">
+      <h1 className="relative inline-block font-display text-[clamp(1.85rem,3.2vw,2.35rem)] text-scout-text">
+        <PixelSparkle size={12} className="absolute -left-6 -top-2 text-[#f5c542]" />
         What are we working on?
+        <PixelSparkle size={9} className="absolute -right-5 top-1 text-[#a78bfa]" />
+        <PixelSparkle size={7} className="absolute -right-9 -top-3 text-[#f0a058]" />
       </h1>
     </div>
   );
@@ -66,7 +81,7 @@ export function SuggestionChips({
   onSuggestionClick: (text: string) => void;
 }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-3">
+    <div className="grid gap-2 sm:grid-cols-3">
       {SUGGESTIONS.map((s) => {
         const Icon = s.icon;
         return (
@@ -74,13 +89,13 @@ export function SuggestionChips({
             key={s.prompt}
             onClick={() => onSuggestionClick(s.prompt)}
             title={s.description}
-            className="group flex items-start gap-2.5 rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:bg-scout-panel/70"
+            className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left hover:bg-scout-lift"
           >
-            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center text-scout-muted/80 group-hover:text-scout-text">
+            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center" style={{ color: s.iconColor }}>
               <Icon size={15} strokeWidth={1.8} />
             </span>
             <span className="min-w-0">
-              <span className="block text-[13px] font-semibold text-scout-text/90">{s.title}</span>
+              <span className="block text-[13.5px] font-semibold text-scout-text/90">{s.title}</span>
               <span className="mt-0.5 block text-[11px] leading-snug text-scout-muted/85">{s.description}</span>
             </span>
           </button>
@@ -97,6 +112,7 @@ export function ChatView({
   currentTool,
   statusMessage,
   isLoading,
+  awaitingApproval = false,
   onRetry,
   onFork,
   onOpenArtifact,
@@ -105,10 +121,15 @@ export function ChatView({
   onOpenMemories,
   baseUrl,
   token,
+  annotations = [],
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
+  const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -138,17 +159,24 @@ export function ChatView({
             msg.role === "user"
             || hasTimeline
             || !!msg.content
+            || !!msg.stopped
             || !!msg.artifacts?.length
             || !!msg.fileChanges?.length;
 
           return (
-            <div key={i}>
+            <div key={i} className="animate-enter">
               {/* Interleaved thinking / tools / mid-turn prose in event order. */}
               {hasTimeline && (
                 <ToolCard
                   steps={msg.steps!}
                   baseUrl={baseUrl}
                   token={token}
+                  annotationSourcePrefix={`assistant-${i}`}
+                  annotations={annotations}
+                  annotationNumbers={annotationNumbers}
+                  onAddAnnotation={onAddAnnotation}
+                  onUpdateAnnotation={onUpdateAnnotation}
+                  onRemoveAnnotation={onRemoveAnnotation}
                 />
               )}
               {showBubble && (
@@ -166,6 +194,12 @@ export function ChatView({
                   onOpenMemories={onOpenMemories}
                   baseUrl={baseUrl}
                   token={token}
+                  sourceId={msg.role === "assistant" ? `assistant-${i}-message` : undefined}
+                  annotations={msg.role === "assistant" ? annotations.filter((annotation) => annotation.sourceId === `assistant-${i}-message`) : []}
+                  annotationNumbers={annotationNumbers}
+                  onAddAnnotation={onAddAnnotation}
+                  onUpdateAnnotation={onUpdateAnnotation}
+                  onRemoveAnnotation={onRemoveAnnotation}
                 />
               )}
             </div>
@@ -180,6 +214,13 @@ export function ChatView({
                 defaultExpanded
                 baseUrl={baseUrl}
                 token={token}
+                awaitingApproval={awaitingApproval}
+                annotationSourcePrefix="streaming"
+                annotations={annotations}
+                annotationNumbers={annotationNumbers}
+                onAddAnnotation={onAddAnnotation}
+                onUpdateAnnotation={onUpdateAnnotation}
+                onRemoveAnnotation={onRemoveAnnotation}
               />
             )}
             {streamingText ? (
@@ -188,6 +229,12 @@ export function ChatView({
                   message={{ role: "assistant", content: streamingText }}
                   baseUrl={baseUrl}
                   token={token}
+                  sourceId="streaming-message"
+                  annotations={annotations.filter((annotation) => annotation.sourceId === "streaming-message")}
+                  annotationNumbers={annotationNumbers}
+                  onAddAnnotation={onAddAnnotation}
+                  onUpdateAnnotation={onUpdateAnnotation}
+                  onRemoveAnnotation={onRemoveAnnotation}
                 />
               </div>
             ) : null}

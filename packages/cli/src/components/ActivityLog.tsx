@@ -24,19 +24,19 @@ type TimelineSegment =
 function summarize(step: ToolStep): string {
   const { name, args } = step;
 
-  if (name === "run_code") {
+  if (name === "run_node" || name === "exec_command") {
     const desc = String(args?.description ?? "").trim();
     if (desc) return desc.substring(0, MAX_ARGS_WIDTH);
+    if (name === "exec_command") return String(args?.cmd ?? "").substring(0, MAX_ARGS_WIDTH);
     const code = String(args?.code ?? "").split("\n");
     let s = code[0]?.substring(0, MAX_ARGS_WIDTH) ?? "";
     if (code.length > 1 || (code[0]?.length ?? 0) > MAX_ARGS_WIDTH) s += "…";
     return s;
   }
-  if (name === "search_documents") return String(args?.query ?? "");
-  if (name === "read_pdf") {
-    let s = String(args?.path ?? "");
-    if (args?.query) s += ` → "${args.query}"`;
-    return s;
+  if (name === "search_documents") {
+    const q = String(args?.query ?? "");
+    const p = String(args?.path ?? "");
+    return p ? `${q} · ${p}` : q;
   }
   if (name === "read_file") return String(args?.path ?? "");
   if (name === "think") {

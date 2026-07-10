@@ -1,7 +1,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, Check } from "lucide-react";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, memo } from "react";
+import type { Components } from "react-markdown";
 import { useTheme } from "../hooks/useTheme";
 import { AuthenticatedImage } from "./AuthenticatedImage";
 
@@ -102,7 +103,7 @@ function resolveMarkdownImage(src: string, artifactPath: string) {
   return { artifact: `${directory}${src}`.replace(/\/+/g, "/") };
 }
 
-export function MarkdownRenderer({
+export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   baseUrl = "",
   token = null,
@@ -112,10 +113,12 @@ export function MarkdownRenderer({
 }: MarkdownRendererProps) {
   const { theme } = useTheme();
 
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
+  // The custom renderers MUST be referentially stable across re-renders:
+  // a fresh inline `img` function is a new component type to React, which
+  // unmounts and remounts every AuthenticatedImage (blob refetch → visible
+  // flicker each time anything above re-renders, e.g. the 10s session poll).
+  const components = useMemo<Components>(
+    () => ({
         // Fenced blocks are <pre><code>…</code></pre>; CodeBlock already renders its own
         // container, so unwrap the outer <pre> to avoid a duplicate empty box.
         pre({ children }) {
@@ -163,9 +166,13 @@ export function MarkdownRenderer({
             />
           );
         },
-      }}
-    >
+      }),
+    [baseUrl, token, artifactPath, contentEndpoint, scope, theme],
+  );
+
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
       {content}
     </ReactMarkdown>
   );
-}
+});
