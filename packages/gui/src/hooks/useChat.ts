@@ -205,7 +205,7 @@ export function useChat({
 
     if (statesRef.current[requestSessionId]?.isLoading) return false;
     update(requestSessionId, (state) => ({
-      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined, pendingUserInput: null,
+      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", pendingUserInput: null,
     }));
 
     const controller = new AbortController();
@@ -285,7 +285,7 @@ export function useChat({
               if (!accepted) {
                 accepted = true;
                 update(requestSessionId, (state) => ({
-                  ...state, messages: [...state.messages, { role: "user", content: text, attachments, chatImages, annotations }],
+                  ...state, statusMessage: "Starting agent…", messages: [...state.messages, { role: "user", content: text, attachments, chatImages, annotations }],
                 }));
                 try { onAccepted?.(); } catch { /* best effort */ }
                 try { await onUserAccepted?.(requestSessionId, text, attachments, chatImages, annotations); } catch { /* best effort */ }

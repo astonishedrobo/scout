@@ -80,6 +80,14 @@ def init_db():
         )
         conn.commit()
 
+    cursor.execute("PRAGMA table_info(users)")
+    cols = {row[1] for row in cursor.fetchall()}
+    if "admission_group" not in cols:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN admission_group TEXT NOT NULL DEFAULT 'standard'"
+        )
+        conn.commit()
+
     # Apply SCOUT_ADMIN_USERS: promote listed usernames, demote everyone else
     # (only when the env var is explicitly set)
     if _ADMIN_USERS_ENV:
@@ -132,6 +140,7 @@ def _user_row_to_dict(row: tuple, *, with_password: bool = False) -> dict:
         "username": row[1],
         "is_admin": bool(row[3]),
         "permission_profile": row[4] if len(row) > 4 else "contributor",
+        "admission_group": row[5] if len(row) > 5 else "standard",
     }
     if with_password:
         d["hashed_password"] = row[2]
@@ -142,7 +151,7 @@ def get_user_by_username(username: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, hashed_password, is_admin, permission_profile FROM users WHERE username = ?",
+        "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users WHERE username = ?",
         (username,),
     )
     row = cursor.fetchone()
@@ -156,7 +165,7 @@ def get_user_by_id(user_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, hashed_password, is_admin, permission_profile FROM users WHERE id = ?",
+        "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users WHERE id = ?",
         (user_id,),
     )
     row = cursor.fetchone()
@@ -186,6 +195,15 @@ def get_user_permission_profile(user_id: int | str) -> str:
 def is_user_admin(user_id: int | str) -> bool:
     """DB-backed admin check from permission_profile (admin) or legacy is_admin."""
     return get_user_permission_profile(user_id) == "admin"
+
+
+def get_user_admission_group(user_id: int | str) -> str:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT admission_group FROM users WHERE id = ?", (int(user_id),)
+    ).fetchone()
+    conn.close()
+    return str(row[0]) if row and row[0] else "standard"
 
 
 def get_user_memory_preferences(user_id: int | str) -> dict[str, bool] | None:
@@ -250,8 +268,8 @@ def create_user(username: str, password: str):
         )
         profile = "admin" if is_admin else "contributor"
         cursor.execute(
-            "INSERT INTO users (username, hashed_password, is_admin, permission_profile) VALUES (?, ?, ?, ?)",
-            (username, get_password_hash(password), 1 if is_admin else 0, profile),
+            "INSERT INTO users (username, hashed_password, is_admin, permission_profile, admission_group) VALUES (?, ?, ?, ?, ?)",
+            (username, get_password_hash(password), 1 if is_admin else 0, profile, "standard"),
         )
         conn.commit()
         user_id = cursor.lastrowid
@@ -266,7 +284,7 @@ def list_users() -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, hashed_password, is_admin, permission_profile FROM users ORDER BY id"
+        "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users ORDER BY id"
     )
     rows = cursor.fetchall()
     conn.close()
@@ -288,6 +306,17 @@ def set_user_permission_profile(user_id: int, profile: str) -> bool:
     cursor.execute(
         "UPDATE users SET permission_profile = ?, is_admin = ? WHERE id = ?",
         (profile, 1 if profile == "admin" else 0, user_id),
+    )
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+def set_user_admission_group(user_id: int, group: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.execute(
+        "UPDATE users SET admission_group = ? WHERE id = ?", (group, user_id)
     )
     conn.commit()
     affected = cursor.rowcount

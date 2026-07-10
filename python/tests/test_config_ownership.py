@@ -36,11 +36,28 @@ def test_deployment_config_accepts_model_capabilities(tmp_path: Path):
 
 
 def test_per_user_session_limit_cannot_exceed_global_limit():
-    config = AppConfig(server={"max_live_sessions": 24, "max_live_sessions_per_user": 8})
+    config = AppConfig(server={"max_live_sessions": 64, "max_live_sessions_per_user": 8})
+    assert config.server.max_live_sessions == 64
     assert config.server.max_live_sessions_per_user == 8
 
     with pytest.raises(ValueError, match="max_live_sessions_per_user"):
         AppConfig(server={"max_live_sessions": 4, "max_live_sessions_per_user": 5})
+
+
+def test_default_admission_groups_limit_standard_users_to_four():
+    server = AppConfig().server
+    assert server.max_concurrent_requests == 8
+    assert server.priority_groups["standard"].max_concurrent_requests_per_user == 4
+    assert server.priority_groups["priority"].max_concurrent_requests_per_user == 6
+    assert server.priority_groups["critical"].max_concurrent_requests_per_user == 8
+
+    with pytest.raises(ValueError, match="cannot exceed max_concurrent_requests"):
+        AppConfig(server={
+            "max_concurrent_requests": 4,
+            "priority_groups": {
+                "standard": {"priority": 0, "max_concurrent_requests_per_user": 5}
+            },
+        })
 
 
 def test_model_client_kwargs_use_provider_env(monkeypatch):

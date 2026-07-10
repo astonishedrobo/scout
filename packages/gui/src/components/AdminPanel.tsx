@@ -14,6 +14,12 @@ interface UserEntry {
   username: string;
   is_admin: boolean;
   permission_profile: string;
+  admission_group: string;
+}
+
+interface PriorityGroup {
+  priority: number;
+  max_concurrent_requests_per_user: number;
 }
 
 interface AdminPanelProps {
@@ -46,8 +52,10 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
   const [configInfo, setConfigInfo] = useState<any>(null);
   const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
   const [users, setUsers] = useState<UserEntry[]>([]);
+  const [priorityGroups, setPriorityGroups] = useState<Record<string, PriorityGroup>>({});
   const [execHealth, setExecHealth] = useState<ExecutionHealth | null>(null);
   const [execMetrics, setExecMetrics] = useState<Record<string, number>>({});
+  const [admissionMetrics, setAdmissionMetrics] = useState<Record<string, number>>({});
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingExec, setLoadingExec] = useState(false);
@@ -81,6 +89,7 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
       if (!r.ok) throw new Error(await r.text());
       const d = await r.json();
       setUsers(d.users ?? []);
+      setPriorityGroups(d.priority_groups ?? {});
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -97,6 +106,7 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
       const d = await r.json();
       setExecHealth(d.execution ?? null);
       setExecMetrics(d.metrics ?? {});
+      setAdmissionMetrics(d.admission ?? {});
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -196,6 +206,24 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
     }
   };
 
+  const handleAdmissionGroupChange = async (u: UserEntry, admissionGroup: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`${baseUrl}/admin/users/${u.id}/admission-group`, {
+        method: "PATCH",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ admission_group: admissionGroup }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(async () => ({ detail: await r.text() }));
+        throw new Error(d.detail ?? "Failed");
+      }
+      await loadUsers();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   return (
     <>
     <RightDrawer open={open} onClose={onClose} title="Admin" width={480}>
@@ -273,6 +301,9 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
 
           {tab === "users" && (
             <div className="space-y-2">
+              <p className="text-xs text-scout-muted leading-relaxed">
+                Access controls permissions. Capacity groups control queue preference and the maximum simultaneous agent turns per user.
+              </p>
               <button
                 onClick={loadUsers}
                 disabled={loadingUsers}
@@ -286,18 +317,39 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
               ) : (
                 <div className="space-y-1">
                   {users.map((u) => (
-                    <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-scout-lift">
-                      <span className="flex-1 text-sm text-scout-text font-medium">{u.username}</span>
-                      <span className="text-[11px] font-medium text-scout-muted">#{u.id}</span>
-                      <select
-                        value={u.permission_profile ?? (u.is_admin ? "admin" : "contributor")}
-                        onChange={(e) => handleProfileChange(u, e.target.value)}
-                        className="text-xs font-medium bg-scout-input-bg border border-scout-hairline-faint rounded-lg px-2 py-1.5 text-scout-text outline-none focus:border-scout-text/30"
-                      >
-                        <option value="analyst">Analyst</option>
-                        <option value="contributor">Contributor</option>
-                        <option value="admin">Admin</option>
-                      </select>
+                    <div key={u.id} className="px-3 py-2.5 rounded-xl hover:bg-scout-lift space-y-2">
+                      <div className="flex items-center gap-3">
+                        <span className="flex-1 text-sm text-scout-text font-medium">{u.username}</span>
+                        <span className="text-[11px] font-medium text-scout-muted">#{u.id}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase tracking-wide text-scout-muted">Access</span>
+                          <select
+                            value={u.permission_profile ?? (u.is_admin ? "admin" : "contributor")}
+                            onChange={(e) => handleProfileChange(u, e.target.value)}
+                            className="w-full text-xs font-medium bg-scout-input-bg border border-scout-hairline-faint rounded-lg px-2 py-1.5 text-scout-text outline-none focus:border-scout-text/30"
+                          >
+                            <option value="analyst">Analyst</option>
+                            <option value="contributor">Contributor</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-[10px] uppercase tracking-wide text-scout-muted">Capacity</span>
+                          <select
+                            value={u.admission_group || "standard"}
+                            onChange={(e) => handleAdmissionGroupChange(u, e.target.value)}
+                            className="w-full text-xs font-medium bg-scout-input-bg border border-scout-hairline-faint rounded-lg px-2 py-1.5 text-scout-text outline-none focus:border-scout-text/30"
+                          >
+                            {Object.entries(priorityGroups).map(([name, group]) => (
+                              <option key={name} value={name}>
+                                {name} · {group.max_concurrent_requests_per_user} turns
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -345,6 +397,31 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
                     <div className="bg-scout-canvas rounded-xl p-3 border border-scout-hairline-faint">
                       <span className="text-[11px] font-medium uppercase tracking-wide text-scout-muted">Worker</span>
                       <p className="font-mono">{execHealth.worker_reachable ? "reachable" : "down"}</p>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-semibold text-scout-muted uppercase tracking-wider">Agent turn capacity</span>
+                    <div className="grid grid-cols-2 gap-2 mt-1.5 text-xs">
+                      <div className="bg-scout-canvas rounded-xl p-3 border border-scout-hairline-faint">
+                        <span className="text-[11px] text-scout-muted">Active</span>
+                        <p className="font-mono text-scout-text">
+                          {admissionMetrics.active_requests ?? 0} / {admissionMetrics.max_concurrent_requests ?? 0}
+                        </p>
+                      </div>
+                      <div className="bg-scout-canvas rounded-xl p-3 border border-scout-hairline-faint">
+                        <span className="text-[11px] text-scout-muted">Queued</span>
+                        <p className="font-mono text-scout-text">{admissionMetrics.queued_requests ?? 0}</p>
+                      </div>
+                      <div className="bg-scout-canvas rounded-xl p-3 border border-scout-hairline-faint">
+                        <span className="text-[11px] text-scout-muted">Average wait</span>
+                        <p className="font-mono text-scout-text">{admissionMetrics.average_queue_wait_seconds ?? 0}s</p>
+                      </div>
+                      <div className="bg-scout-canvas rounded-xl p-3 border border-scout-hairline-faint">
+                        <span className="text-[11px] text-scout-muted">Rejected / timed out</span>
+                        <p className="font-mono text-scout-text">
+                          {admissionMetrics.rejected_requests_total ?? 0} / {admissionMetrics.timed_out_requests_total ?? 0}
+                        </p>
+                      </div>
                     </div>
                   </div>
                   {execHealth.error && (

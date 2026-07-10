@@ -219,8 +219,18 @@ retriever:
   build_concurrency: 1
 
 server:
-  max_live_sessions: 24
+  max_live_sessions: 64
   max_live_sessions_per_user: 8
+  max_concurrent_requests: 8
+  max_queued_requests: 256
+  max_queued_requests_per_user: 16
+  request_queue_timeout_seconds: 60
+  priority_aging_seconds: 15
+  default_priority_group: standard
+  priority_groups:
+    standard: {priority: 0, max_concurrent_requests_per_user: 4}
+    priority: {priority: 1, max_concurrent_requests_per_user: 6}
+    critical: {priority: 2, max_concurrent_requests_per_user: 8}
   session_idle_ttl_seconds: 1800
   session_eviction_grace_seconds: 5
   agent_init_concurrency: 2
@@ -228,7 +238,11 @@ server:
   maintenance_interval_seconds: 60
 ```
 
-`max_resident_users` is a hard LRU cap for in-memory indexes. `build_concurrency` prevents simultaneous index builds from causing memory spikes. `max_live_sessions` is the process-wide protection limit, while `max_live_sessions_per_user` prevents one account from monopolising it. `session_eviction_grace_seconds` prevents a just-used non-streaming session from being closed underneath its request. Requests receive `503` with `Retry-After` only when all relevant slots are busy or protected and no idle session can be evicted. Current counts, pending initializations, and the configured limits are reported under `resources` in `/health`.
+`max_resident_users` is a hard LRU cap for in-memory indexes. `build_concurrency` prevents simultaneous index builds from causing memory spikes. `max_live_sessions` bounds resident conversation agents, while `max_live_sessions_per_user` prevents one account from monopolising that cache.
+
+Agent turns are independently controlled by a work-conserving admission queue. At most `max_concurrent_requests` turns run at once. Standard users can run four simultaneous turns; admins can assign another capacity group from the Users panel. Higher `priority` values receive bounded queue preference, and `priority_aging_seconds` steadily raises older requests so lower-priority groups cannot starve. Capacity is never reserved: any eligible user can consume an idle global slot. A full waiting room or a request that waits longer than `request_queue_timeout_seconds` receives `503` with `Retry-After` and a user-facing capacity message.
+
+`session_eviction_grace_seconds` prevents a just-used non-streaming session from being closed underneath its request. Live sessions, initializing sessions, active turns, queued turns, queue age, and configured limits are reported under `resources` in `/health`. Admission accounting is process-local; multi-process or multi-replica deployments require a shared scheduler before increasing the replica count.
 
 ## Apply configuration changes
 

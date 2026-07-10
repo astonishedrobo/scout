@@ -69,3 +69,13 @@ def test_user_memory_preferences_upsert(tmp_path: Path, monkeypatch):
         "use_memories": True,
         "generate_memories": True,
     }
+
+
+def test_admin_can_assign_admission_group(tmp_path: Path, monkeypatch):
+    auth = _use_temp_auth_db(tmp_path, monkeypatch)
+    user = auth.create_user("queued-user", "password")
+    assert user
+    assert auth.get_user_admission_group(user["id"]) == "standard"
+    assert auth.set_user_admission_group(user["id"], "priority") is True
+    assert auth.get_user_admission_group(user["id"]) == "priority"
+    assert auth.list_users()[0]["admission_group"] == "priority"

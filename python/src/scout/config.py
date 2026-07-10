@@ -45,11 +45,29 @@ class RetrieverConfig(BaseModel):
     max_chunks: int = Field(20_000, ge=1_000, le=100_000)
 
 
+class AgentPriorityGroupConfig(BaseModel):
+    """Admission preference and concurrency ceiling for a user group."""
+
+    priority: int = Field(0, ge=0, le=100)
+    max_concurrent_requests_per_user: int = Field(4, ge=1, le=128)
+
+
 class ServerRuntimeConfig(BaseModel):
     """Limits for expensive in-process multi-user resources."""
 
-    max_live_sessions: int = Field(24, ge=1, le=512)
+    max_live_sessions: int = Field(64, ge=1, le=512)
     max_live_sessions_per_user: int = Field(8, ge=1, le=128)
+    max_concurrent_requests: int = Field(8, ge=1, le=128)
+    max_queued_requests: int = Field(256, ge=0, le=10_000)
+    max_queued_requests_per_user: int = Field(16, ge=0, le=1_000)
+    request_queue_timeout_seconds: int = Field(60, ge=1, le=600)
+    priority_aging_seconds: int = Field(15, ge=1, le=300)
+    default_priority_group: str = "standard"
+    priority_groups: dict[str, AgentPriorityGroupConfig] = Field(default_factory=lambda: {
+        "standard": AgentPriorityGroupConfig(priority=0, max_concurrent_requests_per_user=4),
+        "priority": AgentPriorityGroupConfig(priority=1, max_concurrent_requests_per_user=6),
+        "critical": AgentPriorityGroupConfig(priority=2, max_concurrent_requests_per_user=8),
+    })
     session_idle_ttl_seconds: int = Field(1800, ge=60)
     session_eviction_grace_seconds: int = Field(5, ge=1, le=300)
     agent_init_concurrency: int = Field(2, ge=1, le=16)
@@ -60,6 +78,13 @@ class ServerRuntimeConfig(BaseModel):
     def _validate_session_limits(self) -> "ServerRuntimeConfig":
         if self.max_live_sessions_per_user > self.max_live_sessions:
             raise ValueError("max_live_sessions_per_user cannot exceed max_live_sessions")
+        if self.default_priority_group not in self.priority_groups:
+            raise ValueError("default_priority_group must exist in priority_groups")
+        if any(
+            group.max_concurrent_requests_per_user > self.max_concurrent_requests
+            for group in self.priority_groups.values()
+        ):
+            raise ValueError("priority group concurrency cannot exceed max_concurrent_requests")
         return self
 
 

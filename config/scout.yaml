@@ -22,8 +22,24 @@ retriever:
   build_concurrency: 1
 
 server:
-  max_live_sessions: 24
+  max_live_sessions: 64
   max_live_sessions_per_user: 8
+  max_concurrent_requests: 8
+  max_queued_requests: 256
+  max_queued_requests_per_user: 16
+  request_queue_timeout_seconds: 60
+  priority_aging_seconds: 15
+  default_priority_group: standard
+  priority_groups:
+    standard:
+      priority: 0
+      max_concurrent_requests_per_user: 4
+    priority:
+      priority: 1
+      max_concurrent_requests_per_user: 6
+    critical:
+      priority: 2
+      max_concurrent_requests_per_user: 8
   session_idle_ttl_seconds: 1800
   session_eviction_grace_seconds: 5
   agent_init_concurrency: 2

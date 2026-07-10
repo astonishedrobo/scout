@@ -62,15 +62,23 @@ from .auth import (
     create_user,
     get_current_user,
     get_current_user_optional,
+    get_user_admission_group,
     get_user_memory_preferences,
     get_user_by_username,
     get_user_permission_profile,
     is_user_admin,
     list_users,
     set_user_admin,
+    set_user_admission_group,
     set_user_memory_preferences,
     set_user_permission_profile,
     verify_password,
+)
+from .admission import (
+    AdmissionPolicy,
+    AdmissionRejected,
+    AdmissionTimedOut,
+    AgentTurnScheduler,
 )
 from ..hooks import run_hook
 from ..memories import (
@@ -459,6 +467,7 @@ def create_app(
         "maintenance_tasks": [],
         "session_init_locks": {},
         "session_init_reservations": set(),
+        "pending_turns": set(),
         "session_registry_lock": threading.RLock(),
         "retriever_lock": threading.RLock(),
     }
@@ -478,6 +487,29 @@ def create_app(
     _state["agent_init_semaphore"] = asyncio.Semaphore(
         initial_config.server.agent_init_concurrency
     )
+    runtime = initial_config.server
+    _state["turn_scheduler"] = AgentTurnScheduler(
+        max_concurrent=runtime.max_concurrent_requests,
+        max_queued=runtime.max_queued_requests,
+        max_queued_per_user=runtime.max_queued_requests_per_user,
+        queue_timeout_seconds=runtime.request_queue_timeout_seconds,
+        priority_aging_seconds=runtime.priority_aging_seconds,
+    )
+
+    def _admission_policy(user_id: str | int) -> AdmissionPolicy:
+        runtime_config = _state["base_config"].server
+        group_name = (
+            get_user_admission_group(user_id)
+            if _state["multi_user"] and str(user_id) != "default"
+            else runtime_config.default_priority_group
+        )
+        group = runtime_config.priority_groups.get(group_name)
+        if group is None:
+            group = runtime_config.priority_groups[runtime_config.default_priority_group]
+        return AdmissionPolicy(
+            priority=group.priority,
+            max_concurrent=group.max_concurrent_requests_per_user,
+        )
 
     def _base_config_copy() -> AppConfig:
         return _state["base_config"].model_copy(deep=True)
@@ -1401,13 +1433,72 @@ def create_app(
             enabled=cfg.hooks.enabled,
         )
 
+        retry_after = _state["base_config"].server.request_queue_timeout_seconds
+        turn_key = (str(uid), req.session_id)
+        with _state["session_registry_lock"]:
+            if turn_key in _state["pending_turns"] or s.abort_event is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "SESSION_BUSY",
+                        "message": "This conversation already has a response in progress.",
+                    },
+                )
+            _state["pending_turns"].add(turn_key)
+        try:
+            turn_lease = await _state["turn_scheduler"].acquire(
+                str(uid), _admission_policy(uid)
+            )
+        except AdmissionRejected as exc:
+            with _state["session_registry_lock"]:
+                _state["pending_turns"].discard(turn_key)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "SERVER_CAPACITY",
+                    "message": "The server is at maximum capacity right now. Please try again later.",
+                },
+                headers={"Retry-After": str(retry_after)},
+            ) from exc
+        except AdmissionTimedOut as exc:
+            with _state["session_registry_lock"]:
+                _state["pending_turns"].discard(turn_key)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "SERVER_BUSY",
+                    "message": "The server is still at maximum capacity. Please try again in a minute.",
+                },
+                headers={"Retry-After": str(retry_after)},
+            ) from exc
+        except BaseException:
+            with _state["session_registry_lock"]:
+                _state["pending_turns"].discard(turn_key)
+            raise
+
+        # A second request for this conversation may have started while this
+        # request waited in the admission queue.
+        with _state["session_registry_lock"]:
+            _state["pending_turns"].discard(turn_key)
+            session_became_busy = s.abort_event is not None
+            if not session_became_busy:
+                s.abort_event = asyncio.Event()
+        if session_became_busy:
+            await turn_lease.release()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SESSION_BUSY",
+                    "message": "This conversation already has a response in progress.",
+                },
+            )
+
         s.approval_queue = asyncio.Queue()
         s.declined_this_turn = False
-        s.abort_event = asyncio.Event()
 
         cwd = _session_cwd(uid)
         session_path = _session_file(cwd, req.session_id, uid)
-        async def _generate():
+        async def _generate_admitted():
             event_count = 0
 
             stream_task: asyncio.Task | None = None
@@ -1554,10 +1645,19 @@ def create_app(
                         await stream_task
                     except (asyncio.CancelledError, Exception):
                         pass
+                logger.info("SSE stream finished (%d events emitted)", event_count)
+
+        async def _generate():
+            # The outer boundary is active before the first SSE yield, so a
+            # client disconnect at any point cannot leak an admission slot.
+            try:
+                async for event in _generate_admitted():
+                    yield event
+            finally:
                 s.approval_queue = None
                 s.abort_event = None
                 s.touch()
-                logger.info("SSE stream finished (%d events emitted)", event_count)
+                await turn_lease.release()
 
         return EventSourceResponse(_generate())
 
@@ -1696,6 +1796,7 @@ def create_app(
                         proxy.estimated_resident_bytes for proxy in resident
                     ),
                 }
+                body["resources"].update(await _state["turn_scheduler"].snapshot())
                 if _state.get("init_error"):
                     body["status"] = "error"
                     body["error"] = _state["init_error"]
@@ -1762,7 +1863,11 @@ def create_app(
                     "warnings": h.warnings,
                     "error": h.error,
                 }
-        return {"execution": health_info, "metrics": metrics}
+        return {
+            "execution": health_info,
+            "metrics": metrics,
+            "admission": await _state["turn_scheduler"].snapshot(),
+        }
 
     @app.get("/admin/config/effective")
     async def admin_effective_config(admin: User = Depends(require_admin)) -> dict:
@@ -1787,6 +1892,14 @@ def create_app(
         _state["base_config"] = candidate
         _state["config_version"] = config_hash(candidate)
         _state["config_reloaded_at"] = time.time()
+        runtime = candidate.server
+        await _state["turn_scheduler"].reconfigure(
+            max_concurrent=runtime.max_concurrent_requests,
+            max_queued=runtime.max_queued_requests,
+            max_queued_per_user=runtime.max_queued_requests_per_user,
+            queue_timeout_seconds=runtime.request_queue_timeout_seconds,
+            priority_aging_seconds=runtime.priority_aging_seconds,
+        )
         return {
             "status": "ok",
             "version": _state["config_version"],
@@ -2626,7 +2739,13 @@ def create_app(
 
     @app.get("/admin/users")
     async def admin_list_users(user: User = Depends(require_admin)) -> dict:
-        return {"users": list_users()}
+        groups = _state["base_config"].server.priority_groups
+        return {
+            "users": list_users(),
+            "priority_groups": {
+                name: group.model_dump() for name, group in groups.items()
+            },
+        }
 
     @app.patch("/admin/users/{uid}/role")
     async def admin_set_role(uid: int, body: dict, user: User = Depends(require_admin)) -> dict:
@@ -2651,6 +2770,17 @@ def create_app(
         if not set_user_permission_profile(uid, profile):
             raise HTTPException(status_code=404, detail="User not found")
         return {"status": "ok"}
+
+    @app.patch("/admin/users/{uid}/admission-group")
+    async def admin_set_admission_group(
+        uid: int, body: dict, user: User = Depends(require_admin)
+    ) -> dict:
+        group = str(body.get("admission_group", ""))
+        if group not in _state["base_config"].server.priority_groups:
+            raise HTTPException(status_code=400, detail="Invalid admission_group")
+        if not set_user_admission_group(uid, group):
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"status": "ok", "admission_group": group}
 
     # ── User memories ───────────────────────────────────────────────
 
