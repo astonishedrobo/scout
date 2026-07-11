@@ -3,6 +3,8 @@ import type { Artifact } from "scout-core";
 import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PixelDazed } from "./PixelArt";
+import { PixelPet } from "./PixelPet";
+import { PanelExpandButton } from "./ui/PanelExpandButton";
 
 const artifactScrollPositions = new Map<string, number>();
 
@@ -15,6 +17,8 @@ export function ArtifactPanel({
   compact = false,
   scope = null,
   contentEndpoint = "/artifacts/content",
+  expanded = false,
+  onToggleExpand,
 }: {
   artifact: Artifact;
   baseUrl: string;
@@ -26,6 +30,8 @@ export function ArtifactPanel({
   scope?: string | null;
   /** Content API used by chat artifacts or the workspace browser. */
   contentEndpoint?: string;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
   const artifactKey = `${scope ?? "workspace"}:${artifact.path}`;
   const [content, setContent] = useState("");
@@ -200,6 +206,7 @@ export function ArtifactPanel({
         >
           <RefreshCw size={17} className={isRefreshing ? "animate-spin" : ""} />
         </button>
+        {onToggleExpand && <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />}
         <button
           onClick={onClose}
           className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
@@ -231,7 +238,12 @@ export function ArtifactPanel({
             <p className="text-sm text-scout-error">{error}</p>
           </div>
         )}
-        {!error && !url && <p className="text-sm text-scout-muted">Loading artifact...</p>}
+        {!error && !url && (
+          <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-4">
+            <PixelPet working inline size={44} />
+            <p className="text-sm font-semibold text-scout-text">Loading artifact…</p>
+          </div>
+        )}
         {artifact.renderer === "image" && url && (
           <div className="flex min-h-full items-start justify-center">
             <img src={url} alt={artifact.title} className="max-w-full rounded-2xl border border-scout-hairline-faint shadow-pop" />

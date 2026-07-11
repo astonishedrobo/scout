@@ -224,8 +224,12 @@ export function useChat({
     } catch { /* surfaced by request if session is unavailable */ }
 
     if (statesRef.current[requestSessionId]?.isLoading) return false;
+    // Show the user message immediately (optimistic) — waiting for the server's
+    // `accepted` event leaves a visible gap where the message exists nowhere.
+    const optimisticUser: Message = { role: "user", content: text, attachments, chatImages, annotations };
     update(requestSessionId, (state) => ({
       ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", pendingUserInput: null,
+      messages: [...state.messages, optimisticUser],
     }));
 
     const controller = new AbortController();
@@ -246,6 +250,8 @@ export function useChat({
       if (!finalContent && !sealed.length && !artifacts.length && !fileChanges.length) return;
       committed = true;
       const content = finalContent || (opts.stopped ? "" : "(no text response)");
+      // Clear the streaming copy in the SAME update that commits the final
+      // message — separate updates flash both copies on screen at once.
       update(requestSessionId, (state) => ({
         ...state,
         messages: [...state.messages, {
@@ -256,6 +262,11 @@ export function useChat({
           fileChanges: [...fileChanges],
           ...(opts.stopped ? { stopped: true } : {}),
         }],
+        isLoading: false,
+        streamingSteps: [],
+        streamingText: "",
+        currentTool: undefined,
+        statusMessage: undefined,
         pendingApproval: opts.stopped ? null : state.pendingApproval,
       }));
       try {
@@ -305,7 +316,7 @@ export function useChat({
               if (!accepted) {
                 accepted = true;
                 update(requestSessionId, (state) => ({
-                  ...state, statusMessage: "Starting agent…", messages: [...state.messages, { role: "user", content: text, attachments, chatImages, annotations }],
+                  ...state, statusMessage: "Starting agent…",
                 }));
                 try { onAccepted?.(); } catch { /* best effort */ }
                 try { await onUserAccepted?.(requestSessionId, text, attachments, chatImages, annotations); } catch { /* best effort */ }
@@ -358,6 +369,7 @@ export function useChat({
                 streamingSteps: [],
                 streamingText: "",
                 statusMessage: undefined,
+                isLoading: false,
               }));
               if (pausedSteps.length > 0) {
                 try { await onAssistantMessage?.(requestSessionId, "", pausedSteps, [], []); } catch { /* best effort */ }
@@ -423,7 +435,13 @@ export function useChat({
         if (!steps.length && live?.streamingSteps?.length) steps = [...live.streamingSteps];
         await commitAssistant({ stopped: true });
       } else {
-        update(requestSessionId, (state) => ({ ...state, error: err instanceof Error ? err.message : String(err) }));
+        update(requestSessionId, (state) => ({
+          ...state,
+          error: err instanceof Error ? err.message : String(err),
+          // Server never accepted the message — drop the optimistic copy so the
+          // input bar can restore the draft without duplicating it in the chat.
+          messages: accepted ? state.messages : state.messages.filter((message) => message !== optimisticUser),
+        }));
       }
     } finally {
       abortRefs.current.delete(requestSessionId);

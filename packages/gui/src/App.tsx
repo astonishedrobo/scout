@@ -8,6 +8,7 @@ import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
 import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
+import { BootScreen } from "./components/BootScreen";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView, WelcomeContent, SuggestionChips } from "./components/ChatView";
 import { InputBar } from "./components/InputBar";
@@ -56,6 +57,8 @@ export function App() {
   const sessionRef = useRef<string | null>(null);
   sessionRef.current = currentSessionId;
   const initialSyncRef = useRef(false);
+  // True until the initial route (deep-linked session or home) is resolved.
+  const [routeBooting, setRouteBooting] = useState(true);
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
@@ -209,6 +212,12 @@ export function App() {
 
   const rightPanelOpen = !!activeArtifact || !!activeFileChanges || filesExplorerOpen;
 
+  const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
+  const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
+  useEffect(() => {
+    if (!rightPanelOpen) setRightPanelExpanded(false);
+  }, [rightPanelOpen]);
+
   useEffect(() => {
     if (!activeArtifact) return;
     const latest = [...messages]
@@ -329,12 +338,12 @@ export function App() {
   );
 
   useEffect(() => {
-    const handleHashChange = () => {
+    const handleHashChange = (): Promise<void> | void => {
       const hash = window.location.hash;
       const match = hash.match(/^#\/c\/(.+)$/);
       if (match) {
         const sid = match[1];
-        if (sid !== sessionRef.current) handleResumeSession(sid);
+        if (sid !== sessionRef.current) return handleResumeSession(sid);
       } else if (hash === "" || hash === "#/") {
         if (sessionRef.current) handleNewChat();
       }
@@ -342,8 +351,10 @@ export function App() {
 
     window.addEventListener("hashchange", handleHashChange);
     if (isReady && isMultiUser !== undefined && !initialSyncRef.current) {
-      handleHashChange();
       initialSyncRef.current = true;
+      // Keep the boot screen up until the deep-linked session (if any) has
+      // loaded — otherwise the home screen flashes before the chat appears.
+      void Promise.resolve(handleHashChange()).finally(() => setRouteBooting(false));
     }
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, [isReady, isMultiUser, handleResumeSession, handleNewChat]);
@@ -463,6 +474,13 @@ export function App() {
       ? rawTitle
       : "New chat";
 
+  // Blank boot screen while we don't yet know what to render — server still
+  // connecting or auth state unknown. Prevents the chat shell flashing before
+  // the login screen (or before a restored session).
+  if (!isReady && !serverError) {
+    return <BootScreen />;
+  }
+
   if (isReady && isMultiUser && !token && !serverError) {
     return (
       <div className="flex h-screen flex-col">
@@ -470,6 +488,12 @@ export function App() {
         <Login onLogin={login} onRegister={register} error={authError || null} />
       </div>
     );
+  }
+
+  // Logged in (or single-user), but the initial route hasn't resolved yet —
+  // keep the boot screen up instead of flashing the home screen.
+  if (routeBooting && !serverError) {
+    return <BootScreen />;
   }
 
   return (
@@ -507,6 +531,7 @@ export function App() {
           </>
         }
         artifactOpen={rightPanelOpen}
+        artifactExpanded={rightPanelExpanded}
         artifactDefaultSize={filesExplorerOpen ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
         artifactMinSize={filesExplorerOpen ? 42 : 20}
         artifactMaxSize={70}
@@ -546,6 +571,8 @@ export function App() {
               token={token}
               onClose={closeRightPanel}
               refreshSignal={`${messages.length}:${isLoading ? "running" : "idle"}`}
+              expanded={rightPanelExpanded}
+              onToggleExpand={toggleRightPanelExpanded}
             />
           ) : activeArtifact ? (
             <ArtifactPanel
@@ -554,29 +581,20 @@ export function App() {
               token={token}
               onClose={closeRightPanel}
               embedded
+              expanded={rightPanelExpanded}
+              onToggleExpand={toggleRightPanelExpanded}
             />
           ) : activeFileChanges ? (
             <FileChangePanel
               changeSet={activeFileChanges}
               onClose={closeRightPanel}
+              expanded={rightPanelExpanded}
+              onToggleExpand={toggleRightPanelExpanded}
             />
           ) : undefined
         }
       >
         <div className="flex flex-col flex-1 min-h-0">
-          {!isReady && !serverError && (
-            <div className="flex items-center justify-center flex-1">
-              <div className="text-center">
-                <div className="flex space-x-1.5 justify-center mb-3">
-                  <div className="w-2 h-2 rounded-full bg-scout-text thinking-dot" />
-                  <div className="w-2 h-2 rounded-full bg-scout-text thinking-dot" />
-                  <div className="w-2 h-2 rounded-full bg-scout-text thinking-dot" />
-                </div>
-                <p className="text-scout-muted">Connecting to server...</p>
-              </div>
-            </div>
-          )}
-
           {isWelcome && (
             <div className="relative flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
               <WelcomeScene />

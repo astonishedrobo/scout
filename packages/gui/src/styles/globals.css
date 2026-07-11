@@ -526,6 +526,57 @@
   animation: fade-in-up 200ms ease-out both;
 }
 
+/* Side panel entrance — final frame must be `transform: none` (see above). */
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-panel-in {
+  animation: panel-in 240ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+
+/* Overlay drawer entrance — slides in from the right edge. */
+@keyframes drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.animate-drawer-in {
+  animation: drawer-in 260ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-backdrop-in {
+  animation: backdrop-in 200ms ease-out both;
+}
+
+/* Resizable panels are sized via flex-grow on the OUTER [data-panel] element
+   (Panel className only reaches an inner div), so the open/close width glide
+   is scoped through the Group. Applied only during the toggle so drags stay
+   instant. */
+.panels-gliding > [data-panel] {
+  transition: flex-grow 300ms cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
 /* Card hover lift — transform+shadow only, GPU-composited, cheap. */
 .lift-hover {
   transition:
@@ -539,8 +590,14 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-enter {
+  .animate-enter,
+  .animate-panel-in,
+  .animate-drawer-in,
+  .animate-backdrop-in {
     animation: none;
+  }
+  .panels-gliding > [data-panel] {
+    transition: none;
   }
   .lift-hover,
   .lift-hover:hover {

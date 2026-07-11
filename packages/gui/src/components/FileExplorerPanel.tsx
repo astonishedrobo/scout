@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, ArtifactRenderer } from "scout-core";
+import { PanelExpandButton } from "./ui/PanelExpandButton";
 import {
   ChevronRight,
   File,
@@ -45,6 +46,8 @@ type FileExplorerPanelProps = {
   onClose: () => void;
   /** Changes when an agent turn completes so generated files appear promptly. */
   refreshSignal?: string;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 };
 
 function nodeKey(node: FileTreeNode, scope: string): string {
@@ -255,6 +258,8 @@ export function FileExplorerPanel({
   token,
   onClose,
   refreshSignal,
+  expanded: panelExpanded = false,
+  onToggleExpand,
 }: FileExplorerPanelProps) {
   const [roots, setRoots] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -453,7 +458,7 @@ export function FileExplorerPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
-      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-transparent bg-scout-panel/30 px-3">
+      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-scout-hairline-faint bg-scout-canvas px-3">
         <FolderTree size={16} className="shrink-0 text-scout-muted" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold tracking-[-0.01em] text-scout-text">Files</div>
@@ -484,6 +489,7 @@ export function FileExplorerPanel({
         >
           <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
         </button>
+        {onToggleExpand && <PanelExpandButton expanded={panelExpanded} onToggle={onToggleExpand} />}
         <button
           type="button"
           onClick={onClose}

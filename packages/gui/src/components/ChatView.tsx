@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { FileText, BarChart3, Compass, type LucideIcon } from "lucide-react";
 import type { FileChangeSet, Message, ResponseAnnotation, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
@@ -75,14 +75,39 @@ export function WelcomeContent() {
   );
 }
 
+// Below this width a chip's title/description wrap awkwardly — instead of
+// squeezing, chips drop out one by one as the container narrows (and come
+// back when space returns), Codex-style.
+const MIN_CHIP_WIDTH = 190;
+const CHIP_GAP = 8;
+
 export function SuggestionChips({
   onSuggestionClick,
 }: {
   onSuggestionClick: (text: string) => void;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(SUGGESTIONS.length);
+
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      const fits = Math.floor((width + CHIP_GAP) / (MIN_CHIP_WIDTH + CHIP_GAP));
+      setVisibleCount(Math.max(1, Math.min(SUGGESTIONS.length, fits)));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className="grid gap-2 sm:grid-cols-3">
-      {SUGGESTIONS.map((s) => {
+    <div
+      ref={rowRef}
+      className="grid gap-2"
+      style={{ gridTemplateColumns: `repeat(${visibleCount}, minmax(0, 1fr))` }}
+    >
+      {SUGGESTIONS.slice(0, visibleCount).map((s) => {
         const Icon = s.icon;
         return (
           <button

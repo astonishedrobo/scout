@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, GitCompareArrows, X } from "lucide-react";
 import type { FileChangeEntry, FileChangeSet } from "scout-core";
 import { DiffViewer } from "./DiffViewer";
+import { PanelExpandButton } from "./ui/PanelExpandButton";
 
 function reverseUnifiedDiff(diff: string) {
   return diff
@@ -43,9 +44,13 @@ function diffStats(diff: string) {
 export function FileChangePanel({
   changeSet,
   onClose,
+  expanded = false,
+  onToggleExpand,
 }: {
   changeSet: FileChangeSet;
   onClose: () => void;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
 }) {
   const undone = !!changeSet.undone;
   const [activePath, setActivePath] = useState(changeSet.entries[0]?.path ?? "");
@@ -85,6 +90,7 @@ export function FileChangePanel({
             <span className="font-medium text-scout-error">−{stats.deletions}</span>
           </div>
         </div>
+        {onToggleExpand && <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />}
         <button
           type="button"
           onClick={onClose}

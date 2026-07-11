@@ -42,7 +42,7 @@ export function RightDrawer({
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[50] flex justify-end bg-black/50" role="presentation">
+    <div className="fixed inset-0 z-[50] flex justify-end bg-black/50 animate-backdrop-in" role="presentation">
       <div
         className="absolute inset-0"
         onClick={onClose}
@@ -55,7 +55,7 @@ export function RightDrawer({
         aria-modal="true"
         aria-label={title}
         style={{ width: Math.min(width, window.innerWidth) }}
-        className="relative h-full bg-scout-panel border-l border-scout-hairline shadow-pop flex flex-col outline-none"
+        className="relative h-full bg-scout-panel border-l border-scout-hairline shadow-pop flex flex-col outline-none animate-drawer-in"
       >
         <div className="flex items-center justify-between h-11 px-4 border-b border-scout-hairline shrink-0">
           {title ? (

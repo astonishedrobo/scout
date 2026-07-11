@@ -326,32 +326,36 @@ export function InputBar({
       }
     }
 
-    let cleared = false;
-    const clearAcceptedDraft = () => {
-      cleared = true;
-      setValue("");
-      setFileAttachments([]);
-      setChatImages([]);
-      if (textareaRef.current) textareaRef.current.style.height = "auto";
-    };
+    // Clear the draft immediately — the chat shows the message optimistically,
+    // so text lingering in the composer would read as a duplicate. Restore the
+    // draft if the server rejects the send.
+    const draftValue = value;
+    const draftAttachments = fileAttachments;
+    const draftImages = chatImages;
+    setValue("");
+    setFileAttachments([]);
+    setChatImages([]);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
     // Collect @paths from the draft so non-image uploads (CSV, PDF, …) become
     // real attachments, not only bare text tokens.
     const atPaths = [...trimmed.matchAll(/@((?:\.{0,2}\/)?[^\s,;'"]+)/g)]
       .map((m) => m[1]!)
       .filter(Boolean);
     const attachmentSet = new Set<string>([
-      ...fileAttachments.map((attachment) => attachment.abs_path),
+      ...draftAttachments.map((attachment) => attachment.abs_path),
       ...atPaths,
     ]);
     const accepted = await onSubmit(
       annotations.length ? formatAnnotatedFollowUp(annotations, trimmed) : trimmed,
       [...attachmentSet],
-      chatImages,
-      clearAcceptedDraft,
+      draftImages,
+      undefined,
       annotations,
     );
-    if (accepted && !cleared) {
-      clearAcceptedDraft();
+    if (!accepted) {
+      setValue(draftValue);
+      setFileAttachments(draftAttachments);
+      setChatImages(draftImages);
     }
   }, [
     value,
