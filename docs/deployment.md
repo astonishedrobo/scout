@@ -11,6 +11,31 @@ Docker runs Scout and its code-execution service in separate containers. This pr
 - Permission to access the Docker socket
 - An API key for a model provider, or a model service reachable from Docker
 
+## Guided setup (recommended)
+
+From the repository root, build and run the deployment wizard:
+
+```bash
+npm run deploy
+```
+
+This opens a full-screen terminal wizard: enable one or more providers
+(OpenAI, Groq, Anthropic, local vLLM), set each provider's model and API key,
+pick the default model, choose the port, admin users, and storage locations,
+then apply. It preloads the current `.env` on re-runs, saves every answer to
+`.scout/deployment/draft.json`, and asks for `sudo` only to give the
+bind-mounted workspace directories to the container user (UID 1000).
+See [deploy-cli.md](deploy-cli.md) for a full walkthrough and key reference.
+If it stops, continue exactly where it left off:
+
+```bash
+npm run deploy
+```
+
+After deployment, use `npm run deploy:status`, `npm run deploy:logs`,
+`npm run deploy:restart`, or `npm run deploy:rebuild-clean`. The remainder of this page
+describes the equivalent manual workflow.
+
 ## Files you will edit
 
 | File | Purpose |
@@ -29,10 +54,10 @@ Create the deployment environment file:
 cp .env.example .env
 ```
 
-`.env` is a text file read by Docker Compose. At minimum, open it and set:
+`.env` is a text file read by Docker Compose. Before exposing Scout beyond a trusted
+network, set unique values for:
 
 ```dotenv
-OPENAI_API_KEY=<provider-key>
 SCOUT_SECRET_KEY=<long-random-value>
 SCOUT_WORKER_SECRET=<different-long-random-value>
 ```
@@ -43,7 +68,8 @@ Generate secure values with:
 openssl rand -hex 32
 ```
 
-`OPENAI_API_KEY` lets Scout use OpenAI models. Replace it with another provider's key when appropriate.
+Set `OPENAI_API_KEY` (or another provider key) only when you also want that
+provider's models in the picker.
 
 `SCOUT_SECRET_KEY` protects signed-in user sessions. `SCOUT_WORKER_SECRET` protects communication between Scout and the separate code-execution service. Use different random values and do not share them.
 
@@ -73,7 +99,9 @@ llm:
         - openai/gpt-5-mini
 ```
 
-Read [Configuration](configuration.md) before changing provider labels, model IDs, or image support. Read [Local LLM setup](local-llm.md) to use Ollama or vLLM.
+The default configuration is cloud-provider neutral. The deployment wizard adds
+vLLM only when selected. Read [Configuration](configuration.md) before changing
+provider labels, model IDs, or image support.
 
 ## 3. Launch
 
@@ -156,4 +184,5 @@ remove it during normal upgrades.
 
 ## Local LLMs
 
-To add Ollama or vLLM to the deployment, follow [Local LLM setup](local-llm.md).
+Use the deployment wizard to add GPU vLLM, or follow [Local LLM setup](local-llm.md)
+to configure a local model manually.

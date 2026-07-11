@@ -61,9 +61,10 @@ services:
       - --port
       - "7891"
     volumes:
-      - ./workspace/users:/srv/scout-source/users
-      - ./workspace/shared:/srv/scout-source/shared:ro
+      - ${SCOUT_WORKSPACE_ROOT:-./workspace}/users:/srv/scout-source/users
+      - ${SCOUT_WORKSPACE_ROOT:-./workspace}/shared:/srv/scout-source/shared:ro
     environment:
+      # Works out of the box; override this for any internet-facing deployment.
       - SCOUT_WORKER_SECRET=${SCOUT_WORKER_SECRET:-scout-worker-dev-secret}
       # Worker's own view of the workspace (used for change-detection + policy).
       - SCOUT_WORKSPACE_USERS=/srv/scout-source/users
@@ -77,8 +78,8 @@ services:
       # Host-side bind sources for sandbox containers (Docker resolves mount
       # sources on the HOST, not inside this container). Override SCOUT_HOST_ROOT
       # with the absolute host path to this repo if ${PWD} is not your repo root.
-      - SCOUT_WORKSPACE_USERS_HOST=${SCOUT_HOST_ROOT:-${PWD}}/workspace/users
-      - SCOUT_WORKSPACE_SHARED_HOST=${SCOUT_HOST_ROOT:-${PWD}}/workspace/shared
+      - SCOUT_WORKSPACE_USERS_HOST=${SCOUT_WORKSPACE_ROOT:-${SCOUT_HOST_ROOT:-${PWD}}/workspace}/users
+      - SCOUT_WORKSPACE_SHARED_HOST=${SCOUT_WORKSPACE_ROOT:-${SCOUT_HOST_ROOT:-${PWD}}/workspace}/shared
     mem_limit: 2g
     cpus: 2
     pids_limit: 256
@@ -99,13 +100,15 @@ services:
     container_name: scout-server
     restart: unless-stopped
     depends_on:
-      - execution-worker
-      - egress-proxy
+      execution-worker:
+        condition: service_started
+      egress-proxy:
+        condition: service_started
     ports:
-      - "4200:4200"
+      - "${SCOUT_PORT:-4200}:4200"
     volumes:
-      - scout-data:/home/scout/.config/scout
-      - ./workspace:/app/workspace
+      - ${SCOUT_DATA_DIR:-scout-data}:/home/scout/.config/scout
+      - ${SCOUT_WORKSPACE_ROOT:-./workspace}:/app/workspace
       - ./skills:/app/workspace/.scout/skills:ro
       - ./config/scout.yaml:/etc/scout/scout.yaml:ro
     command:
@@ -129,6 +132,14 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # These are populated only by the local-vLLM deployment wizard override.
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - VLLM_API_BASE=${VLLM_API_BASE:-http://vllm:8000/v1}
+      - VLLM_MODELS=${VLLM_MODELS:-}
+      - GROQ_MODELS=${GROQ_MODELS:-}
+      - OPENAI_MODELS=${OPENAI_MODELS:-}
+      - ANTHROPIC_MODELS=${ANTHROPIC_MODELS:-}
+      - SCOUT_DEFAULT_MODEL=${SCOUT_DEFAULT_MODEL:-}
       - GROQ_API_KEY_FILE=${GROQ_API_KEY_FILE:-/run/secrets/groq_api_key}
       - OPENAI_API_KEY_FILE=${OPENAI_API_KEY_FILE:-/run/secrets/openai_api_key}
       - ANTHROPIC_API_KEY_FILE=${ANTHROPIC_API_KEY_FILE:-/run/secrets/anthropic_api_key}

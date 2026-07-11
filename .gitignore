@@ -40,4 +40,5 @@ examples/
 
 # Scout local
 .scout/env/
+.scout/deployment/
 cli/.scout/

@@ -9,6 +9,7 @@
 import React, { useState, useMemo } from "react";
 import { Box, Text, useInput } from "ink";
 import { theme } from "scout-core";
+import { PickerHints } from "./PickerList.js";
 import {
   getAvailableEditors,
   getPreferredEditorId,
@@ -84,28 +85,30 @@ export const EditorPickerDialog: React.FC<EditorPickerDialogProps> = ({
   return (
     <Box
       borderStyle="round"
-      borderColor={theme.border.default}
+      borderColor={theme.brand.frame}
       flexDirection="row"
-      paddingX={1}
+      paddingX={2}
       paddingY={1}
+      marginLeft={2}
+      marginBottom={1}
     >
       {/* Left panel: editor list */}
       <Box flexDirection="column" width="50%">
-        <Text bold>{">"} Select Editor</Text>
+        <Text color={theme.text.primary} bold>
+          Select an editor
+        </Text>
         <Box flexDirection="column" marginTop={1}>
           {items.map((item, i) => {
             const isActive = i === activeIdx;
-            const color: string = item.disabled
-              ? theme.text.secondary
-              : isActive
-                ? theme.text.primary
-                : theme.text.secondary;
             return (
               <Box key={item.id}>
-                <Text color={isActive && !item.disabled ? theme.status.success : theme.text.secondary}>
-                  {isActive ? "● " : "  "}
+                <Text color={isActive && !item.disabled ? theme.text.accent : theme.brand.frame}>
+                  {isActive ? "▸ " : "  "}
                 </Text>
-                <Text color={color} bold={isActive && !item.disabled} dimColor={item.disabled}>
+                <Text
+                  color={item.disabled ? theme.brand.frame : isActive ? theme.text.primary : theme.text.secondary}
+                  bold={isActive && !item.disabled}
+                >
                   {item.label}
                 </Text>
               </Box>
@@ -113,9 +116,13 @@ export const EditorPickerDialog: React.FC<EditorPickerDialogProps> = ({
           })}
         </Box>
         <Box marginTop={1}>
-          <Text color={theme.text.secondary}>
-            (Use Enter to select, Esc to close)
-          </Text>
+          <PickerHints
+            hints={[
+              ["↑/↓", "select"],
+              ["↵", "confirm"],
+              ["esc", "close"],
+            ]}
+          />
         </Box>
       </Box>
 

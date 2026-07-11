@@ -113,7 +113,8 @@ Scout can launch and manage vLLM as part of the same Compose application. The
 user does not need to create a separate vLLM instance. This example serves
 `Qwen/Qwen3-0.6B`.
 
-Add the service to `docker-compose.yml`:
+`scout deploy` adds this service to the deployment's `docker-compose.yml` when
+vLLM is selected. Use the following only when configuring vLLM manually:
 
 ```yaml
 services:
@@ -133,6 +134,8 @@ services:
       - --enable-auto-tool-choice
       - --tool-call-parser
       - hermes
+      - --reasoning-parser
+      - qwen3
     networks:
       - default
 

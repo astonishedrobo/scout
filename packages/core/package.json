@@ -14,6 +14,10 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
     },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "import": "./dist/theme.js"
+    },
     "./setup": {
       "types": "./dist/setup.d.ts",
       "import": "./dist/setup.js"

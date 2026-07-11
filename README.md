@@ -19,18 +19,22 @@ This opens Scout in your browser. Before starting, set an API key such as `OPENA
 ### Docker multi-user
 
 ```bash
-cp .env.example .env
-# Edit .env before continuing.
-docker compose up --build -d
+npm run deploy
 ```
 
-Open `http://localhost:4200`. Follow [Docker multi-user deployment](docs/deployment.md) before exposing Scout to other people.
+The deployment wizard checks Docker and the GPU, saves an interrupted setup as a
+draft, repairs mounted-workspace ownership with a scoped `sudo` command, and
+launches Scout. Use `npm run deploy:status`, `npm run deploy:logs`,
+`npm run deploy:restart`, or `npm run deploy:rebuild-clean` for later
+operations. Manual setup remains documented in
+[Docker multi-user deployment](docs/deployment.md).
 
 Docker Compose is the only supported multi-user deployment path.
 
 ## Documentation
 
 - [Local single-user setup](docs/local-setup.md): install, configure, and launch Scout for yourself
+- [Deploy CLI](docs/deploy-cli.md): the `npm run deploy` terminal wizard, step by step
 - [Docker multi-user deployment](docs/deployment.md): deploy Scout for multiple users
 - [Configuration](docs/configuration.md): understand configuration files, model IDs, and image support
 - [Local LLM setup](docs/local-llm.md): connect Scout to Ollama or vLLM

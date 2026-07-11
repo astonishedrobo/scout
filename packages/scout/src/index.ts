@@ -14,8 +14,25 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { runDeploymentWizard, type DeployAction } from "./deploy.js";
 
 const program = new Command();
+
+program
+  .command("deploy")
+  .description("Guided, resumable Docker multi-user deployment")
+  .option("--resume", "Resume the saved deployment draft")
+  .option("--status", "Show deployment status")
+  .option("--logs", "Show recent deployment logs")
+  .option("--restart", "Restart deployed services")
+  .option("--rebuild", "Rebuild and recreate deployed services")
+  .option("--no-cache", "Use with --rebuild to rebuild Docker images without cache")
+  .action(async (opts: { resume?: boolean; status?: boolean; logs?: boolean; restart?: boolean; rebuild?: boolean; noCache?: boolean }) => {
+    const requested = [opts.status, opts.logs, opts.restart, opts.rebuild].filter(Boolean).length;
+    if (requested > 1) throw new Error("Choose only one deployment action at a time.");
+    const action: DeployAction = opts.status ? "status" : opts.logs ? "logs" : opts.restart ? "restart" : opts.rebuild ? "rebuild" : "setup";
+    await runDeploymentWizard(process.cwd(), action, opts.resume, opts.noCache);
+  });
 
 program
   .name("scout")

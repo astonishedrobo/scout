@@ -51,6 +51,17 @@ export const theme = {
     active: "#87AFFF",
   },
 
+  /* ── Brand accents ─────────────────────────────────────── */
+  brand: {
+    /** Vivid per-provider accents for pickers and the deploy wizard. */
+    openai: "#5FD7A7",
+    groq: "#FFAF5F",
+    anthropic: "#FF875F",
+    vllm: "#87AFFF",
+    /** Muted chrome for frames and inactive borders. */
+    frame: "#4E4E4E",
+  },
+
   /* ── Tool steps ────────────────────────────────────────── */
   tool: {
     /** Tool name in activity log. */
