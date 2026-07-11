@@ -118,17 +118,23 @@ function loadDraft(root: string): DeploymentDraft | undefined {
 
 function check(command: string, args: string[]): boolean { return spawnSync(command, args, { stdio: "ignore" }).status === 0; }
 
+function composeCommand(): [string, string[]] | null {
+  if (check("docker", ["compose", "version"])) return ["docker", ["compose"]];
+  if (check("docker-compose", ["version"])) return ["docker-compose", []];
+  return null;
+}
+
 function hasNvidiaRuntime(): boolean {
   const result = spawnSync("docker", ["info", "--format", "{{json .Runtimes.nvidia}}"], { encoding: "utf8" });
   return result.status === 0 && result.stdout.trim() !== "" && result.stdout.trim() !== "null";
 }
 
 function preflight(): { docker: boolean; compose: boolean; gpu: boolean; nvidiaRuntime: boolean } {
-  return { docker: check("docker", ["version"]), compose: check("docker", ["compose", "version"]), gpu: check("nvidia-smi", ["-L"]), nvidiaRuntime: hasNvidiaRuntime() };
+  return { docker: check("docker", ["version"]), compose: composeCommand() !== null, gpu: check("nvidia-smi", ["-L"]), nvidiaRuntime: hasNvidiaRuntime() };
 }
 
 function requireDocker(root: string): void {
-  if (!check("docker", ["version"]) || !check("docker", ["compose", "version"])) throw new Error("Docker Engine and Docker Compose are required. Install them, then run scout deploy --resume.");
+  if (!check("docker", ["version"]) || !composeCommand()) throw new Error("Docker Engine and Docker Compose (v2 `docker compose` or v1 `docker-compose`) are required. Install one, then run scout deploy --resume.");
   if (!existsSync(join(root, "docker-compose.yml"))) throw new Error(`No docker-compose.yml found in ${root}. Run this from the Scout repository root.`);
 }
 
@@ -266,7 +272,10 @@ function prepareWorkspace(root: string, draft: DeploymentDraft): void {
 }
 
 function compose(root: string, args: string[]): void {
-  if (spawnSync("docker", ["compose", ...args], { cwd: root, stdio: "inherit" }).status !== 0) throw new Error(`docker compose ${args.join(" ")} failed.`);
+  const command = composeCommand();
+  if (!command) throw new Error("Docker Compose is unavailable.");
+  const [binary, prefix] = command;
+  if (spawnSync(binary, [...prefix, ...args], { cwd: root, stdio: "inherit" }).status !== 0) throw new Error(`${binary} ${args.join(" ")} failed.`);
 }
 
 export function runDeploymentAction(root: string, action: DeployAction, noCache = false): void {

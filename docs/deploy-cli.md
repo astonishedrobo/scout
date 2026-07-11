@@ -9,8 +9,8 @@ Scout's multi-user Docker deployment. It reads whatever is already configured
 ## Prerequisites
 
 - Node.js ≥ 22.12 and npm
-- Docker Engine + Docker Compose (the wizard checks both and refuses to
-  continue without them)
+- Docker Engine + Docker Compose v2 (`docker compose`) or v1
+  (`docker-compose`); the wizard detects either form
 - One of: an OpenAI / Groq / Anthropic API key, or an NVIDIA GPU with the
   NVIDIA Container Toolkit for local vLLM
 
