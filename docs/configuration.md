@@ -211,10 +211,11 @@ Omit `model` to use each conversation's selected model. The configured title mod
 
 ## Multi-user resource limits
 
-Docker deployments keep BM25 indexes and live agent sessions bounded. Idle indexes are evicted from memory and rebuilt from workspace files on the next search. Idle agent sessions are closed and transparently rehydrated from the saved conversation when the user returns.
+Docker deployments default to a persistent SQLite FTS5 lexical index, keeping the full inverted index on disk instead of resident Python memory. Unchanged indexes are reused across sessions and restarts. CSV tables are queried directly rather than duplicated into FTS. BM25 remains available as a deployment fallback. The backend is not exposed as an agent tool parameter.
 
 ```yaml
 retriever:
+  backend: sqlite_fts5  # sqlite_fts5 (default) or bm25
   max_index_bytes: 25000000
   max_chunks: 20000
   max_resident_users: 4
@@ -241,7 +242,7 @@ server:
   maintenance_interval_seconds: 60
 ```
 
-`max_resident_users` is a hard LRU cap for in-memory indexes. `build_concurrency` prevents simultaneous index builds from causing memory spikes. `max_live_sessions` bounds resident conversation agents, while `max_live_sessions_per_user` prevents one account from monopolising that cache.
+`max_index_bytes` and `max_chunks` apply to the legacy in-memory BM25 backend. `max_resident_users` bounds resident retriever objects, while persistent FTS5 data lives under each user's internal `.scout-cache`. `build_concurrency` prevents simultaneous PDF parsing/index construction from causing spikes. `max_live_sessions` bounds resident conversation agents, while `max_live_sessions_per_user` prevents one account from monopolising that cache.
 
 Agent turns are independently controlled by a work-conserving admission queue. At most `max_concurrent_requests` turns run at once. Standard users can run four simultaneous turns; admins can assign another capacity group from the Users panel. Higher `priority` values receive bounded queue preference, and `priority_aging_seconds` steadily raises older requests so lower-priority groups cannot starve. Capacity is never reserved: any eligible user can consume an idle global slot. A full waiting room or a request that waits longer than `request_queue_timeout_seconds` receives `503` with `Retry-After` and a user-facing capacity message.
 

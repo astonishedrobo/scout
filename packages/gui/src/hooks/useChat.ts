@@ -36,6 +36,26 @@ const emptyState = (): ChatState => ({
   isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
 });
 
+/** Normalize sandbox / relative paths so the same file maps to one card. */
+function artifactPathKey(path: string | undefined | null): string {
+  let raw = (path || "").trim().replace(/\\/g, "/");
+  if (!raw) return "";
+  while (raw.startsWith("./")) raw = raw.slice(2);
+  if (raw.startsWith("/workspace/")) raw = raw.slice("/workspace/".length);
+  else if (raw.startsWith("workspace/shared/")) raw = `shared/${raw.slice("workspace/shared/".length)}`;
+  else if (raw.startsWith("workspace/")) raw = raw.slice("workspace/".length);
+  if (raw.startsWith("/shared/")) raw = `shared/${raw.slice("/shared/".length)}`;
+  else if (raw === "/shared") raw = "shared";
+  return raw.replace(/^\/+/, "");
+}
+
+function sameArtifact(a: Artifact, b: Artifact): boolean {
+  if (a.id && b.id && a.id === b.id) return true;
+  const ka = artifactPathKey(a.path);
+  const kb = artifactPathKey(b.path);
+  return Boolean(ka && kb && ka === kb);
+}
+
 interface UseChatOptions {
   baseUrl: string;
   sessionId: string;
@@ -360,7 +380,9 @@ export function useChat({
             }
             if (event.artifacts?.length) {
               for (const artifact of event.artifacts) {
-                if (!artifacts.some((existing) => existing.id === artifact.id)) artifacts.push(artifact);
+                if (!artifacts.some((existing) => sameArtifact(existing, artifact))) {
+                  artifacts.push(artifact);
+                }
               }
             }
             if (event.file_changes?.length) {

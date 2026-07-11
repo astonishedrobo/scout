@@ -288,7 +288,7 @@ class BM25Retriever:
         supported_exts = {".txt", ".md", ".json", ".csv", ".pdf"}
         skip_dirs = {
             ".git", ".scout", ".scout-cache", "__pycache__", ".venv", "venv",
-            "node_modules", ".mypy_cache", ".pytest_cache",
+            "node_modules", ".mypy_cache", ".pytest_cache", ".local", ".mplconfig",
         }
         stack = [root]
         while stack:
@@ -614,7 +614,7 @@ class RetrieverProxy:
     ) -> None:
         self._workspace_roots = workspace_roots
         self._config = config
-        self._inner: BM25Retriever | None = None
+        self._inner: BM25Retriever | object | None = None
         self._lock = threading.RLock()
         self._build_semaphore = build_semaphore
         self._before_rebuild = before_rebuild
@@ -696,13 +696,24 @@ class RetrieverProxy:
         # does not temporarily double the user's resident memory.
         self._inner = None
         if self._build_semaphore is None:
-            inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+            inner = _make_retriever(self._config, self._workspace_roots)
         else:
             with self._build_semaphore:
-                inner = BM25Retriever(self._config, workspace_roots=self._workspace_roots)
+                inner = _make_retriever(self._config, self._workspace_roots)
         self._inner = inner
         self.dirty = False
         self._last_access = time.monotonic()
+
+
+def _make_retriever(config: AppConfig, workspace_roots: list[Path]):
+    """Select the server-side retrieval backend; this is not agent-controlled."""
+    if config.retriever.backend == "sqlite_fts5":
+        from .fts_retriever import SQLiteFTSRetriever
+        try:
+            return SQLiteFTSRetriever(config, workspace_roots=workspace_roots)
+        except Exception:
+            logger.exception("SQLite FTS5 unavailable; falling back to in-memory BM25")
+    return BM25Retriever(config, workspace_roots=workspace_roots)
 
 
 def evict_retriever_proxies(

@@ -18,6 +18,8 @@ function humanToolName(name: string) {
       return "Checking files";
     case "search_workspace":
       return "Searching workspace";
+    case "filter_table":
+      return "Filtering table";
     case "exec_command":
       return "Running command";
     case "run_node":

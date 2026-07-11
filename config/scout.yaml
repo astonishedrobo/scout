@@ -13,6 +13,7 @@ memories:
   stage1_concurrency: 4
 
 retriever:
+  backend: sqlite_fts5
   top_k: 5
   chunk_size: 1000
   chunk_overlap: 200

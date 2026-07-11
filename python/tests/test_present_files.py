@@ -10,6 +10,8 @@ from scout.artifacts import describe_artifact
 
 
 def test_describe_artifact_for_presentable_markdown(tmp_path: Path):
+    from scout.artifacts import artifact_path_key, dedupe_artifacts
+
     target = tmp_path / "notes.md"
     target.write_text("# Hello\n\nWorld.\n", encoding="utf-8")
     art = describe_artifact(target, tmp_path)
@@ -17,6 +19,29 @@ def test_describe_artifact_for_presentable_markdown(tmp_path: Path):
     assert art["path"] == "notes.md"
     assert art["renderer"] == "markdown"
     assert art["name"] == "notes.md"
+
+
+def test_dedupe_artifacts_by_path_aliases():
+    from scout.artifacts import dedupe_artifacts
+
+    arts = [
+        {"id": "a1", "path": "plot.png", "name": "plot.png"},
+        {"id": "a2", "path": "/workspace/plot.png", "name": "plot.png"},
+        {"id": "b1", "path": "report.md", "name": "report.md"},
+    ]
+    unique = dedupe_artifacts(arts)
+    assert len(unique) == 2
+    assert unique[0]["path"] == "plot.png"
+    assert unique[1]["path"] == "report.md"
+
+
+def test_describe_artifact_stable_id_for_same_file(tmp_path: Path):
+    target = tmp_path / "chart.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    a = describe_artifact(target, tmp_path)
+    b = describe_artifact(target, tmp_path)
+    assert a is not None and b is not None
+    assert a["id"] == b["id"]
 
 
 def test_describe_artifact_skips_unknown_extension(tmp_path: Path):

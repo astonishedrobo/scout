@@ -25,6 +25,30 @@ function artifactKind(artifact: Artifact) {
   return artifact.renderer.toUpperCase();
 }
 
+function artifactPathKey(path: string | undefined | null): string {
+  let raw = (path || "").trim().replace(/\\/g, "/");
+  if (!raw) return "";
+  while (raw.startsWith("./")) raw = raw.slice(2);
+  if (raw.startsWith("/workspace/")) raw = raw.slice("/workspace/".length);
+  else if (raw.startsWith("workspace/shared/")) raw = `shared/${raw.slice("workspace/shared/".length)}`;
+  else if (raw.startsWith("workspace/")) raw = raw.slice("workspace/".length);
+  if (raw.startsWith("/shared/")) raw = `shared/${raw.slice("/shared/".length)}`;
+  else if (raw === "/shared") raw = "shared";
+  return raw.replace(/^\/+/, "");
+}
+
+function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
+  const seen = new Set<string>();
+  const out: Artifact[] = [];
+  for (const artifact of artifacts) {
+    const keys = [artifact.id, artifactPathKey(artifact.path)].filter(Boolean) as string[];
+    if (keys.some((key) => seen.has(key))) continue;
+    for (const key of keys) seen.add(key);
+    out.push(artifact);
+  }
+  return out;
+}
+
 export function ArtifactCards({
   artifacts,
   onOpen,
@@ -38,7 +62,9 @@ export function ArtifactCards({
   baseUrl?: string;
   token?: string | null;
 }) {
-  const previewableArtifacts = artifacts.filter((artifact) => !hiddenSegment(artifact.path || ""));
+  const previewableArtifacts = uniqueArtifacts(
+    artifacts.filter((artifact) => !hiddenSegment(artifact.path || "")),
+  );
   const hasMemoryUpdate = artifacts.some((artifact) => hiddenSegment(artifact.path || "") && isMemoryArtifact(artifact));
   if (!previewableArtifacts.length && !hasMemoryUpdate) return null;
 

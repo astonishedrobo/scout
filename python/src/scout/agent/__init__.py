@@ -14,6 +14,7 @@ from ..retriever import BM25Retriever, RetrieverProxy
 from ..permissions import ProfileConfig, profile_from_user, resolve_profile
 from ..memories import ensure_memory_layout, load_memory_registry
 from .memory_prompt import build_memory_instructions
+from ..memories_citations import strip_citation_block
 from ..path_display import redact_paths
 from ..skills import load_layered_instructions, load_skills, resolve_focus_path
 from .exceptions import ProviderRateLimitError
@@ -89,6 +90,8 @@ def _tool_arg_summary(name: str, args: dict) -> str:
         q = args.get("query", "?")
         p = args.get("path") or ""
         return f"query: {q} in `{p}`" if p else f"query: {q}"
+    if name == "filter_table":
+        return f"filter `{args.get('path', '?')}` for {args.get('query', '?')}"
     if name in {"run_shell", "exec_command", "write_stdin", "run_node"}:
         desc = args.get("description", "")
         if desc:
@@ -412,7 +415,9 @@ class ScoutAgent:
         self._messages = result["messages"]
         for msg in reversed(self._messages):
             if isinstance(msg, AIMessage) and not msg.tool_calls:
-                return redact_paths(msg.content or "", self._cwd, self._shared_dir)
+                content = redact_paths(msg.content or "", self._cwd, self._shared_dir)
+                self._record_memory_citations(content)
+                return strip_citation_block(content)
         return ""
 
     async def stream(self, user_message: str, attachments: list[str] | None = None) -> AsyncIterator[dict[str, Any]]:
@@ -486,12 +491,15 @@ class ScoutAgent:
                             # in the interleaved timeline, not as a collapsed
                             # "activity group" title.
                             if visible_text:
-                                safe_text = redact_paths(visible_text, self._cwd, self._shared_dir)
-                                events.append({
-                                    "type": "assistant_text",
-                                    "content": safe_text,
-                                    "tool_call_id": msg.tool_calls[0]["id"],
-                                })
+                                safe_text = strip_citation_block(
+                                    redact_paths(visible_text, self._cwd, self._shared_dir)
+                                )
+                                if safe_text:
+                                    events.append({
+                                        "type": "assistant_text",
+                                        "content": safe_text,
+                                        "tool_call_id": msg.tool_calls[0]["id"],
+                                    })
                             for tc in msg.tool_calls:
                                 args = tc.get("args", {}) or {}
                                 _pending_calls[tc["id"]] = {
@@ -519,10 +527,12 @@ class ScoutAgent:
                                     "tool_call_id": tc["id"],
                                 })
                         if visible_text and not msg.tool_calls:
-                            safe_content = redact_paths(visible_text, self._cwd, self._shared_dir)
+                            redacted = redact_paths(visible_text, self._cwd, self._shared_dir)
+                            # Record before strip so usage tracking still sees the block.
+                            self._record_memory_citations(redacted)
+                            safe_content = strip_citation_block(redacted)
                             last_ai_content = safe_content
                             response_emitted = True
-                            self._record_memory_citations(safe_content)
                             events.append({"type": "response", "content": safe_content})
                     elif isinstance(msg, ToolMessage):
                         full_output = msg.content if isinstance(msg.content, str) else str(msg.content or "")

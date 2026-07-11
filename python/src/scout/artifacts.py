@@ -82,6 +82,26 @@ def html_artifact_warning(path: Path) -> str:
     )
 
 
+def artifact_path_key(path: str | Path) -> str:
+    """Stable identity key for deduping UI cards of the same file."""
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if raw.startswith("/workspace/"):
+        raw = raw[len("/workspace/") :]
+    elif raw.startswith("workspace/shared/"):
+        raw = "shared/" + raw[len("workspace/shared/") :]
+    elif raw.startswith("workspace/"):
+        raw = raw[len("workspace/") :]
+    if raw.startswith("/shared/"):
+        raw = "shared/" + raw[len("/shared/") :]
+    elif raw == "/shared":
+        raw = "shared"
+    return raw.lstrip("/")
+
+
 def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:
     """Return a client-safe descriptor for a supported user deliverable."""
     path = path.resolve()
@@ -105,7 +125,9 @@ def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:
     size = path.stat().st_size
     if size > MAX_ARTIFACT_SIZE:
         return None
-    artifact_id = hashlib.sha256(f"{root}:{rel}".encode()).hexdigest()[:24]
+    # Identity is the resolved file path so auto-surfaced edits and
+    # present_files for the same deliverable share one card.
+    artifact_id = hashlib.sha256(str(path).encode()).hexdigest()[:24]
     return {
         "id": artifact_id,
         "path": str(rel),
@@ -117,3 +139,21 @@ def describe_artifact(path: Path, root: Path) -> dict[str, Any] | None:
         "version": hashlib.sha256(path.read_bytes()).hexdigest()[:16],
         "presentation": "both" if renderer in INLINE_RENDERERS else "panel",
     }
+
+
+def dedupe_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the first card for each path/id; later duplicates are dropped."""
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        keys = [
+            str(artifact.get("id") or "").strip(),
+            artifact_path_key(str(artifact.get("path") or "")),
+        ]
+        keys = [k for k in keys if k]
+        if keys and any(k in seen for k in keys):
+            continue
+        for key in keys:
+            seen.add(key)
+        unique.append(artifact)
+    return unique

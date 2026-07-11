@@ -51,6 +51,11 @@ def test_default_admission_groups_limit_standard_users_to_four():
     assert server.priority_groups["priority"].max_concurrent_requests_per_user == 6
     assert server.priority_groups["critical"].max_concurrent_requests_per_user == 8
 
+
+def test_retrieval_backend_is_deployment_configuration():
+    assert AppConfig().retriever.backend == "sqlite_fts5"
+    assert AppConfig(retriever={"backend": "bm25"}).retriever.backend == "bm25"
+
     with pytest.raises(ValueError, match="cannot exceed max_concurrent_requests"):
         AppConfig(server={
             "max_concurrent_requests": 4,

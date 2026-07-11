@@ -1,12 +1,43 @@
-from scout.path_display import display_path, redact_paths, sanitize_artifacts
+from scout.path_display import (
+    display_path,
+    redact_paths,
+    resolve_agent_workspace_path,
+    sanitize_artifacts,
+)
 
 
 def test_display_path_maps_personal_and_shared_roots(tmp_path):
     personal = tmp_path / "users" / "1"
     shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    (personal / "plot.png").write_text("p")
+    (shared / "report.csv").write_text("s")
 
     assert display_path(personal / "plot.png", personal, shared) == "/workspace/plot.png"
     assert display_path(shared / "report.csv", personal, shared) == "/shared/report.csv"
+    assert display_path("report.csv", personal, shared) == "/shared/report.csv"
+
+
+def test_resolve_agent_workspace_path_aliases(tmp_path):
+    personal = tmp_path / "users" / "1"
+    shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    (shared / "climate.pdf").write_text("pdf")
+
+    assert resolve_agent_workspace_path(
+        "workspace/shared/climate.pdf", personal, shared,
+    ) == shared / "climate.pdf"
+    assert resolve_agent_workspace_path(
+        "/shared/climate.pdf", personal, shared,
+    ) == shared / "climate.pdf"
+    assert resolve_agent_workspace_path(
+        "shared/climate.pdf", personal, shared,
+    ) == shared / "climate.pdf"
+    assert resolve_agent_workspace_path(
+        "climate.pdf", personal, shared,
+    ) == shared / "climate.pdf"
 
 
 def test_display_path_preserves_unknown_absolute_paths(tmp_path):

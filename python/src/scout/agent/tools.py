@@ -7,6 +7,7 @@ time via :func:`make_tools`.
 
 from __future__ import annotations
 
+import csv
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -47,6 +48,10 @@ def make_tools(
     """
 
     data_dir = str(Path(data_dir).resolve())
+    shared_root = getattr(guard, "_shared", None) if guard else None
+    if shared_root is not None:
+        shared_root = Path(shared_root)
+
     def _read_denied(p: Path) -> bool:
         return guard.is_read_denied(p) if guard else is_path_denied(p)
 
@@ -55,28 +60,9 @@ def make_tools(
 
     def _resolve_workspace_path(path: str) -> Path:
         """Map canonical agent paths into this tool's workspace roots."""
-        p = Path(path)
-        def _shared_path(parts: tuple[str, ...]) -> Path | None:
-            shared_dir = getattr(guard, "_shared", None)
-            if shared_dir is None:
-                return None
-            return Path(shared_dir) / (Path(*parts) if parts else Path("."))
+        from ..path_display import resolve_agent_workspace_path
 
-        if p.is_absolute():
-            if p.parts[:2] == ("/", "workspace"):
-                relative = p.parts[2:]
-                return Path(data_dir) / (Path(*relative) if relative else Path("."))
-            if p.parts[:2] == ("/", "shared"):
-                shared = _shared_path(p.parts[2:])
-                if shared is not None:
-                    return shared
-            return p
-
-        if p.parts[:1] == ("shared",):
-            shared = _shared_path(p.parts[1:])
-            if shared is not None:
-                return shared
-        return Path(data_dir) / p
+        return resolve_agent_workspace_path(path, data_dir, shared_root)
 
     # ── Execution tools ──────────────────────────────────────────────
 
@@ -219,18 +205,23 @@ def make_tools(
 
     @tool
     def search_workspace(query: str, path: str = "", top_k: int = 5) -> str:
-        """BM25 lexical search across workspace text, Markdown, JSON, CSV, and PDF.
+        """Ranked lexical search across workspace text, Markdown, JSON, and PDF.
 
-        Uses the shared BM25 index over the workspace. Pass *query* with keywords
-        to match. Optionally pass *path* (workspace path, relative path, or
-        basename) to search within a single file only — including PDFs. There is
-        no separate PDF reader; use this tool for all document types.
+        PDFs are parsed and indexed automatically. Optionally pass *path* to
+        search one document. CSV is intentionally not indexed: use filter_table
+        for exact row lookup, or exec_command with pandas for calculations.
         """
         source_file: str | None = None
         if path and path.strip():
             p = _resolve_workspace_path(path.strip())
             if _read_denied(p):
                 return f"[Access denied: {p.name} is a protected file]"
+            if p.suffix.lower() == ".csv":
+                return (
+                    "[UNSUPPORTED TARGET: search_workspace does not index CSV tables. "
+                    "Use filter_table(path=..., query=...) for exact row lookup, or "
+                    "exec_command with pandas for aggregation and calculations.]"
+                )
             # Prefer resolved path so absolute/relative forms match the index.
             source_file = str(p) if p.exists() else path.strip()
 
@@ -239,9 +230,17 @@ def make_tools(
             scope = f" in '{path.strip()}'" if path.strip() else ""
             return f"(no matching workspace content found{scope})"
 
+        from ..path_display import display_path
+
         parts: list[str] = []
         for i, c in enumerate(chunks, 1):
-            header = f"[{i}] {c.source_file} (score: {c.score:.2f})"
+            source_label = display_path(c.source_file, data_dir, shared_root)
+            # If the index only stored a basename, resolve through shared/personal.
+            if source_label == c.source_file and "/" not in c.source_file.replace("\\", "/"):
+                resolved = _resolve_workspace_path(c.source_file)
+                if resolved.exists():
+                    source_label = display_path(resolved, data_dir, shared_root)
+            header = f"[{i}] {source_label} (score: {c.score:.2f})"
             if c.source_type == "json" and c.record_index is not None:
                 header += f"  [record_{c.record_index}]"
                 if c.metadata:
@@ -252,6 +251,76 @@ def make_tools(
             parts.append(f"{header}\n{c.text}")
 
         return "\n\n---\n\n".join(parts)
+
+    @tool
+    def filter_table(
+        path: str,
+        query: str,
+        columns: list[str] | None = None,
+        max_rows: int = 20,
+    ) -> str:
+        """Find CSV rows containing exact text without loading/indexing the table.
+
+        Matching is case-insensitive and streams the CSV from disk. Optionally
+        restrict matching to named columns. Use exec_command with pandas for
+        sorting, aggregation, numeric comparisons, joins, or statistical work.
+        """
+        target = _resolve_workspace_path(path)
+        if _read_denied(target):
+            return f"[Access denied: {target.name} is a protected file]"
+        if target.suffix.lower() != ".csv":
+            return (
+                f"[UNSUPPORTED TARGET: filter_table only accepts .csv files, not "
+                f"{target.suffix or 'a file without an extension'}. Use "
+                "search_workspace for PDF, Markdown, text, and narrative JSON.]"
+            )
+        if not target.is_file():
+            return f"[File not found: {target}]"
+        needle = query.strip().casefold()
+        if not needle:
+            return "[Invalid query: provide non-empty exact text to find]"
+        if len(needle) > 500:
+            return "[Invalid query: maximum length is 500 characters]"
+        limit = max(1, min(int(max_rows), 50))
+        requested = [str(column) for column in (columns or []) if str(column).strip()]
+        matches: list[str] = []
+        try:
+            with target.open(newline="", encoding="utf-8", errors="replace") as handle:
+                reader = csv.DictReader(handle)
+                fieldnames = list(reader.fieldnames or [])
+                if not fieldnames:
+                    return "[Invalid CSV: no header row found]"
+                unknown = [column for column in requested if column not in fieldnames]
+                if unknown:
+                    available = ", ".join(fieldnames[:30])
+                    return (
+                        f"[Unknown column(s): {', '.join(unknown)}. "
+                        f"Available columns: {available}]"
+                    )
+                searched = requested or fieldnames
+                for row_number, row in enumerate(reader, 2):
+                    if not any(needle in str(row.get(column, "")).casefold() for column in searched):
+                        continue
+                    values = []
+                    for column in fieldnames:
+                        value = str(row.get(column, "") or "").strip()
+                        if not value:
+                            continue
+                        if len(value) > 160:
+                            value = value[:157] + "..."
+                        values.append(f"{column}: {value}")
+                    matches.append(f"row {row_number}: " + " | ".join(values))
+                    if len(matches) >= limit:
+                        break
+        except (OSError, csv.Error) as exc:
+            return f"[CSV read error: {exc}]"
+        if not matches:
+            scope = f" in columns {requested}" if requested else ""
+            return f"(no CSV rows containing {query!r}{scope})"
+        result = "\n".join(matches)
+        if len(matches) == limit:
+            result += f"\n… [showing at most {limit} matching rows]"
+        return result
 
     @tool
     def think(content: str = "", title: str = "", reflection: str = "") -> str:
@@ -378,7 +447,7 @@ def make_tools(
     tools = [
         *shell_tools, run_node,
         *memory_tools, *skill_tools, *perm_tools,
-        read_file, list_files, search_workspace, think, ask_user_choice,
+        read_file, list_files, search_workspace, filter_table, think, ask_user_choice,
         present_files,
     ]
     if not disable_write_tools:

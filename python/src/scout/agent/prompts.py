@@ -30,10 +30,11 @@ TOOL_DESCRIPTIONS = {
     "apply_patch": "**`apply_patch`** — Apply unified-diff patches to one or more files in a single approval.",
     "write_file": "**`write_file`** — Create or overwrite a text file with a clear approval preview.",
     "write_binary_artifact": "**`write_binary_artifact`** — Save valid base64-encoded binary output supplied by a trusted source. For generated images, prefer writing the file directly from a script or execution tool.",
-    "present_files": "**`present_files`** — Queue existing workspace file(s) as openable cards for the user. Use when they should *view* a file you are not currently editing. Writes/edits already surface cards automatically — do not re-present those unless asked. Does not modify files.",
+    "present_files": "**`present_files`** — Queue existing workspace file(s) as openable cards for the user. Files you create or edit in this turn are already shown automatically; use this for relevant files you did not touch this turn, or for files updated as a side effect (for example a parent Markdown/HTML page after you changed an embedded image). Batch paths; the UI shows each path once. Does not modify files.",
     "read_file": "**`read_file`** — Read text file contents. Use 1-based `offset` and bounded `max_lines` to page through large files.",
     "list_files": "**`list_files`** — List directory contents. Use 1-based `offset` and bounded `max_entries` for large directories.",
-    "search_workspace": "**`search_workspace`** — BM25-ranked lexical search across workspace text, Markdown, JSON, CSV, and PDF files. Optional `path` limits retrieval to one file (including PDFs).",
+    "search_workspace": "**`search_workspace`** — Ranked lexical retrieval across narrative text, Markdown, JSON, and automatically parsed PDF files. Optional `path` focuses one document. The retrieval backend is deployment-controlled and cannot be selected here.",
+    "filter_table": "**`filter_table`** — Stream a CSV and return rows containing exact case-insensitive text, optionally within named `columns`. Use pandas through `exec_command` for calculations, numeric filters, sorting, joins, or aggregation.",
     "ask_user_choice": "**`ask_user_choice`** — Ask the user a structured question in the UI. Use it for explicit interactive MCQs/quizzes, pick-one decisions, and genuinely blocking choices. Include `options` for multiple-choice questions; each option label is the answer text itself (\"Paris\"), never a letter like \"A\", and descriptions are optional — omit them when they'd repeat the label.",
     "think": "**`think`** — Name the next tool phase and optionally narrate it. `title` is a short phase label for the tool-activity card (e.g. `Plan demo`, `Inspect workspace`). `content` is normal user-visible prose shown in the main transcript (not a private panel).",
     "memory_search": "**`memory_search`** — Search long-term memory when workspace history or prior decisions matter.",
@@ -84,10 +85,15 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.append("- **Markdown artifacts may reference sibling workspace images.** Use normal relative Markdown image syntax such as `![Plot](plot.png)`; external image URLs and path traversal are blocked.")
     if "present_files" in enabled_tools:
         tips.append(
-            "- **Present existing files with `present_files`.** Creating or editing a file already shows an artifact card. "
-            "When the user asks to open/show/share a file you are not changing (or to re-show one), call `present_files` "
-            "with the workspace path(s). Batch related paths in one call; duplicates are ignored. "
-            "Do not dump long file contents into chat when a card is better."
+            "- **How file cards work this turn.** Whatever you create or edit in this turn "
+            "(images, charts, Markdown, HTML, CSV, JSON, text, code, and other deliverables) "
+            "is shown to the user automatically as an openable card. "
+            "Use `present_files` when you want the user to open a file you have **not** touched "
+            "in this turn but that is still relevant — or a file that was updated as a side "
+            "effect of work you just did (for example you rewrote `plot.png` that an existing "
+            "Markdown/HTML report already embeds; presenting the report re-surfaces the updated "
+            "view). Batch every path you want shown into one `present_files` call; the UI keeps "
+            "a set of paths and shows each file only once."
         )
     if "run_node" in enabled_tools and "write_binary_artifact" in enabled_tools:
         tips.append("- **Write generated binaries directly from execution tools.** Save generated PNGs and other binary files to simple relative paths from scripts or `run_node`; never print base64 for reuse in `write_binary_artifact`. Reserve that tool for valid base64 supplied by the user or another non-model source.")
@@ -161,10 +167,13 @@ For non-trivial tasks, work like an effective agent:
 
 ## Tool Choice Rules
 
-- Use `read_file`, `list_files`, and `search_workspace` before shell commands when they answer the question directly. `search_workspace` always uses BM25 lexical ranking; use its optional `path` to focus on one file, including PDFs.
+- **Search documents without extracting them.** `search_workspace` already parses and indexes PDFs alongside Markdown, text, and narrative JSON. For questions about a PDF's contents, use focused keyword queries and its optional `path`. Do not run `fitz`, `pymupdf`, `pdfplumber`, OCR, or conversion scripts merely to read/search a PDF. Manual extraction is appropriate only when the user explicitly asks for extraction/conversion, or when `search_workspace` reports that the file type is unsupported.
+- **Treat tables as structured data.** CSV files are deliberately not copied into the document index. Use `filter_table` for bounded exact row lookup. Use pandas through `exec_command` for numeric comparisons, maxima/minima, grouping, sorting, joins, or statistics.
+- **Recover using the tool contract.** If a search is empty, keep the same tool and try a better full-word query and a focused `path`; do not switch to manual PDF parsing. If a tool returns `UNSUPPORTED TARGET`, follow the named replacement tool in that message.
+- Use `read_file`, `list_files`, `search_workspace`, and `filter_table` before shell commands when they directly answer the question.
 - Use `exec_command` for scripts, tests, package-managed runs, shell inspection, and anything where process isolation matters.
 - Use `write_file`, `apply_patch`, or execution-created files for durable outputs. Do not paste long generated files into chat when an artifact is better.
-- Use `present_files` when the user should open an existing file in the UI without you rewriting it. Edits already surface cards; presentation is for show/share/view requests.
+- Files you create or edit in this turn already appear as cards. Use `present_files` for other relevant files you did not edit this turn, or for files updated only as a side effect (embedded assets, linked reports, regenerated charts inside existing docs).
 - Use `run_node` only for JavaScript/Node-specific generation or checks.
 - Use memory tools only when prior user preferences or previous workspace decisions are relevant.
 - Use `request_permissions` only after a real operation is blocked by missing permission or network access.
@@ -487,10 +496,10 @@ def build_manifest(
             except Exception:
                 continue
 
-    # 4) Text / Markdown files (just list them)
-    text_files = sorted(_safe_scan("*.txt") + _safe_scan("*.md"))
+    # 4) Narrative documents (just list them; retrieval parses PDFs itself)
+    text_files = sorted(_safe_scan("*.txt") + _safe_scan("*.md") + _safe_scan("*.pdf"))
     if text_files:
-        parts.append("**Text / Markdown documents** (searchable via `search_workspace`):\n")
+        parts.append("**Narrative documents, including parsed PDFs** (searchable via `search_workspace`):\n")
         for tf in text_files:
             try:
                 rel = tf.relative_to(root)

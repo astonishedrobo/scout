@@ -33,8 +33,9 @@ class PDFConfig(BaseModel):
 
 
 class RetrieverConfig(BaseModel):
-    """BM25 retriever settings."""
+    """Ranked lexical retrieval settings."""
 
+    backend: Literal["sqlite_fts5", "bm25"] = "sqlite_fts5"
     top_k: int = 5
     chunk_size: int = 1000
     chunk_overlap: int = 200

@@ -22,16 +22,20 @@ Lookup guidance:
 - If the user asks about remembered information, answer from it directly.
 - Use memory_search or memory_read only if you need to inspect the file again.
 
-Memory citations: if memory files were used, append exactly one block at the VERY END:
+Memory citations (machine-only): if memory files were used, append exactly one
+complete block at the VERY END of your final answer, after all user-facing prose.
+The harness strips the whole block — never put any of these tags mid-message, and
+never emit partial fragments such as bare `<citation_entries>` without the outer
+`<scout-mem-citation>` wrapper.
 
 <scout-mem-citation>
 <citation_entries>
 MEMORY.md:10-12|note=[how used]
 </citation_entries>
-<rollout_ids>
-session-uuid-here
-</rollout_ids>
 </scout-mem-citation>
+
+Paths in MEMORY.md may use older forms such as workspace/shared/... — prefer the
+canonical agent paths /shared/... and /workspace/... when calling tools.
 
 Updating memories: only when the user explicitly asks — use memory_add_note. It writes to MEMORY.md.
 """

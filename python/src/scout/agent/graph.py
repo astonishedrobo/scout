@@ -48,7 +48,7 @@ _EXECUTION_TOOLS = frozenset({
     "run_shell", "exec_command", "write_stdin", "run_node",
 })
 _PARALLEL_READ_TOOLS = frozenset({
-    "read_file", "list_files", "search_workspace",
+    "read_file", "list_files", "search_workspace", "filter_table",
     "memory_search", "memory_read", "memory_list",
     "skill_list", "skill_read",
 })
@@ -585,20 +585,7 @@ def build_graph(
                 personal_root = Path(data_dir or cwd or ".").resolve()
                 shared_root = Path(shared_dir).resolve() if shared_dir else None
 
-                def _resolve_present_path(raw: str) -> Path:
-                    p = Path(str(raw))
-                    if p.is_absolute():
-                        if p.parts[:2] == ("/", "workspace"):
-                            rel = p.parts[2:]
-                            return personal_root / (Path(*rel) if rel else Path("."))
-                        if p.parts[:2] == ("/", "shared") and shared_root is not None:
-                            rel = p.parts[2:]
-                            return shared_root / (Path(*rel) if rel else Path("."))
-                        return p
-                    if p.parts[:1] == ("shared",) and shared_root is not None:
-                        rel = p.parts[1:]
-                        return shared_root / (Path(*rel) if rel else Path("."))
-                    return personal_root / p
+                from ..path_display import resolve_agent_workspace_path
 
                 seen_ids: set[str] = set()
                 presented: list[str] = []
@@ -607,7 +594,9 @@ def build_graph(
                     if not raw:
                         continue
                     try:
-                        target = _resolve_present_path(str(raw)).resolve()
+                        target = resolve_agent_workspace_path(
+                            str(raw), personal_root, shared_root,
+                        ).resolve()
                     except Exception as exc:
                         skipped.append(f"{raw} (resolve failed: {exc})")
                         continue

@@ -106,14 +106,11 @@ class ExecutionOrchestrator:
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def _canonicalize_agent_path(self, path: str | Path) -> Path:
-        candidate = Path(path)
-        if candidate.is_absolute():
-            if candidate.parts[:2] == ("/", "workspace"):
-                return (self._personal / Path(*candidate.parts[2:])).resolve()
-            if candidate.parts[:2] == ("/", "shared") and self._shared is not None:
-                return (self._shared / Path(*candidate.parts[2:])).resolve()
-            return candidate.resolve()
-        return (self._personal / candidate).resolve()
+        from ..path_display import resolve_agent_workspace_path
+
+        return resolve_agent_workspace_path(
+            path, self._personal, self._shared,
+        ).resolve()
 
     def _agent_read_denied(self, path: str | Path) -> bool:
         mapped = self._canonicalize_agent_path(path)
@@ -165,18 +162,11 @@ class ExecutionOrchestrator:
         if not workdir or workdir == ".":
             return self._personal
 
-        candidate = Path(workdir)
-        if candidate.is_absolute():
-            if candidate.parts[:2] == ("/", "workspace"):
-                target = self._personal.joinpath(*candidate.parts[2:])
-            elif candidate.parts[:2] == ("/", "shared") and self._shared is not None:
-                target = self._shared.joinpath(*candidate.parts[2:])
-            else:
-                target = self._personal
-        else:
-            target = self._personal / candidate
+        from ..path_display import resolve_agent_workspace_path
 
-        target = target.resolve()
+        target = resolve_agent_workspace_path(
+            workdir, self._personal, self._shared,
+        ).resolve()
         for root in (self._personal, self._shared):
             if root is None:
                 continue

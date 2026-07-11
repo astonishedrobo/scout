@@ -62,6 +62,7 @@ def test_make_tools_filters_by_profile():
     assert "install_python_package" not in names
     assert "read_file" in names
     assert "search_workspace" in names
+    assert "filter_table" in names
     assert "read_pdf" not in names
     assert "ask_user_choice" in names
     assert "present_files" in names

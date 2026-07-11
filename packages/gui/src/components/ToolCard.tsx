@@ -1,14 +1,12 @@
 import { useState } from "react";
 import {
-  Check,
   ChevronRight,
-  CircleStop,
   FileText,
   FolderOpen,
-  Loader2,
   PencilLine,
   Search,
   Terminal,
+  Wrench,
 } from "lucide-react";
 import type { ResponseAnnotation, ToolStep } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -63,6 +61,8 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
         return "Stopped checking files";
       case "search_workspace":
         return "Stopped searching workspace";
+      case "filter_table":
+        return "Stopped filtering table";
       case "exec_command":
         return "Stopped running command";
       case "run_node":
@@ -103,6 +103,8 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
       return tense === "present" ? "Checking files" : "Checked files";
     case "search_workspace":
       return tense === "present" ? "Searching workspace" : "Searched workspace";
+    case "filter_table":
+      return tense === "present" ? "Filtering table" : "Filtered table";
     case "exec_command":
       return tense === "present" ? "Running command" : "Ran command";
     case "run_node":
@@ -117,7 +119,7 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
 }
 
 function detailText(step: ToolStep): string {
-  if (step.name === "search_workspace") {
+  if (step.name === "search_workspace" || step.name === "filter_table") {
     const q = String(step.args?.query ?? "");
     const p = String(step.args?.path ?? "");
     if (q && p) return `${q} · ${p}`;
@@ -133,18 +135,17 @@ function detailText(step: ToolStep): string {
 }
 
 function iconFor(step: ToolStep) {
-  if (step.status === "executing") return Loader2;
-  if (step.status === "interrupted") return CircleStop;
+  // Tool-type icons only — no status-colored spinners/ticks/stops.
   if (step.name === "write_file" || step.name === "write_binary_artifact") return FileText;
   if (step.name === "present_files") return FileText;
   if (step.name === "apply_patch") return PencilLine;
   if (step.name === "read_file") return FileText;
   if (step.name === "list_files") return FolderOpen;
-  if (step.name === "search_workspace") return Search;
-  if (step.name === "exec_command" || step.name === "run_node") {
+  if (step.name === "search_workspace" || step.name === "filter_table") return Search;
+  if (step.name === "exec_command" || step.name === "run_node" || step.name === "write_stdin") {
     return Terminal;
   }
-  return Check;
+  return Wrench;
 }
 
 function isThinking(step: ToolStep): boolean {
@@ -257,10 +258,7 @@ function ToolRow({
         ) : (
           <span className="w-[13px] shrink-0" />
         )}
-        <Icon
-          size={13}
-          className={`${step.status === "executing" ? "animate-spin" : ""} mt-0.5 shrink-0`}
-        />
+        <Icon size={13} className="mt-0.5 shrink-0 text-scout-muted" />
         <div className="min-w-0">
           <div className="text-scout-text/80">
             {displayName(step, stepTense(step))}
@@ -271,12 +269,6 @@ function ToolRow({
             </div>
           )}
         </div>
-        {step.status === "complete" && !hasOutput && (
-          <Check size={12} className="ml-auto mt-0.5 shrink-0 text-scout-success" />
-        )}
-        {step.status === "interrupted" && (
-          <CircleStop size={12} className="ml-auto mt-0.5 shrink-0 text-scout-muted" />
-        )}
       </button>
       {expanded && hasOutput && (
         <pre className="ml-8 max-h-40 overflow-auto rounded-btn border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
@@ -306,13 +298,7 @@ function ToolGroupCard({
   const [expanded, setExpanded] = useState(defaultExpanded ?? running);
 
   return (
-    <div
-      className={`rounded-card border bg-scout-lift/30 ${
-        running
-          ? "border-l-2 border-scout-hairline-faint border-l-[#facc15]/60"
-          : "border-scout-hairline-faint"
-      }`}
-    >
+    <div className="rounded-card border border-scout-hairline-faint bg-scout-lift/30">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
@@ -332,13 +318,6 @@ function ToolGroupCard({
           </div>
           <div className="text-scout-text/85 leading-relaxed">{title}</div>
         </div>
-        {awaitingApproval && running ? (
-          <span className="mt-0.5 shrink-0 text-[11px] font-medium text-scout-warning">Paused</span>
-        ) : running ? (
-          <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-[#facc15]" />
-        ) : (
-          <Check size={13} className="mt-0.5 shrink-0 text-scout-success" />
-        )}
       </button>
       {expanded && (
         <div className="space-y-2 border-t border-scout-hairline-faint px-3 py-2.5">

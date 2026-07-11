@@ -110,6 +110,33 @@ def test_list_files_maps_shared_absolute_directory(tmp_path: Path):
     assert "report.txt" in tools["list_files"].invoke({"directory": "/shared"})
 
 
+def test_read_file_maps_legacy_workspace_shared_path(tmp_path: Path):
+    """Regression: MEMORY.md and older transcripts use workspace/shared/..."""
+    personal = tmp_path / "users" / "1"
+    shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    (shared / "ceew-study.pdf").write_text("shared climate pdf")
+
+    tools = _tools(personal, shared)
+
+    path = "workspace/shared/ceew-study.pdf"
+    assert tools["read_file"].invoke({"path": path}) == "shared climate pdf"
+    assert "ceew-study.pdf" in tools["list_files"].invoke({"directory": "workspace/shared"})
+
+
+def test_read_file_maps_shared_basename_when_missing_in_personal(tmp_path: Path):
+    personal = tmp_path / "users" / "1"
+    shared = tmp_path / "shared"
+    personal.mkdir(parents=True)
+    shared.mkdir()
+    (shared / "only-shared.pdf").write_text("shared only")
+
+    tools = _tools(personal, shared)
+
+    assert tools["read_file"].invoke({"path": "only-shared.pdf"}) == "shared only"
+
+
 def test_list_files_supports_bounded_paging(tmp_path: Path):
     personal = tmp_path / "users" / "1"
     shared = tmp_path / "shared"
