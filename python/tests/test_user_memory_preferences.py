@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 
 
 @pytest.fixture(autouse=True)
@@ -79,3 +80,31 @@ def test_admin_can_assign_admission_group(tmp_path: Path, monkeypatch):
     assert auth.set_user_admission_group(user["id"], "priority") is True
     assert auth.get_user_admission_group(user["id"]) == "priority"
     assert auth.list_users()[0]["admission_group"] == "priority"
+
+
+def test_auth_database_supports_concurrent_preference_writes(tmp_path: Path, monkeypatch):
+    auth = _use_temp_auth_db(tmp_path, monkeypatch)
+    user = auth.create_user("concurrent", "password")
+    assert user
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [
+            pool.submit(
+                auth.set_user_memory_preferences,
+                user["id"],
+                use_memories=bool(index % 2),
+                generate_memories=bool((index + 1) % 2),
+            )
+            for index in range(40)
+        ]
+        for future in futures:
+            future.result()
+
+    preferences = auth.get_user_memory_preferences(user["id"])
+    assert preferences in (
+        {"use_memories": False, "generate_memories": True},
+        {"use_memories": True, "generate_memories": False},
+    )
+    conn = auth._connect()
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    conn.close()

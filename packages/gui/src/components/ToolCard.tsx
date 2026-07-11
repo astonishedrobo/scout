@@ -61,8 +61,8 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
         return `Stopped reading ${file || "a file"}`;
       case "list_files":
         return "Stopped checking files";
-      case "search_documents":
-        return "Stopped searching documents";
+      case "search_workspace":
+        return "Stopped searching workspace";
       case "exec_command":
         return "Stopped running command";
       case "run_node":
@@ -101,8 +101,8 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
         : `Read ${file || "a file"}`;
     case "list_files":
       return tense === "present" ? "Checking files" : "Checked files";
-    case "search_documents":
-      return tense === "present" ? "Searching documents" : "Searched documents";
+    case "search_workspace":
+      return tense === "present" ? "Searching workspace" : "Searched workspace";
     case "exec_command":
       return tense === "present" ? "Running command" : "Ran command";
     case "run_node":
@@ -117,7 +117,7 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
 }
 
 function detailText(step: ToolStep): string {
-  if (step.name === "search_documents") {
+  if (step.name === "search_workspace") {
     const q = String(step.args?.query ?? "");
     const p = String(step.args?.path ?? "");
     if (q && p) return `${q} · ${p}`;
@@ -140,7 +140,7 @@ function iconFor(step: ToolStep) {
   if (step.name === "apply_patch") return PencilLine;
   if (step.name === "read_file") return FileText;
   if (step.name === "list_files") return FolderOpen;
-  if (step.name === "search_documents") return Search;
+  if (step.name === "search_workspace") return Search;
   if (step.name === "exec_command" || step.name === "run_node") {
     return Terminal;
   }

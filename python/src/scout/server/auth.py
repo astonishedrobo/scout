@@ -29,6 +29,13 @@ DB_PATH = SCOUT_HOME / "scout_users.db"
 logger = logging.getLogger(__name__)
 
 
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
 class User(BaseModel):
     id: int
     username: str
@@ -36,8 +43,15 @@ class User(BaseModel):
 
 def init_db():
     SCOUT_HOME.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError as exc:
+        if "readonly" not in str(exc).lower():
+            raise
+        logger.warning("Could not enable SQLite WAL mode: %s", exc)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +162,7 @@ def _user_row_to_dict(row: tuple, *, with_password: bool = False) -> dict:
 
 
 def get_user_by_username(username: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users WHERE username = ?",
@@ -162,7 +176,7 @@ def get_user_by_username(username: str):
 
 
 def get_user_by_id(user_id: int):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users WHERE id = ?",
@@ -176,7 +190,7 @@ def get_user_by_id(user_id: int):
 
 
 def get_user_permission_profile(user_id: int | str) -> str:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT permission_profile, is_admin FROM users WHERE id = ?",
@@ -198,7 +212,7 @@ def is_user_admin(user_id: int | str) -> bool:
 
 
 def get_user_admission_group(user_id: int | str) -> str:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute(
         "SELECT admission_group FROM users WHERE id = ?", (int(user_id),)
     ).fetchone()
@@ -207,7 +221,7 @@ def get_user_admission_group(user_id: int | str) -> str:
 
 
 def get_user_memory_preferences(user_id: int | str) -> dict[str, bool] | None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -238,7 +252,7 @@ def set_user_memory_preferences(
     use_memories: bool,
     generate_memories: bool,
 ) -> None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         """
         INSERT INTO user_memory_preferences (
@@ -256,7 +270,7 @@ def set_user_memory_preferences(
 
 
 def create_user(username: str, password: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -281,7 +295,7 @@ def create_user(username: str, password: str):
 
 
 def list_users() -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT id, username, hashed_password, is_admin, permission_profile, admission_group FROM users ORDER BY id"
@@ -301,7 +315,7 @@ def set_user_permission_profile(user_id: int, profile: str) -> bool:
 
     if profile not in VALID_PROFILES:
         return False
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE users SET permission_profile = ?, is_admin = ? WHERE id = ?",
@@ -314,7 +328,7 @@ def set_user_permission_profile(user_id: int, profile: str) -> bool:
 
 
 def set_user_admission_group(user_id: int, group: str) -> bool:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.execute(
         "UPDATE users SET admission_group = ? WHERE id = ?", (group, user_id)
     )

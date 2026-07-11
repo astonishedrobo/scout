@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 from rank_bm25 import BM25Plus
 
@@ -90,6 +90,8 @@ class BM25Retriever:
 
         k = top_k if top_k is not None else self._config.retriever.top_k
         tokens = _tokenize(query)
+        if not tokens:
+            return []
         scores = self._bm25.get_scores(tokens)
 
         # Filter candidates *before* top-k so a single-file query is not
@@ -178,7 +180,10 @@ class BM25Retriever:
         corpus: list[list[str]] = []
         filtered_chunks: list[_Chunk] = []
         for chunk in raw_texts:
-            tokens = _tokenize(chunk.text)
+            # Paths often carry the strongest signal in code/data workspaces
+            # (for example ``auth/session_store.py``).  Index them alongside
+            # the body so callers do not have to know to use ``source_file``.
+            tokens = _tokenize(chunk.text) + _tokenize(chunk.source_file)
             if not tokens:
                 continue
             filtered_chunks.append(chunk)
@@ -544,8 +549,24 @@ class _Chunk:
 
 
 def _tokenize(text: str) -> list[str]:
-    """Lowercase regex tokenizer (punctuation-insensitive)."""
-    return re.findall(r"[a-z0-9]+", text.lower())
+    """Tokenize prose, paths, and common source-code identifiers.
+
+    Keep the full alphanumeric form while also splitting camelCase/PascalCase
+    and punctuation-delimited names.  This lets a query for ``live sessions``
+    match ``maxLiveSessions`` without weakening exact identifier matches.
+    """
+    tokens: list[str] = []
+    for raw in re.findall(r"[A-Za-z0-9]+", text):
+        full = raw.lower()
+        tokens.append(full)
+        parts = re.findall(
+            r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+",
+            raw,
+        )
+        lowered_parts = [part.lower() for part in parts]
+        if len(lowered_parts) > 1 or lowered_parts != [full]:
+            tokens.extend(lowered_parts)
+    return tokens
 
 
 def source_file_matches(indexed: str, requested: str) -> bool:
@@ -589,12 +610,14 @@ class RetrieverProxy:
         config: AppConfig,
         *,
         build_semaphore: threading.BoundedSemaphore | None = None,
+        before_rebuild: Callable[[], None] | None = None,
     ) -> None:
         self._workspace_roots = workspace_roots
         self._config = config
         self._inner: BM25Retriever | None = None
         self._lock = threading.RLock()
         self._build_semaphore = build_semaphore
+        self._before_rebuild = before_rebuild
         self._last_access = time.monotonic()
         self.dirty = True  # starts dirty; built on first use
 
@@ -634,10 +657,9 @@ class RetrieverProxy:
         *,
         source_file: str | None = None,
     ) -> list[RetrievedChunk]:
+        self._ensure_built()
         with self._lock:
             self._last_access = time.monotonic()
-            if self._inner is None or self.dirty:
-                self._rebuild_locked()
             return self._inner.search(  # type: ignore[union-attr]
                 query, top_k, source_file=source_file
             )
@@ -647,8 +669,17 @@ class RetrieverProxy:
             self.dirty = True
 
     def rebuild_if_dirty(self) -> None:
+        self._ensure_built()
+
+    def _ensure_built(self) -> None:
+        """Build lazily, invoking capacity management without lock inversion."""
         with self._lock:
-            self._last_access = time.monotonic()
+            needs_rebuild = self.dirty or self._inner is None
+        if not needs_rebuild:
+            return
+        if self._before_rebuild is not None:
+            self._before_rebuild()
+        with self._lock:
             if self.dirty or self._inner is None:
                 self._rebuild_locked()
 

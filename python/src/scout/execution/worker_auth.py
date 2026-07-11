@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
 from typing import Any
 from ..secrets import load_secret
@@ -15,8 +16,10 @@ from fastapi import HTTPException
 _MAX_BODY_BYTES = 512_000
 _MAX_CLOCK_SKEW_SECONDS = 120
 _NONCE_TTL_SECONDS = 300
+_MAX_SEEN_NONCES = 100_000
 
 _SEEN_NONCES: dict[str, float] = {}
+_NONCE_LOCK = threading.Lock()
 
 
 def require_worker_secret() -> str:
@@ -27,8 +30,7 @@ def require_worker_secret() -> str:
     return secret or "scout-worker-dev-secret"
 
 
-def _purge_nonces() -> None:
-    now = time.time()
+def _purge_nonces(now: float) -> None:
     expired = [n for n, ts in _SEEN_NONCES.items() if now - ts > _NONCE_TTL_SECONDS]
     for n in expired:
         del _SEEN_NONCES[n]
@@ -74,15 +76,21 @@ def verify_signed_request(
     if abs(now - ts) > _MAX_CLOCK_SKEW_SECONDS:
         raise HTTPException(status_code=403, detail="Request expired")
 
-    _purge_nonces()
-    if nonce in _SEEN_NONCES:
-        raise HTTPException(status_code=403, detail="Replay detected")
-    _SEEN_NONCES[nonce] = time.time()
-
     secret = require_worker_secret().encode()
     digest = hmac.new(secret, body + timestamp.encode() + nonce.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(digest, signature):
         raise HTTPException(status_code=403, detail="Invalid signature")
+
+    # Mutate replay state only after authentication. Keep check-and-insert
+    # atomic so concurrent copies cannot both pass.
+    nonce_now = time.time()
+    with _NONCE_LOCK:
+        _purge_nonces(nonce_now)
+        if nonce in _SEEN_NONCES:
+            raise HTTPException(status_code=403, detail="Replay detected")
+        if len(_SEEN_NONCES) >= _MAX_SEEN_NONCES:
+            raise HTTPException(status_code=503, detail="Replay protection at capacity")
+        _SEEN_NONCES[nonce] = nonce_now
 
 
 def sign_request_body(body: dict[str, Any], *, secret: str | None = None) -> dict[str, str]:

@@ -7,7 +7,7 @@ time via :func:`make_tools`.
 
 from __future__ import annotations
 
-import re
+from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,8 +47,6 @@ def make_tools(
     """
 
     data_dir = str(Path(data_dir).resolve())
-    _fallback_exts = {".txt", ".md", ".json", ".csv"}
-
     def _read_denied(p: Path) -> bool:
         return guard.is_read_denied(p) if guard else is_path_denied(p)
 
@@ -79,80 +77,6 @@ def make_tools(
             if shared is not None:
                 return shared
         return Path(data_dir) / p
-
-    def _fallback_search_documents(
-        query: str,
-        top_k: int,
-        *,
-        path_filter: str = "",
-    ) -> str:
-        from ..retriever import source_file_matches
-
-        root = Path(data_dir)
-        q = query.strip().lower()
-        if not q:
-            return "(empty query)"
-
-        hits: list[tuple[int, str, str]] = []
-        for fpath in root.rglob("*"):
-            if not fpath.is_file():
-                continue
-            if fpath.suffix.lower() not in _fallback_exts:
-                continue
-            if is_name_denied(fpath.name) or _read_denied(fpath):
-                continue
-            if ".scout-executions" in fpath.parts or ".scout-cache" in fpath.parts:
-                continue
-            if path_filter:
-                try:
-                    rel = str(fpath.relative_to(root))
-                except Exception:
-                    rel = str(fpath)
-                if not (
-                    source_file_matches(rel, path_filter)
-                    or source_file_matches(str(fpath), path_filter)
-                    or source_file_matches(fpath.name, path_filter)
-                ):
-                    continue
-            try:
-                if fpath.stat().st_size > 100_000_000:
-                    continue
-                text = fpath.read_text(errors="replace")
-            except Exception:
-                continue
-            if not text:
-                continue
-
-            lower = text.lower()
-            if q not in lower:
-                continue
-
-            idx = lower.find(q)
-            score = max(1, lower.count(q))
-            start = max(0, idx - 120)
-            end = min(len(text), idx + 220)
-            snippet = re.sub(r"\s+", " ", text[start:end]).strip()
-            if start > 0:
-                snippet = "..." + snippet
-            if end < len(text):
-                snippet = snippet + "..."
-
-            try:
-                src = str(fpath.relative_to(root))
-            except Exception:
-                src = str(fpath)
-            hits.append((score, src, snippet))
-
-        if not hits:
-            scope = f" in '{path_filter}'" if path_filter else ""
-            return f"(no matching documents found{scope})"
-
-        hits.sort(key=lambda x: (-x[0], x[1]))
-        parts = [
-            f"[{i}] {src} (fallback score: {score})\n{snippet}"
-            for i, (score, src, snippet) in enumerate(hits[:top_k], 1)
-        ]
-        return "\n\n---\n\n".join(parts)
 
     # ── Execution tools ──────────────────────────────────────────────
 
@@ -221,8 +145,8 @@ def make_tools(
     # ── 2. read_file ─────────────────────────────────────────────────
 
     @tool
-    def read_file(path: str, max_lines: int = 200) -> str:
-        """Read a file and return its first *max_lines* lines as text."""
+    def read_file(path: str, max_lines: int = 200, offset: int = 1) -> str:
+        """Read a text file from a 1-based line offset, returning at most max_lines."""
         p = _resolve_workspace_path(path)
         if _read_denied(p):
             return f"[Access denied: {p.name} is a protected file]"
@@ -245,45 +169,57 @@ def make_tools(
                 )
             return f"[File not found: {p}]"
         try:
-            lines = p.read_text(errors="replace").splitlines()[:max_lines]
+            if offset < 1:
+                return "[Invalid offset: use a 1-based line number]"
+            max_lines = max(1, min(int(max_lines), 1000))
+            with p.open(encoding="utf-8", errors="replace") as handle:
+                window = list(islice(handle, offset - 1, offset - 1 + max_lines + 1))
+            has_more = len(window) > max_lines
+            lines = [line.rstrip("\r\n") for line in window[:max_lines]]
             result = "\n".join(lines)
-            if len(lines) == max_lines:
-                result += f"\n\n… [showing first {max_lines} lines]"
+            if not lines:
+                return f"[No content at or after line {offset}]"
+            if has_more:
+                end = offset + len(lines) - 1
+                result += f"\n\n… [showing lines {offset}-{end}; use offset={end + 1} to continue]"
             return result
         except Exception as exc:
             return f"[Error reading {p}: {exc}]"
 
     @tool
-    def list_files(directory: str = ".") -> str:
-        """List files and sub-directories in a directory."""
+    def list_files(directory: str = ".", offset: int = 1, max_entries: int = 50) -> str:
+        """List a directory with a 1-based offset and bounded page size."""
         p = _resolve_workspace_path(directory)
         if _read_denied(p):
             return f"[Access denied: {p.name} is a protected directory]"
         if not p.is_dir():
             return f"[Not a directory: {p}]"
-        entries = sorted(p.iterdir())
-        lines: list[str] = []
-        shown = 0
-        for e in entries:
+        if offset < 1:
+            return "[Invalid offset: use a 1-based entry number]"
+        max_entries = max(1, min(int(max_entries), 200))
+        entries: list[Path] = []
+        for e in sorted(p.iterdir()):
             if is_name_denied(e.name):
                 continue
             if e.name in {".scout-cache", ".scout-executions"}:
                 continue
             if e.is_dir() and e.name.lower() in {".ssh", ".gnupg", ".aws", ".docker", ".scout", ".git"}:
                 continue
+            entries.append(e)
+        page = entries[offset - 1:offset - 1 + max_entries]
+        lines: list[str] = []
+        for e in page:
             prefix = "📁 " if e.is_dir() else "   "
             lines.append(f"{prefix}{e.name}")
-            shown += 1
-            if shown >= 50:
-                break
         result = "\n".join(lines) or "(empty)"
-        if len(entries) > shown:
-            result += "\n… (more entries)"
+        next_offset = offset + len(page)
+        if next_offset <= len(entries):
+            result += f"\n… [more entries; use offset={next_offset} to continue]"
         return result
 
     @tool
-    def search_documents(query: str, path: str = "", top_k: int = 5) -> str:
-        """Search indexed workspace documents (text, Markdown, JSON, CSV, PDF).
+    def search_workspace(query: str, path: str = "", top_k: int = 5) -> str:
+        """BM25 lexical search across workspace text, Markdown, JSON, CSV, and PDF.
 
         Uses the shared BM25 index over the workspace. Pass *query* with keywords
         to match. Optionally pass *path* (workspace path, relative path, or
@@ -300,9 +236,8 @@ def make_tools(
 
         chunks = retriever.search(query, top_k=top_k, source_file=source_file)
         if not chunks:
-            return _fallback_search_documents(
-                query, top_k=top_k, path_filter=source_file or path.strip()
-            )
+            scope = f" in '{path.strip()}'" if path.strip() else ""
+            return f"(no matching workspace content found{scope})"
 
         parts: list[str] = []
         for i, c in enumerate(chunks, 1):
@@ -443,7 +378,7 @@ def make_tools(
     tools = [
         *shell_tools, run_node,
         *memory_tools, *skill_tools, *perm_tools,
-        read_file, list_files, search_documents, think, ask_user_choice,
+        read_file, list_files, search_workspace, think, ask_user_choice,
         present_files,
     ]
     if not disable_write_tools:

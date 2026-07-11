@@ -9,6 +9,7 @@ Part of the Scout agent framework.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import base64
 import re
@@ -24,6 +25,7 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
+    RemoveMessage,
 )
 from ..artifacts import describe_artifact, html_artifact_warning
 from ..path_display import redact_paths, sanitize_artifacts
@@ -45,9 +47,36 @@ PromotionApprovalFn = ApprovalFn
 _EXECUTION_TOOLS = frozenset({
     "run_shell", "exec_command", "write_stdin", "run_node",
 })
+_PARALLEL_READ_TOOLS = frozenset({
+    "read_file", "list_files", "search_workspace",
+    "memory_search", "memory_read", "memory_list",
+    "skill_list", "skill_read",
+})
 _MAX_CHANGE_BYTES = 2_000_000
 
 logger = logging.getLogger(__name__)
+
+
+def bounded_text(text: object, max_chars: int, *, marker: str = "characters omitted") -> str:
+    """Bound text while retaining conclusions and errors commonly found at the tail."""
+    value = text if isinstance(text, str) else str(text or "")
+    if len(value) <= max_chars:
+        return value
+    # Favor the beginning for command context, while reserving enough tail for
+    # exit summaries, tracebacks, totals, and final structured output.
+    marker_budget = 80
+    content_budget = max(2, max_chars - marker_budget)
+    tail_chars = max(1, content_budget // 3)
+    head_chars = max(1, content_budget - tail_chars)
+    omitted = len(value) - head_chars - tail_chars
+    separator = f"\n\n… [{omitted:,} {marker}] …\n\n"
+    # Account for the exact marker length so the hard bound remains true.
+    overflow = head_chars + tail_chars + len(separator) - max_chars
+    if overflow > 0:
+        head_chars = max(1, head_chars - overflow)
+        omitted = len(value) - head_chars - tail_chars
+        separator = f"\n\n… [{omitted:,} {marker}] …\n\n"
+    return value[:head_chars] + separator + value[-tail_chars:]
 
 
 # Models sometimes prefix options with MCQ letters ("A: Paris", "Option B) Lyon",
@@ -176,6 +205,7 @@ def _init_chat_model(
     temperature: float,
     *,
     client_kwargs: dict[str, str] | None = None,
+    max_retries: int = 2,
 ) -> BaseChatModel:
     """Initialise a LangChain chat model from a LiteLLM-style model string.
 
@@ -184,7 +214,12 @@ def _init_chat_model(
     ``openai/gpt-4o``, ``anthropic/claude-3.5-sonnet``).
     """
     from langchain_litellm import ChatLiteLLM
-    return ChatLiteLLM(model=model, temperature=temperature, **(client_kwargs or {}))
+    return ChatLiteLLM(
+        model=model,
+        temperature=temperature,
+        max_retries=max_retries,
+        **(client_kwargs or {}),
+    )
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -316,6 +351,14 @@ def _compress_messages(
 
     if not old_messages:
         return messages
+    if (
+        len(old_messages) == 1
+        and isinstance(old_messages[0], SystemMessage)
+        and old_messages[0].additional_kwargs.get("scout_context_summary")
+    ):
+        # The prefix is already compacted and no additional messages have
+        # aged out of the recent window. Reuse it verbatim.
+        return messages
 
     # Build a condensed text representation of old messages
     summary_parts: list[str] = []
@@ -331,12 +374,12 @@ def _compress_messages(
             if any(isinstance(item, dict) and item.get("type") in {"image", "image_url"} for item in raw_content):
                 content += " [image attached]"
         else:
-            content = str(raw_content)[:500]
+            content = bounded_text(raw_content, 500)
         if isinstance(m, AIMessage) and m.tool_calls:
             tool_names = [tc["name"] for tc in m.tool_calls]
             summary_parts.append(f"[assistant called: {', '.join(tool_names)}]")
         elif isinstance(m, ToolMessage):
-            summary_parts.append(f"[tool result ({m.name}): {content[:200]}…]")
+            summary_parts.append(f"[tool result ({m.name}): {bounded_text(content, 200)}]")
         elif content.strip():
             summary_parts.append(f"[{role}]: {content}")
 
@@ -362,7 +405,10 @@ def _compress_messages(
         logger.warning("Compression LLM call failed: %s — using raw trim", exc)
         summary_text = old_text[:1500] + "\n…[truncated]"
 
-    compressed = SystemMessage(content=f"[Conversation summary]\n{summary_text}")
+    compressed = SystemMessage(
+        content=f"[Conversation summary]\n{summary_text}",
+        additional_kwargs={"scout_context_summary": True},
+    )
 
     result = []
     if system_msg:
@@ -424,6 +470,7 @@ def build_graph(
         model_name,
         agent_config.temperature,
         client_kwargs=llm_client_kwargs,
+        max_retries=agent_config.provider_max_retries,
     )
     llm_with_tools = llm.bind_tools(tools)
 
@@ -442,19 +489,62 @@ def build_graph(
         messages = state["messages"]
         last_ai = messages[-1]
 
+        # Match Codex's opt-in parallelism: only a narrow set of side-effect-
+        # free tools can overlap, and hooks force serialization because they
+        # may block or rewrite arguments. asyncio.gather preserves protocol
+        # result order even when individual reads finish out of order.
+        calls = list(last_ai.tool_calls)
+        if (
+            len(calls) > 1
+            and not hooks_enabled
+            and all(tc.get("name") in _PARALLEL_READ_TOOLS for tc in calls)
+        ):
+            async def run_parallel_read(tc: dict) -> ToolMessage:
+                tool_name = tc["name"]
+                tool_id = tc["id"]
+                tool_args = dict(tc.get("args", {}))
+                tool_fn = _tools_by_name.get(tool_name)
+                if tool_fn is None:
+                    output = f"[Unknown tool: {tool_name}]"
+                else:
+                    try:
+                        output = await tool_fn.ainvoke(tool_args)
+                    except TypeError:
+                        output = await asyncio.to_thread(tool_fn.invoke, tool_args)
+                    except Exception as exc:
+                        output = f"[Tool error: {exc}]"
+                content = redact_paths(
+                    str(output) if output is not None else "",
+                    data_dir or cwd or ".",
+                    shared_dir,
+                )
+                return ToolMessage(
+                    content=bounded_text(content, _MAX_TOOL_RESULT_CHARS),
+                    name=tool_name,
+                    tool_call_id=tool_id,
+                )
+
+            return {"messages": list(await asyncio.gather(*(
+                run_parallel_read(tc) for tc in calls
+            )))}
+
         results: list[ToolMessage] = []
-        for tc in last_ai.tool_calls:
+        for tc in calls:
             tool_name = tc["name"]
             tool_args = dict(tc.get("args", {}))
             tool_id = tc["id"]
 
-            pre = run_hook(
-                "PreToolUse",
-                {"tool_name": tool_name, "tool_input": tool_args},
-                personal_dir=personal_dir,
-                server_mode=server_mode,
-                enabled=hooks_enabled,
-            )
+            if hooks_enabled:
+                pre = await asyncio.to_thread(
+                    run_hook,
+                    "PreToolUse",
+                    {"tool_name": tool_name, "tool_input": tool_args},
+                    personal_dir=personal_dir,
+                    server_mode=server_mode,
+                    enabled=True,
+                )
+            else:
+                pre = run_hook("PreToolUse", {}, enabled=False)
             if pre.blocked:
                 results.append(ToolMessage(
                     content=f"[BLOCKED BY HOOK] {pre.message}",
@@ -651,7 +741,7 @@ def build_graph(
                 try:
                     output = await tool_fn.ainvoke(tool_args)
                 except TypeError:
-                    output = tool_fn.invoke(tool_args)
+                    output = await asyncio.to_thread(tool_fn.invoke, tool_args)
                 except Exception as exc:
                     output = f"[Tool error: {exc}]"
                 if tool_name in _EXECUTION_TOOLS and execution_service is not None:
@@ -667,19 +757,17 @@ def build_graph(
             for change_set in file_changes:
                 change_set["created_at"] = ""
             if len(content) > _MAX_TOOL_RESULT_CHARS:
-                content = (
-                    content[:_MAX_TOOL_RESULT_CHARS]
-                    + f"\n\n… [output truncated at {_MAX_TOOL_RESULT_CHARS} chars — "
-                    f"use .head()/.describe() for large DataFrames]"
-                )
+                content = bounded_text(content, _MAX_TOOL_RESULT_CHARS)
 
-            run_hook(
-                "PostToolUse",
-                {"tool_name": tool_name, "tool_input": tool_args, "tool_output": content},
-                personal_dir=personal_dir,
-                server_mode=server_mode,
-                enabled=hooks_enabled,
-            )
+            if hooks_enabled:
+                await asyncio.to_thread(
+                    run_hook,
+                    "PostToolUse",
+                    {"tool_name": tool_name, "tool_input": tool_args, "tool_output": content},
+                    personal_dir=personal_dir,
+                    server_mode=server_mode,
+                    enabled=True,
+                )
 
             extra = {}
             if artifacts:
@@ -697,11 +785,17 @@ def build_graph(
 
     def agent_node(state: AgentState) -> dict:
         """Call the LLM with the current messages (after optional compression)."""
-        messages = list(state["messages"])
+        state_messages = list(state["messages"])
+        messages = list(state_messages)
         iteration = state.get("iteration", 0)
+        compacted = False
 
         # ── Inject system prompt if not present ──────────────────────
-        if not messages or not isinstance(messages[0], SystemMessage):
+        if (
+            not messages
+            or not isinstance(messages[0], SystemMessage)
+            or messages[0].additional_kwargs.get("scout_context_summary")
+        ):
             messages.insert(0, SystemMessage(content=system_prompt))
 
         # ── Auto-compress if over threshold ──────────────────────────
@@ -719,7 +813,9 @@ def build_graph(
                 server_mode=server_mode,
                 enabled=hooks_enabled,
             )
+            previous_messages = messages
             messages = _compress_messages(messages, model_name, keep_recent, llm)
+            compacted = messages is not previous_messages
 
         # ── LLM call with error handling ────────────────────────────
         try:
@@ -824,12 +920,33 @@ def build_graph(
                 usage_metadata=response.usage_metadata,
             )
 
+        if compacted:
+            # Replace the graph's full prefix with the exact compacted model
+            # context. Re-added recent messages receive fresh reducer IDs so
+            # their order follows the summary rather than their old positions.
+            removals = [
+                RemoveMessage(id=message.id)
+                for message in state_messages
+                if getattr(message, "id", None)
+            ]
+            compacted_state = [
+                message.model_copy(update={"id": None})
+                for message in messages[1:]  # current system prompt is rebuilt per graph
+            ]
+            return {
+                "messages": [*removals, *compacted_state, response],
+                "iteration": iteration + 1,
+            }
         return {"messages": [response], "iteration": iteration + 1}
 
     def wrap_up_node(state: AgentState) -> dict:
         """Produce a final tool-free response after all pending tools complete."""
         messages = list(state["messages"])
-        if not messages or not isinstance(messages[0], SystemMessage):
+        if (
+            not messages
+            or not isinstance(messages[0], SystemMessage)
+            or messages[0].additional_kwargs.get("scout_context_summary")
+        ):
             messages.insert(0, SystemMessage(content=system_prompt))
         _assert_tool_history_complete(messages)
         messages.append(SystemMessage(content=(

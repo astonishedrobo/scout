@@ -39,7 +39,7 @@ function summarize(step: ToolStep): string {
     if (code.length > 1 || (code[0]?.length ?? 0) > MAX_ARGS_WIDTH) s += "…";
     return s;
   }
-  if (name === "search_documents") {
+  if (name === "search_workspace") {
     const q = String(args?.query ?? "");
     const p = String(args?.path ?? "");
     return p ? `${q} · ${p}` : q;

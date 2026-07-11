@@ -97,6 +97,12 @@ class ExecStdinPayload(BaseModel):
     tool_call_id: str = ""
 
 
+class ExecCancelPayload(BaseModel):
+    execution_id: str
+    user_id: str
+    session_id: str
+
+
 class _ManagedSession:
     def __init__(self, session: PersistentSandboxSession, user_id: str, session_id: str) -> None:
         self.session = session
@@ -589,6 +595,25 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             "artifacts": resp.artifacts,
         }
 
+    @app.post("/exec/cancel")
+    async def cancel_exec(
+        request: Request,
+        authorization: str | None = Header(None),
+    ):
+        body = await request.body()
+        payload = ExecCancelPayload.model_validate_json(body)
+        _auth_request(request, authorization, body, payload.user_id)
+        mgr = _unified_mgr()
+        if mgr is None:
+            raise HTTPException(status_code=503, detail="Unified exec unavailable")
+        cancelled = await asyncio.to_thread(
+            mgr.cancel_execution,
+            payload.execution_id,
+            payload.user_id,
+            payload.session_id,
+        )
+        return {"status": "ok", "cancelled": cancelled}
+
     @app.get("/exec/stream/{execution_id}")
     async def exec_stream(
         execution_id: str,
@@ -601,9 +626,11 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
 
         def _generate():
             import json
-            for chunk in mgr.iter_stream(execution_id, timeout=0.3):
-                yield json.dumps({"chunk": chunk}) + "\n"
-            mgr.unregister_stream(execution_id)
+            try:
+                for chunk in mgr.iter_stream(execution_id, timeout=0.3):
+                    yield json.dumps({"chunk": chunk}) + "\n"
+            finally:
+                mgr.unregister_stream(execution_id)
 
         return StreamingResponse(_generate(), media_type="application/x-ndjson")
 

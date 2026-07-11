@@ -28,6 +28,27 @@ def test_proxy_evicts_and_reloads_index_on_demand(tmp_path: Path):
     assert proxy.is_resident is True
 
 
+def test_proxy_defers_capacity_callback_until_actual_search(tmp_path: Path):
+    (tmp_path / "notes.md").write_text("lazy searchable content")
+    callbacks = []
+    proxy = RetrieverProxy(
+        [tmp_path], AppConfig(), before_rebuild=lambda: callbacks.append("capacity")
+    )
+
+    proxy.touch()
+    assert callbacks == []
+    assert proxy.is_resident is False
+
+    assert proxy.search("searchable")
+    assert callbacks == ["capacity"]
+    proxy.search("content")
+    assert callbacks == ["capacity"]
+
+    proxy.mark_dirty()
+    proxy.search("content")
+    assert callbacks == ["capacity", "capacity"]
+
+
 def test_config_free_json_is_searchable(tmp_path: Path):
     (tmp_path / "records.json").write_text(
         '[{"city": "Pune", "signal": "monsoon"}, {"city": "Delhi", "signal": "heat"}]'
@@ -111,7 +132,7 @@ def test_proxy_search_forwards_source_file_filter(tmp_path: Path):
     assert all(c.source_file == "keep.md" for c in hits)
 
 
-def test_search_documents_tool_path_limits_to_one_file(tmp_path: Path):
+def test_search_workspace_tool_path_limits_to_one_file(tmp_path: Path):
     from scout.agent.tools import make_tools
 
     (tmp_path / "alpha.md").write_text("shared_keyword only in alpha story")
@@ -119,7 +140,7 @@ def test_search_documents_tool_path_limits_to_one_file(tmp_path: Path):
     retriever = BM25Retriever(AppConfig(), workspace_roots=[tmp_path])
     tools = {t.name: t for t in make_tools(retriever, str(tmp_path))}
     assert "read_pdf" not in tools
-    search = tools["search_documents"]
+    search = tools["search_workspace"]
 
     all_hits = search.invoke({"query": "shared_keyword", "top_k": 5})
     assert "alpha.md" in all_hits and "beta.md" in all_hits
@@ -129,3 +150,24 @@ def test_search_documents_tool_path_limits_to_one_file(tmp_path: Path):
     )
     assert "beta.md" in scoped
     assert "alpha.md" not in scoped
+
+
+def test_search_workspace_does_not_route_around_bm25(tmp_path: Path):
+    from scout.agent.tools import make_tools
+
+    class EmptyRetriever:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def search(self, query, top_k=5, *, source_file=None):
+            self.calls.append((query, top_k, source_file))
+            return []
+
+    (tmp_path / "literal.txt").write_text("needle appears literally", encoding="utf-8")
+    retriever = EmptyRetriever()
+    tools = {t.name: t for t in make_tools(retriever, str(tmp_path))}
+
+    result = tools["search_workspace"].invoke({"query": "needle"})
+
+    assert result == "(no matching workspace content found)"
+    assert retriever.calls == [("needle", 5, None)]

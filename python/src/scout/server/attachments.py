@@ -47,7 +47,7 @@ def build_attachment_notes(file_paths: list[str]) -> str:
 
 
 def _handle_pdf(p: Path, size_str: str) -> str:
-    """PDF: count pages, suggest search_documents with path filter."""
+    """PDF: count pages, suggest search_workspace with path filter."""
     page_count = "?"
     try:
         import fitz
@@ -58,7 +58,7 @@ def _handle_pdf(p: Path, size_str: str) -> str:
     return (
         f"[Attached: {p.name} (PDF, {page_count} pages, {size_str})] "
         f"Path: {p}\n"
-        f"Use `search_documents` with query keywords and path=`{p.name}` "
+        f"Use `search_workspace` with query keywords and path=`{p.name}` "
         f"to search this document (PDFs are indexed with other workspace files)."
     )
 
@@ -121,7 +121,7 @@ def _handle_json(p: Path, size_str: str) -> str:
                     f"Path: {p}\n"
                     f"Top keys: [{key_str}]\n"
                     f"Use `exec_command` with `python` (pandas is preinstalled) to explore, or "
-                    f"`search_documents` if it's indexed."
+                    f"`search_workspace` if it's indexed."
                 )
             return (
                 f"[Attached: {p.name} (JSON array, {n} items, {size_str})] "
@@ -154,7 +154,7 @@ def _handle_text(p: Path, size_str: str) -> str:
     return (
         f"[Attached: {p.name} (Text, {line_count} lines, {size_str})] "
         f"Path: {p}\n"
-        f"Use `read_file` to view, or `search_documents` if indexed."
+        f"Use `read_file` to view, or `search_workspace` if indexed."
     )
 
 

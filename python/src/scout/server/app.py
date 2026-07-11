@@ -29,6 +29,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -198,6 +199,14 @@ class SessionMessageRequest(BaseModel):
 # ── Session store helpers (matches Node.js JSONL format) ─────────────────
 
 SESSIONS_ROOT = Path.home() / ".config" / "scout" / "sessions"
+_SESSION_META_CACHE_MAX = 2048
+_session_meta_cache: OrderedDict[Path, tuple[int, int, dict | None]] = OrderedDict()
+_session_meta_cache_lock = threading.Lock()
+_session_file_locks = tuple(threading.RLock() for _ in range(64))
+
+
+def _session_file_lock(path: Path) -> threading.RLock:
+    return _session_file_locks[hash(str(path.resolve())) % len(_session_file_locks)]
 
 def _project_hash(cwd: str) -> str:
     return hashlib.sha256(str(Path(cwd).resolve()).encode()).hexdigest()[:12]
@@ -213,22 +222,32 @@ def _now_iso() -> str:
 
 
 def _set_session_title(session_path: Path, title: str) -> None:
-    text = session_path.read_text(encoding="utf-8")
-    lines = text.split("\n")
-    header = json.loads(lines[0])
-    header["title"] = title
-    lines[0] = json.dumps(header)
-    session_path.write_text("\n".join(lines), encoding="utf-8")
+    _update_session_header(session_path, title=title)
 
 
 def _update_session_header(session_path: Path, **updates: Any) -> dict:
-    text = session_path.read_text(encoding="utf-8")
-    lines = text.split("\n")
-    header = json.loads(lines[0])
-    header.update(updates)
-    lines[0] = json.dumps(header)
-    session_path.write_text("\n".join(lines), encoding="utf-8")
-    return header
+    from ..atomic_io import atomic_write_text
+
+    with _session_file_lock(session_path):
+        text = session_path.read_text(encoding="utf-8")
+        lines = text.split("\n")
+        header = json.loads(lines[0])
+        header.update(updates)
+        lines[0] = json.dumps(header)
+        atomic_write_text(session_path, "\n".join(lines))
+        return header
+
+
+def _append_session_entry(session_path: Path, entry: dict[str, Any]) -> None:
+    with _session_file_lock(session_path):
+        with session_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
+
+def _read_session_header(session_path: Path) -> dict:
+    with _session_file_lock(session_path):
+        with session_path.open(encoding="utf-8") as handle:
+            return json.loads(handle.readline())
 
 
 def _title_context(session_path: Path, assistant_response: str | None = None) -> dict:
@@ -257,17 +276,20 @@ async def _run_title_job(
     client_kwargs: dict[str, str] | None = None,
 ) -> None:
     try:
-        header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
+        header = await asyncio.to_thread(_read_session_header, session_path)
         if header.get("title") not in LEGACY_DEFAULT_TITLES:
             return
-        context = _title_context(session_path, assistant_response)
-        _update_session_header(
+        context = await asyncio.to_thread(_title_context, session_path, assistant_response)
+        await asyncio.to_thread(
+            _update_session_header,
             session_path, titleGenerationStatus="pending",
             titleGenerationAttempts=0, titleGenerationLastError=None,
         )
         title = DEFAULT_SESSION_TITLE
         for attempt in range(1, max_attempts + 1):
-            _update_session_header(session_path, titleGenerationAttempts=attempt)
+            await asyncio.to_thread(
+                _update_session_header, session_path, titleGenerationAttempts=attempt
+            )
             title = await generate_session_title(
                 context["message"], model=model,
                 assistant_response=context["assistant_response"],
@@ -277,20 +299,22 @@ async def _run_title_job(
             if title not in LEGACY_DEFAULT_TITLES:
                 break
             logger.info("Session title attempt %d/%d failed", attempt, max_attempts)
-        header = json.loads(session_path.read_text(encoding="utf-8").split("\n")[0])
+        header = await asyncio.to_thread(_read_session_header, session_path)
         if header.get("title") not in LEGACY_DEFAULT_TITLES:
             return
         if title in LEGACY_DEFAULT_TITLES:
             title = fallback_title(**context)
             logger.info("Using deterministic session title fallback: %s", title)
-        _update_session_header(
+        await asyncio.to_thread(
+            _update_session_header,
             session_path, title=title, titleGenerationStatus="completed",
             titleGenerationLastError=None,
         )
         logger.info("Session title updated: %s", title)
     except Exception as exc:
         if session_path.exists():
-            _update_session_header(
+            await asyncio.to_thread(
+                _update_session_header,
                 session_path, titleGenerationStatus="failed",
                 titleGenerationLastError=type(exc).__name__,
             )
@@ -349,6 +373,72 @@ def _parse_session_file(path: Path) -> dict | None:
         },
         "messages": messages,
     }
+
+
+def _parse_session_meta(path: Path) -> dict | None:
+    """Read only session-list metadata, cached until the JSONL file changes."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    cache_key = path.resolve()
+    signature = (stat.st_mtime_ns, stat.st_size)
+    with _session_meta_cache_lock:
+        cached = _session_meta_cache.get(cache_key)
+        if cached and cached[:2] == signature:
+            _session_meta_cache.move_to_end(cache_key)
+            return dict(cached[2]) if cached[2] is not None else None
+
+    meta: dict | None = None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            first = handle.readline()
+            header = json.loads(first)
+            if header.get("type") != "header":
+                raise ValueError("not a session header")
+            updated_at = header.get("createdAt", "")
+            message_count = 0
+            for raw in handle:
+                if not raw.strip():
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") in {"user", "assistant"}:
+                    message_count += 1
+                    updated_at = entry.get("timestamp", updated_at)
+            meta = {
+                "sessionId": header["sessionId"],
+                "projectDir": header.get("projectDir", ""),
+                "title": header.get("title", DEFAULT_SESSION_TITLE),
+                "createdAt": header.get("createdAt", ""),
+                "updatedAt": updated_at,
+                "messageCount": message_count,
+                "model": header.get("model"),
+                "parentSessionId": header.get("parentSessionId"),
+                "forkPointIndex": header.get("forkPointIndex"),
+                "titleGenerationStatus": header.get("titleGenerationStatus"),
+            }
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        meta = None
+
+    with _session_meta_cache_lock:
+        _session_meta_cache[cache_key] = (*signature, dict(meta) if meta is not None else None)
+        _session_meta_cache.move_to_end(cache_key)
+        while len(_session_meta_cache) > _SESSION_META_CACHE_MAX:
+            _session_meta_cache.popitem(last=False)
+    return meta
+
+
+def _list_session_metadata(session_dir: Path) -> list[dict]:
+    sessions = [
+        meta
+        for path in session_dir.iterdir()
+        if path.suffix == ".jsonl" and (meta := _parse_session_meta(path)) is not None
+    ]
+    sessions.sort(key=lambda session: session.get("updatedAt", ""), reverse=True)
+    return sessions
 
 
 def _hash_file(path: Path) -> str | None:
@@ -447,6 +537,7 @@ def create_app(
             self.active_permission_profile: str | None = None
             self.created_at = time.monotonic()
             self.last_activity = self.created_at
+            self.requires_vision = False
 
         def touch(self) -> None:
             self.last_activity = time.monotonic()
@@ -524,7 +615,7 @@ def create_app(
         if not config.session_titles.enabled or not session_path.exists():
             return
         try:
-            header = json.loads(session_path.read_text(encoding="utf-8").splitlines()[0])
+            header = _read_session_header(session_path)
         except Exception:
             logger.warning("Could not inspect session for title generation", exc_info=True)
             return
@@ -615,9 +706,11 @@ def create_app(
                     workspace_roots=[personal, shared],
                     config=config,
                     build_semaphore=_state["retriever_build_semaphore"],
+                    before_rebuild=lambda: _evict_retriever_indexes(
+                        exclude_user=uid, reserve=1,
+                    ),
                 )
             proxy = _state["retrievers"][uid]
-            proxy.touch()
             return proxy
 
     def _evict_retriever_indexes(*, exclude_user: str | None = None, reserve: int = 0) -> dict:
@@ -723,11 +816,16 @@ def create_app(
                 from ..agent import ScoutAgent
                 from ..agent.file_guard import WorkspaceGuard
 
+                async def _req_perms(reason: str, domains: list[str]) -> str:
+                    return await _permission_elevation_callback(
+                        session_id, user_id, reason, domains,
+                    )
+
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
                 if session_path.exists():
                     try:
-                        session_model = json.loads(session_path.read_text(encoding="utf-8").splitlines()[0]).get("model")
+                        session_model = _read_session_header(session_path).get("model")
                     except Exception:
                         pass
                 if _state["multi_user"] and user is not None:
@@ -759,6 +857,7 @@ def create_app(
                         grant_store=_state["grant_store"],
                         profile=perm_profile,
                         config=agent_config,
+                        request_permissions_fn=_req_perms,
                     )
                 else:
                     agent_config = _base_config_copy()
@@ -775,6 +874,7 @@ def create_app(
                         server_mode=False,
                         grant_store=_state["grant_store"],
                         config=agent_config,
+                        request_permissions_fn=_req_perms,
                     )
                 s = SessionState(agent, agent_config.agent.model)
                 snap = load_session_snapshot(_session_dir(_session_cwd(user_id), user_id), session_id)
@@ -790,14 +890,13 @@ def create_app(
                 if snap and snap.get("exec_rules") and agent._execution and agent._execution._orchestrator:
                     agent._execution._orchestrator._session_exec_rules = list(snap["exec_rules"])
 
-                async def _req_perms(reason: str, domains: list[str]) -> str:
-                    return await _permission_elevation_callback(
-                        session_id, user_id, reason, domains,
-                    )
-
-                agent.set_request_permissions_fn(_req_perms)
                 parsed = _parse_session_file(session_path) if session_path.exists() else None
                 if parsed and parsed.get("messages"):
+                    s.requires_vision = any(
+                        image_paths(message.get("attachments")) or message.get("chatImages")
+                        for message in parsed["messages"]
+                        if message.get("role") == "user"
+                    )
                     _hydrate_agent_history(
                         agent,
                         parsed["messages"],
@@ -1299,7 +1398,7 @@ def create_app(
             for path in SESSIONS_ROOT.glob("*/*/*.jsonl"):
                 try:
                     parsed = _parse_session_file(path)
-                    header = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+                    header = _read_session_header(path)
                     if (
                         parsed and header.get("title") in LEGACY_DEFAULT_TITLES
                         and any(m["role"] == "assistant" for m in parsed["messages"])
@@ -1335,7 +1434,7 @@ def create_app(
         password = req.get("password")
         if not username or not password:
             raise HTTPException(status_code=400, detail="Username and password required")
-        user = create_user(username, password)
+        user = await asyncio.to_thread(create_user, username, password)
         if not user:
             raise HTTPException(status_code=400, detail="Username already registered")
         return {"status": "ok", "user": {"id": user["id"], "username": user["username"], "is_admin": bool(user.get("is_admin", False))}}
@@ -1346,8 +1445,11 @@ def create_app(
             raise HTTPException(status_code=400, detail="Multi-user not enabled")
         username = req.get("username")
         password = req.get("password")
-        user = get_user_by_username(username)
-        if not user or not verify_password(password, user["hashed_password"]):
+        user = await asyncio.to_thread(get_user_by_username, username)
+        password_valid = user and await asyncio.to_thread(
+            verify_password, password, user["hashed_password"]
+        )
+        if not password_valid:
             raise HTTPException(status_code=401, detail="Incorrect username or password")
         
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -1372,18 +1474,12 @@ def create_app(
                 },
             )
 
-        # Rebuild BM25 index for this user if files changed since last chat
-        proxy = _get_or_create_proxy(uid)
-        if proxy is not None:
-            _evict_retriever_indexes(exclude_user=str(uid), reserve=1)
-            await asyncio.to_thread(proxy.rebuild_if_dirty)
-
         agent.set_focus_from_attachments(req.attachments or None)
 
         # Build enriched message with attachment metadata
         message = req.message
         if req.attachments:
-            notes = build_attachment_notes(req.attachments)
+            notes = await asyncio.to_thread(build_attachment_notes, req.attachments)
             if notes:
                 message = f"{message}\n\n{notes}"
 
@@ -1401,16 +1497,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Chat image not found")
         images = image_paths(req.attachments) + private_images
         session_path = _session_file(_session_cwd(uid), req.session_id, uid)
-        session_requires_vision = False
-        if session_path.exists():
-            try:
-                session_requires_vision = any(
-                    image_paths(json.loads(line).get("attachments")) or json.loads(line).get("chat_images")
-                    for line in session_path.read_text(encoding="utf-8").splitlines()[1:]
-                    if line.strip()
-                )
-            except Exception:
-                logger.debug("Could not inspect session vision state", exc_info=True)
+        session_requires_vision = s.requires_vision
         overrides = getattr(cfg, "model_capabilities", None)
         overrides = overrides if isinstance(overrides, dict) else {}
         vision = model_vision_support(s.model, overrides)
@@ -1425,13 +1512,17 @@ def create_app(
                     "vision": vision,
                 },
             )
-        run_hook(
-            "UserPromptSubmit",
-            {"session_id": req.session_id, "message": message[:500]},
-            personal_dir=personal,
-            server_mode=_state["multi_user"],
-            enabled=cfg.hooks.enabled,
-        )
+        if images:
+            s.requires_vision = True
+        if cfg.hooks.enabled:
+            await asyncio.to_thread(
+                run_hook,
+                "UserPromptSubmit",
+                {"session_id": req.session_id, "message": message[:500]},
+                personal_dir=personal,
+                server_mode=_state["multi_user"],
+                enabled=True,
+            )
 
         retry_after = _state["base_config"].server.request_queue_timeout_seconds
         turn_key = (str(uid), req.session_id)
@@ -1502,7 +1593,10 @@ def create_app(
             event_count = 0
 
             stream_task: asyncio.Task | None = None
-            agent_events: asyncio.Queue = asyncio.Queue()
+            # Bound the final agent-to-SSE bridge as well as execution output.
+            # A slow browser then backpressures the producer instead of growing
+            # this queue for the lifetime of a long tool-heavy turn.
+            agent_events: asyncio.Queue = asyncio.Queue(maxsize=256)
             first_assistant_response: str | None = None
 
             def session_event(payload: dict) -> dict:
@@ -2052,15 +2146,7 @@ def create_app(
         if not sdir.is_dir():
             return {"sessions": []}
 
-        sessions = []
-        for f in sdir.iterdir():
-            if f.suffix != ".jsonl":
-                continue
-            parsed = _parse_session_file(f)
-            if parsed:
-                sessions.append(parsed["meta"])
-
-        sessions.sort(key=lambda s: s.get("updatedAt", ""), reverse=True)
+        sessions = await asyncio.to_thread(_list_session_metadata, sdir)
         return {"sessions": sessions}
 
     @app.post("/sessions")
@@ -2264,8 +2350,13 @@ def create_app(
         path = _session_file(_session_cwd(uid), session_id, uid)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Session not found")
-        _set_session_title(path, title)
-        _update_session_header(path, titleGenerationStatus="completed", titleGenerationLastError=None)
+        await asyncio.to_thread(
+            _update_session_header,
+            path,
+            title=title,
+            titleGenerationStatus="completed",
+            titleGenerationLastError=None,
+        )
         return {"title": title}
 
     @app.put("/sessions/{session_id}/model")
@@ -2284,11 +2375,7 @@ def create_app(
         config = _effective_config(personal, uid)
         if req.model not in config.llm.get_all_models():
             raise HTTPException(status_code=400, detail={"code": "UNKNOWN_MODEL", "message": "Model is not configured."})
-        text = path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        header = json.loads(lines[0])
-        header["model"] = req.model
-        path.write_text("\n".join([json.dumps(header), *lines[1:]]) + "\n", encoding="utf-8")
+        await asyncio.to_thread(_update_session_header, path, model=req.model)
         key = (str(uid), session_id)
         state = _state["sessions"].get(key)
         if state:
@@ -2448,13 +2535,12 @@ def create_app(
         if req.role == "assistant" and req.stopped:
             entry["stopped"] = True
 
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        await asyncio.to_thread(_append_session_entry, path, entry)
 
         if req.role == "assistant":
             personal = user_workspace(_state["workspace_root"], uid) if _state["multi_user"] else Path(_state["cwd"])
             cfg = _effective_config(personal, uid)
-            header = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+            header = _read_session_header(path)
             _schedule_title_job(
                 path, model=req.model or header.get("model") or cfg.agent.model,
                 config=cfg, assistant_response=req.content,

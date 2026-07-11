@@ -235,6 +235,15 @@ class AgentConfig(BaseModel):
             "request is retried without tools."
         ),
     )
+    provider_max_retries: int = Field(
+        2,
+        ge=0,
+        le=5,
+        description=(
+            "Bounded retries performed by the model client for transient "
+            "connection, timeout, and provider 5xx failures."
+        ),
+    )
 
 
 class JSONSourceConfig(BaseModel):

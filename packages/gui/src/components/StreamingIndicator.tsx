@@ -16,8 +16,8 @@ function humanToolName(name: string) {
       return "Reading file";
     case "list_files":
       return "Checking files";
-    case "search_documents":
-      return "Searching documents";
+    case "search_workspace":
+      return "Searching workspace";
     case "exec_command":
       return "Running command";
     case "run_node":

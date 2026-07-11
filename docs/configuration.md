@@ -119,6 +119,7 @@ Add a provider under `llm.providers`, then choose one of its model IDs under `ag
 ```yaml
 agent:
   model: openai/gpt-5-mini
+  provider_max_retries: 2
 
 llm:
   providers:
@@ -132,6 +133,8 @@ Set its API key outside the YAML:
 ```bash
 export OPENAI_API_KEY="your-key"
 ```
+
+`provider_max_retries` bounds automatic retries for transient connection, timeout, and provider 5xx failures. Rate-limit responses retain their explicit `Retry-After` handling instead of being retried indefinitely. Keep this value small to avoid multiplying latency or API usage during an outage.
 
 For Docker, put the same value in `.env`:
 

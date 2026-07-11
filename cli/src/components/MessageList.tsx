@@ -5,7 +5,7 @@
  *
  *   ╭─────────────────────────────────╮
  *   │ ✓ run_code  import pandas …    │
- *   │ ✓ search_documents  climate …  │
+ *   │ ✓ search_workspace  climate …  │
  *   ╰─────────────────────────────────╯
  *   3 tool steps — press Tab to expand
  *   ✦ Assistant response in markdown…

@@ -19,4 +19,12 @@ def test_agent_chat_model_passes_client_kwargs():
         "temperature": 0.7,
         "api_key": "local-vllm",
         "api_base": "http://vllm:8000/v1",
+        "max_retries": 2,
     }
+
+
+def test_agent_chat_model_allows_bounded_retry_override():
+    with patch("langchain_litellm.ChatLiteLLM") as chat_model:
+        _init_chat_model("openai/test", 0.2, max_retries=0)
+
+    assert chat_model.call_args.kwargs["max_retries"] == 0

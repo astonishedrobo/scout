@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -68,6 +69,8 @@ class ExecutionService:
         self._init_error: str | None = None
         self._last_result: ToolExecutionResult | None = None
         self._output_sink: asyncio.Queue | None = None
+        self._output_loop: asyncio.AbstractEventLoop | None = None
+        self._output_schedule_slots = threading.BoundedSemaphore(256)
         self._active_tool_call_id: str = ""
 
         if self._backend is not None:
@@ -97,23 +100,50 @@ class ExecutionService:
 
         def _on_chunk(tool_call_id: str, process_id: int, chunk: str) -> None:
             tc = tool_call_id or self._active_tool_call_id
-            if self._output_sink is not None:
+            event = {
+                "type": "tool_output_chunk",
+                "tool_call_id": tc,
+                "process_id": process_id,
+                "chunk": chunk,
+                "name": "exec_command",
+            }
+            sink = self._output_sink
+            loop = self._output_loop
+            if sink is None or loop is None:
+                return
+            try:
+                if asyncio.get_running_loop() is loop:
+                    try:
+                        sink.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+                    return
+            except RuntimeError:
+                pass
+            if self._output_schedule_slots.acquire(blocking=False):
                 try:
-                    self._output_sink.put_nowait({
-                        "type": "tool_output_chunk",
-                        "tool_call_id": tc,
-                        "process_id": process_id,
-                        "chunk": chunk,
-                        "name": "exec_command",
-                    })
-                except asyncio.QueueFull:
-                    pass
+                    loop.call_soon_threadsafe(self._enqueue_output, sink, event)
+                except RuntimeError:
+                    self._output_schedule_slots.release()
 
         if hasattr(self._backend, "set_output_chunk_callback"):
             self._backend.set_output_chunk_callback(_on_chunk)
 
     def set_output_sink(self, sink: asyncio.Queue | None) -> None:
         self._output_sink = sink
+        if sink is None:
+            self._output_loop = None
+            return
+        self._output_loop = asyncio.get_running_loop()
+
+    def _enqueue_output(self, sink: asyncio.Queue, event: dict) -> None:
+        try:
+            if self._output_sink is sink:
+                sink.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+        finally:
+            self._output_schedule_slots.release()
 
     def set_active_tool_call_id(self, tool_call_id: str) -> None:
         self._active_tool_call_id = tool_call_id

@@ -5,7 +5,7 @@ is active.  This is defense-in-depth: even if the sandbox fails to
 initialize (e.g. missing socat/bwrap), these rules still apply.
 
 The guard is enforced at the tool layer -- every tool that touches
-the filesystem (read_file, list_files, search_documents) checks
+the filesystem (read_file, list_files, search_workspace) checks
 paths through this module before proceeding.
 
 In multi-user mode, a WorkspaceGuard instance is injected into each

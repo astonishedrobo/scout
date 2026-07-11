@@ -139,6 +139,31 @@ def test_worker_auth_replay_rejected(monkeypatch):
         )
 
 
+def test_invalid_worker_signature_does_not_consume_nonce(monkeypatch):
+    from fastapi import HTTPException
+    from scout.execution import worker_auth
+
+    secret = "scout-worker-test-secret"
+    monkeypatch.setenv("SCOUT_WORKER_SECRET", secret)
+    payload = {"user_id": "invalid-signature-test"}
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    headers = sign_request_body(payload, secret=secret)
+    nonce = headers["X-Scout-Nonce"]
+    worker_auth._SEEN_NONCES.pop(nonce, None)
+
+    with pytest.raises(HTTPException, match="Invalid signature"):
+        verify_signed_request(
+            authorization=f"Bearer {secret}", body=body,
+            signature="0" * 64, timestamp=headers["X-Scout-Timestamp"], nonce=nonce,
+        )
+
+    verify_signed_request(
+        authorization=f"Bearer {secret}", body=body,
+        signature=headers["X-Scout-Signature"],
+        timestamp=headers["X-Scout-Timestamp"], nonce=nonce,
+    )
+
+
 @pytest.mark.asyncio
 async def test_proxy_blocks_direct_ip():
     proxy = EgressProxy(allowed_domains={"example.com"}, port=0)

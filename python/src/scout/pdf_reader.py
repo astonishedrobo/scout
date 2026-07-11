@@ -8,7 +8,7 @@ This module provides two capabilities:
 
 2. **extract_pdf_text()** — In-memory extraction for batch conversion
    and offline use.  Workspace search goes through the shared BM25
-   index via ``search_documents`` (optional ``path`` filter), not a
+   index via ``search_workspace`` (optional ``path`` filter), not a
    separate PDF tool.
 
 Two parser backends are supported (selectable via ``config.yaml``):
@@ -422,7 +422,7 @@ def search_pdf_text(
 ) -> list[str]:
     """BM25-search over in-memory PDF text, returning the top-k chunks.
 
-    Prefer ``search_documents`` (shared workspace BM25 + optional path).
+    Prefer ``search_workspace`` (shared workspace BM25 + optional path).
     This helper is for offline/ad-hoc extraction paths only.
     """
     from .text_splitter import OverlappingTextSplitter
@@ -437,7 +437,7 @@ def search_pdf_text(
         return []
 
     # Match the workspace retriever tokenizer / BM25Plus scorer so fallback
-    # rankings stay consistent with search_documents when possible.
+    # rankings stay consistent with search_workspace when possible.
     tokenized = [re.findall(r"[a-z0-9]+", c.lower()) for c in chunks]
     # Drop empty token lists so BM25Plus does not see zero-length docs.
     kept = [(chunk, toks) for chunk, toks in zip(chunks, tokenized) if toks]

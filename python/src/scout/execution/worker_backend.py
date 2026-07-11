@@ -187,6 +187,13 @@ class WorkerExecutionBackend:
             )
             resp.raise_for_status()
             data = resp.json()
+        except asyncio.CancelledError:
+            cancel_task = asyncio.create_task(self._cancel_exec(request))
+            try:
+                await asyncio.shield(cancel_task)
+            except (asyncio.CancelledError, httpx.HTTPError):
+                logger.warning("Failed to cancel worker execution %s", request.execution_id)
+            raise
         except httpx.HTTPError as exc:
             return UnifiedExecResponse(
                 output="",
@@ -219,6 +226,27 @@ class WorkerExecutionBackend:
             ],
             artifacts=data.get("artifacts", []),
         )
+
+    async def _cancel_exec(self, request: UnifiedExecCommandRequest) -> None:
+        payload = {
+            "execution_id": request.execution_id,
+            "user_id": request.user_id,
+            "session_id": request.session_id,
+        }
+        # The cancellation RPC can race worker-side process registration.
+        # Retry briefly; this is internal traffic and never re-runs a command.
+        for attempt in range(5):
+            response = await self._client.post(
+                f"{self._worker_url}/exec/cancel",
+                content=json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                headers=self._headers(payload),
+                timeout=5,
+            )
+            response.raise_for_status()
+            if response.json().get("cancelled", 0) > 0:
+                return
+            if attempt < 4:
+                await asyncio.sleep(0.1)
 
     async def write_stdin(self, request: UnifiedExecStdinRequest) -> UnifiedExecResponse:
         payload = {

@@ -27,6 +27,8 @@ from .network_setup import IsolatedNetwork, IsolatedNetworkManager, network_isol
 from .sandbox_probe import probe_sandbox_isolation
 
 logger = logging.getLogger(__name__)
+_STREAM_QUEUE_MAX_CHUNKS = 256
+_STREAM_REGISTRATION_TIMEOUT_SECONDS = 10.0
 
 MIN_YIELD_TIME_MS = 250
 MAX_YIELD_TIME_MS = 30_000
@@ -112,14 +114,13 @@ class HeadTailBuffer:
         self._data = bytearray()
         self._lock = threading.Lock()
 
-    def append(self, chunk: bytes) -> str:
+    def append(self, chunk: bytes) -> None:
         with self._lock:
             self._data.extend(chunk)
             if len(self._data) > self._max:
                 half = self._max // 2
                 tail = self._max // 4
                 self._data = self._data[:half] + b"\n...[truncated]...\n" + self._data[-tail:]
-            return self._data.decode("utf-8", errors="replace")
 
     def snapshot(self) -> bytes:
         with self._lock:
@@ -170,22 +171,34 @@ class UnifiedExecManager:
         self._next_id = 1
         self._scoped: dict[str, set[int]] = {}
         self._stream_queues: dict[str, queue.Queue[str | None]] = {}
+        self._stream_condition = threading.Condition(self._lock)
 
     def set_chunk_callback(self, callback: OutputChunkCallback | None) -> None:
         self._on_chunk = callback
 
     def register_stream(self, execution_id: str) -> queue.Queue[str | None]:
-        q: queue.Queue[str | None] = queue.Queue()
-        self._stream_queues[execution_id] = q
-        return q
+        with self._stream_condition:
+            q = self._stream_queues.get(execution_id)
+            if q is None:
+                q = queue.Queue(maxsize=_STREAM_QUEUE_MAX_CHUNKS)
+                self._stream_queues[execution_id] = q
+            self._stream_condition.notify_all()
+            return q
 
     def unregister_stream(self, execution_id: str) -> None:
-        self._stream_queues.pop(execution_id, None)
+        with self._stream_condition:
+            self._stream_queues.pop(execution_id, None)
 
     def iter_stream(self, execution_id: str, *, timeout: float = 0.5) -> Iterator[str]:
-        q = self._stream_queues.get(execution_id)
-        if q is None:
-            return
+        deadline = time.monotonic() + _STREAM_REGISTRATION_TIMEOUT_SECONDS
+        with self._stream_condition:
+            q = self._stream_queues.get(execution_id)
+            while q is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                self._stream_condition.wait(timeout=remaining)
+                q = self._stream_queues.get(execution_id)
         while True:
             try:
                 item = q.get(timeout=timeout)
@@ -207,7 +220,8 @@ class UnifiedExecManager:
     def _emit_chunk(self, entry: _ProcessEntry, delta: str) -> None:
         if not delta:
             return
-        stream_q = self._stream_queues.get(entry.execution_id)
+        with self._lock:
+            stream_q = self._stream_queues.get(entry.execution_id)
         if stream_q is not None:
             try:
                 stream_q.put_nowait(delta)
@@ -268,7 +282,7 @@ class UnifiedExecManager:
                     if not chunk:
                         entry.output_notify.set()
                         break
-                    text = entry.buffer.append(chunk)
+                    entry.buffer.append(chunk)
                     self._emit_chunk(entry, chunk.decode("utf-8", errors="replace"))
                     entry.output_notify.set()
                 except OSError:
@@ -430,6 +444,22 @@ class UnifiedExecManager:
         if entry.net and entry.net_mgr:
             entry.net_mgr.destroy(entry.net)
 
+    @staticmethod
+    def _finish_stream(stream_q: queue.Queue[str | None] | None) -> None:
+        if stream_q is None:
+            return
+        try:
+            stream_q.put_nowait(None)
+        except queue.Full:
+            try:
+                stream_q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                stream_q.put_nowait(None)
+            except queue.Full:
+                pass
+
     def exec_command(self, request: UnifiedExecCommandRequest) -> UnifiedExecResponse:
         with self._lock:
             if len(self._processes) >= self._config.max_unified_exec_processes:
@@ -460,7 +490,8 @@ class UnifiedExecManager:
             key = self._scope_key(request.user_id, request.session_id)
             self._scoped.setdefault(key, set()).add(process_id)
 
-        stream_q = self._stream_queues.get(request.execution_id)
+        with self._lock:
+            stream_q = self._stream_queues.get(request.execution_id)
         yield_ms = clamp_yield_time(request.yield_time_ms)
         raw = self._collect_until(entry, yield_ms)
         wall = time.time() - start
@@ -471,8 +502,7 @@ class UnifiedExecManager:
             entry.reader_thread.join(timeout=1.0)
             changed_files, artifacts = _changes_and_artifacts(entry)
             self._finish_entry(entry)
-            if stream_q is not None:
-                stream_q.put(None)
+            self._finish_stream(stream_q)
             return UnifiedExecResponse(
                 output=format_tool_response(
                     text,
@@ -547,9 +577,9 @@ class UnifiedExecManager:
             exec_id = entry.execution_id
             changed_files, artifacts = _changes_and_artifacts(entry)
             self._finish_entry(entry)
-            stream_q = self._stream_queues.get(exec_id)
-            if stream_q is not None:
-                stream_q.put(None)
+            with self._lock:
+                stream_q = self._stream_queues.get(exec_id)
+            self._finish_stream(stream_q)
             return UnifiedExecResponse(
                 output=format_tool_response(
                     text,
@@ -581,6 +611,19 @@ class UnifiedExecManager:
     def get_entry(self, process_id: int) -> _ProcessEntry | None:
         with self._lock:
             return self._processes.get(process_id)
+
+    def cancel_execution(self, execution_id: str, user_id: str, session_id: str) -> int:
+        """Terminate processes owned by one cancelled agent tool call."""
+        with self._lock:
+            entries = [
+                entry for entry in self._processes.values()
+                if entry.execution_id == execution_id
+                and entry.user_id == user_id
+                and entry.session_id == session_id
+            ]
+        for entry in entries:
+            self._finish_entry(entry)
+        return len(entries)
 
     def close_session(self, session_id: str) -> None:
         with self._lock:

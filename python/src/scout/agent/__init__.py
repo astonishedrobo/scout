@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage
 
 from ..config import AppConfig, load_config
 from ..retriever import BM25Retriever, RetrieverProxy
@@ -85,7 +85,7 @@ def _tool_arg_summary(name: str, args: dict) -> str:
         return f"wrote `{args.get('path', '?')}`"
     if name == "list_files":
         return f"listed `{args.get('directory', '.')}`"
-    if name == "search_documents":
+    if name == "search_workspace":
         q = args.get("query", "?")
         p = args.get("path") or ""
         return f"query: {q} in `{p}`" if p else f"query: {q}"
@@ -146,6 +146,21 @@ def _message_text(content: object) -> str:
     return str(content or "")
 
 
+def _apply_message_delta(
+    history: list,
+    additions: list,
+    removed_message_ids: set[str],
+) -> list:
+    """Apply a streamed LangGraph replacement delta to persistent history."""
+    if removed_message_ids:
+        history = [
+            message for message in history
+            if getattr(message, "id", None) not in removed_message_ids
+        ]
+    history.extend(additions)
+    return history
+
+
 class ScoutAgent:
     """Conversational data research agent backed by the execution sandbox."""
 
@@ -167,6 +182,7 @@ class ScoutAgent:
         shared_dir: Path | None = None,
         grant_store: CapabilityGrantStore | None = None,
         profile: ProfileConfig | None = None,
+        request_permissions_fn: Any | None = None,
     ) -> None:
         self._cwd = str(Path(cwd or os.getcwd()).resolve())
         self._guard = guard
@@ -229,7 +245,7 @@ class ScoutAgent:
                 shell_enabled=profile.shell_enabled,
                 personal_write=profile.personal_write,
             )
-        self._request_permissions_fn = None
+        self._request_permissions_fn = request_permissions_fn
 
         # Legacy session fallback only in local mode with explicit insecure opt-in.
         self._session: PersistentPythonSession | None = None
@@ -405,12 +421,15 @@ class ScoutAgent:
         from .multimodal import build_human_message
         self._messages.append(build_human_message(user_message, attachments))
         new_messages: list = []
+        removed_message_ids: set[str] = set()
         response_emitted = False
         last_ai_content = ""
         tool_steps: list[tuple[str, dict, str]] = []
         _pending_calls: dict[str, dict[str, Any]] = {}
 
-        output_q: asyncio.Queue = asyncio.Queue()
+        # Live output is best-effort and bounded. The final ToolMessage still
+        # contains the worker's bounded head/tail output under backpressure.
+        output_q: asyncio.Queue = asyncio.Queue(maxsize=256)
         graph_q: asyncio.Queue = asyncio.Queue()
         if self._execution:
             self._execution.set_output_sink(output_q)
@@ -435,8 +454,26 @@ class ScoutAgent:
             nonlocal last_ai_content, response_emitted
             events: list[dict[str, Any]] = []
             for _node_name, state_update in chunk.items():
-                for msg in state_update.get("messages", []):
+                delta_messages = state_update.get("messages", [])
+                replacement_delta = any(
+                    isinstance(message, RemoveMessage) for message in delta_messages
+                )
+                visible_delta_count = sum(
+                    not isinstance(message, RemoveMessage) for message in delta_messages
+                )
+                visible_delta_index = 0
+                for msg in delta_messages:
+                    if isinstance(msg, RemoveMessage):
+                        if msg.id:
+                            removed_message_ids.add(msg.id)
+                        continue
+                    visible_delta_index += 1
                     new_messages.append(msg)
+                    # A compaction update contains removals, replayed compacted
+                    # context, then the newly sampled response. Persist the
+                    # replayed context but do not emit duplicate UI events.
+                    if replacement_delta and visible_delta_index < visible_delta_count:
+                        continue
                     if isinstance(msg, AIMessage):
                         user_input_request = msg.additional_kwargs.get("user_input_request")
                         if user_input_request:
@@ -563,7 +600,9 @@ class ScoutAgent:
                 content = last_ai_content or _build_tool_summary(tool_steps)
                 yield {"type": "response", "content": content}
 
-            self._messages.extend(new_messages)
+            self._messages = _apply_message_delta(
+                self._messages, new_messages, removed_message_ids
+            )
             committed = True
         except ProviderRateLimitError:
             # Drop the user turn that never got a model reply.
@@ -574,7 +613,9 @@ class ScoutAgent:
             # Keep partial progress on tool/model errors (not rate-limit).
             if not committed:
                 _seal_pending_tools()
-                self._messages.extend(new_messages)
+                self._messages = _apply_message_delta(
+                    self._messages, new_messages, removed_message_ids
+                )
                 committed = True
             if not response_emitted and tool_steps:
                 yield {"type": "response", "content": _build_tool_summary(tool_steps)}
@@ -588,7 +629,9 @@ class ScoutAgent:
             # async generators — always seal partial history so Stop keeps context.
             if not committed and not discard_turn:
                 _seal_pending_tools()
-                self._messages.extend(new_messages)
+                self._messages = _apply_message_delta(
+                    self._messages, new_messages, removed_message_ids
+                )
                 committed = True
 
     def reset(self) -> None:

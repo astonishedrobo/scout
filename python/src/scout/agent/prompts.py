@@ -31,9 +31,9 @@ TOOL_DESCRIPTIONS = {
     "write_file": "**`write_file`** — Create or overwrite a text file with a clear approval preview.",
     "write_binary_artifact": "**`write_binary_artifact`** — Save valid base64-encoded binary output supplied by a trusted source. For generated images, prefer writing the file directly from a script or execution tool.",
     "present_files": "**`present_files`** — Queue existing workspace file(s) as openable cards for the user. Use when they should *view* a file you are not currently editing. Writes/edits already surface cards automatically — do not re-present those unless asked. Does not modify files.",
-    "read_file": "**`read_file`** — Read file contents.",
-    "list_files": "**`list_files`** — List directory contents.",
-    "search_documents": "**`search_documents`** — Keyword search across indexed text, Markdown, JSON, CSV, and PDF files. Optional `path` limits the search to one file (including PDFs). Prefer this over shell/grep for document retrieval.",
+    "read_file": "**`read_file`** — Read text file contents. Use 1-based `offset` and bounded `max_lines` to page through large files.",
+    "list_files": "**`list_files`** — List directory contents. Use 1-based `offset` and bounded `max_entries` for large directories.",
+    "search_workspace": "**`search_workspace`** — BM25-ranked lexical search across workspace text, Markdown, JSON, CSV, and PDF files. Optional `path` limits retrieval to one file (including PDFs).",
     "ask_user_choice": "**`ask_user_choice`** — Ask the user a structured question in the UI. Use it for explicit interactive MCQs/quizzes, pick-one decisions, and genuinely blocking choices. Include `options` for multiple-choice questions; each option label is the answer text itself (\"Paris\"), never a letter like \"A\", and descriptions are optional — omit them when they'd repeat the label.",
     "think": "**`think`** — Name the next tool phase and optionally narrate it. `title` is a short phase label for the tool-activity card (e.g. `Plan demo`, `Inspect workspace`). `content` is normal user-visible prose shown in the main transcript (not a private panel).",
     "memory_search": "**`memory_search`** — Search long-term memory when workspace history or prior decisions matter.",
@@ -161,7 +161,7 @@ For non-trivial tasks, work like an effective agent:
 
 ## Tool Choice Rules
 
-- Use `read_file`, `list_files`, and `search_documents` before shell commands when they answer the question directly. For PDFs and other indexed documents, use `search_documents` (with optional `path` to focus on one file) — there is no separate PDF tool.
+- Use `read_file`, `list_files`, and `search_workspace` before shell commands when they answer the question directly. `search_workspace` always uses BM25 lexical ranking; use its optional `path` to focus on one file, including PDFs.
 - Use `exec_command` for scripts, tests, package-managed runs, shell inspection, and anything where process isolation matters.
 - Use `write_file`, `apply_patch`, or execution-created files for durable outputs. Do not paste long generated files into chat when an artifact is better.
 - Use `present_files` when the user should open an existing file in the UI without you rewriting it. Edits already surface cards; presentation is for show/share/view requests.
@@ -490,7 +490,7 @@ def build_manifest(
     # 4) Text / Markdown files (just list them)
     text_files = sorted(_safe_scan("*.txt") + _safe_scan("*.md"))
     if text_files:
-        parts.append("**Text / Markdown documents** (searchable via `search_documents`):\n")
+        parts.append("**Text / Markdown documents** (searchable via `search_workspace`):\n")
         for tf in text_files:
             try:
                 rel = tf.relative_to(root)
