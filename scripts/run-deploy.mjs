@@ -12,8 +12,30 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const pkg = join(root, "packages", "scout");
-const entry = join(pkg, "dist", "index.js");
+const packages = {
+  core: join(root, "packages", "core"),
+  cli: join(root, "packages", "cli"),
+  scout: join(root, "packages", "scout"),
+};
+const entry = join(packages.scout, "dist", "index.js");
+
+function ensureBuildDependencies() {
+  const compiler = join(root, "node_modules", ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+  if (existsSync(compiler)) return true;
+
+  process.stderr.write("TypeScript is missing; installing the workspace development dependencies…\n");
+  const install = spawnSync("npm", ["install", "--include=dev"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (install.status !== 0 || !existsSync(compiler)) {
+    process.stderr.write(
+      "Unable to find tsc. Run `npm install --include=dev` from the repository root, then retry `npm run deploy`.\n",
+    );
+    return false;
+  }
+  return true;
+}
 
 function newestMtime(dir) {
   let newest = 0;
@@ -24,16 +46,26 @@ function newestMtime(dir) {
   return newest;
 }
 
-const stale =
-  !existsSync(entry) ||
-  Math.max(newestMtime(join(pkg, "src")), statSync(join(pkg, "tsconfig.json")).mtimeMs) > statSync(entry).mtimeMs;
+const buildTargets = [
+  ["build:core", packages.core],
+  ["build:cli", packages.cli],
+  ["build:scout", packages.scout],
+];
+
+const stale = buildTargets.some(([, pkg]) => {
+  const output = join(pkg, "dist", "index.js");
+  return !existsSync(output) || newestMtime(join(pkg, "src")) > statSync(output).mtimeMs || statSync(join(pkg, "tsconfig.json")).mtimeMs > statSync(output).mtimeMs;
+});
 
 if (stale) {
-  const build = spawnSync("npm", ["run", "-s", "build:scout"], { cwd: root, encoding: "utf8" });
-  if (build.status !== 0) {
-    process.stdout.write(build.stdout ?? "");
-    process.stderr.write(build.stderr ?? "");
-    process.exit(build.status ?? 1);
+  if (!ensureBuildDependencies()) process.exit(1);
+  for (const [script] of buildTargets) {
+    const build = spawnSync("npm", ["run", "-s", script], { cwd: root, encoding: "utf8" });
+    if (build.status !== 0) {
+      process.stdout.write(build.stdout ?? "");
+      process.stderr.write(build.stderr ?? "");
+      process.exit(build.status ?? 1);
+    }
   }
 }
 
