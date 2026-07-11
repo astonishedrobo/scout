@@ -124,6 +124,15 @@ function composeCommand(): [string, string[]] | null {
   return null;
 }
 
+function supportsBuildx(): boolean {
+  const result = spawnSync("docker", ["buildx", "version"], { encoding: "utf8" });
+  if (result.status !== 0) return false;
+  const match = `${result.stdout}${result.stderr}`.match(/v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return false;
+  const [, major, minor] = match.map(Number);
+  return major! > 0 || minor! >= 17;
+}
+
 function hasNvidiaRuntime(): boolean {
   const result = spawnSync("docker", ["info", "--format", "{{json .Runtimes.nvidia}}"], { encoding: "utf8" });
   return result.status === 0 && result.stdout.trim() !== "" && result.stdout.trim() !== "null";
@@ -275,7 +284,12 @@ function compose(root: string, args: string[]): void {
   const command = composeCommand();
   if (!command) throw new Error("Docker Compose is unavailable.");
   const [binary, prefix] = command;
-  if (spawnSync(binary, [...prefix, ...args], { cwd: root, stdio: "inherit" }).status !== 0) throw new Error(`${binary} ${args.join(" ")} failed.`);
+  const building = args[0] === "build" || args.includes("--build");
+  const env = building && !supportsBuildx()
+    ? { ...process.env, DOCKER_BUILDKIT: "0", COMPOSE_DOCKER_CLI_BUILD: "0" }
+    : process.env;
+  if (building && !supportsBuildx()) console.log(`${C.yellow}Buildx < 0.17 detected; using Docker's classic builder for compatibility.${C.reset}`);
+  if (spawnSync(binary, [...prefix, ...args], { cwd: root, stdio: "inherit", env }).status !== 0) throw new Error(`${binary} ${args.join(" ")} failed.`);
 }
 
 export function runDeploymentAction(root: string, action: DeployAction, noCache = false): void {
