@@ -111,6 +111,7 @@ services:
       - ${SCOUT_WORKSPACE_ROOT:-./workspace}:/app/workspace
       - ./skills:/app/workspace/.scout/skills:ro
       - ./config/scout.yaml:/etc/scout/scout.yaml:ro
+      - ./config/mcp.yaml:/etc/scout/mcp.yaml:ro
     command:
       - python
       - -m
@@ -125,6 +126,8 @@ services:
       - "4200"
       - --serve-gui
       - /app/gui-dist/web
+      - --mcp-bootstrap
+      - /etc/scout/mcp.yaml
     environment:
       - SCOUT_SERVER_DEPLOYMENT=docker
       # ── LLM providers ────────────────────────────────────────────────────────

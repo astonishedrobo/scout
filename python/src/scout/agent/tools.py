@@ -43,6 +43,7 @@ def make_tools(
     request_permissions_fn=None,
     subagent_manager: "SubAgentManager | None" = None,
     is_subagent: bool = False,
+    external_tools: list | None = None,
 ) -> list:
     """Create tool functions, binding resources via closures.
 
@@ -525,4 +526,5 @@ def make_tools(
 
     if allowed_tools is not None:
         tools = [t for t in tools if t.name in allowed_tools]
+    tools.extend(external_tools or [])
     return tools

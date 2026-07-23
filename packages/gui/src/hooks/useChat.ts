@@ -11,7 +11,7 @@ export interface PermissionElevationPayload {
 
 export interface ApprovalRequest {
   approvalId: string;
-  kind: "file_changes" | "capability" | "execution_promotion" | "permission_elevation";
+  kind: "file_changes" | "capability" | "mcp_tool" | "execution_promotion" | "permission_elevation";
   toolName: string;
   diffs: FileDiffEntry[];
   capability?: CapabilityRequestPayload;

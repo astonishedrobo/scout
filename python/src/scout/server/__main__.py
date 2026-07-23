@@ -53,6 +53,7 @@ def main() -> None:
         default=None,
         help="Path to pre-built GUI static files to serve.",
     )
+    parser.add_argument("--mcp-bootstrap", default=os.environ.get("SCOUT_MCP_BOOTSTRAP_PATH"), help="Optional YAML file containing admin MCP server definitions.")
     args = parser.parse_args()
 
     multi_user = os.environ.get("SCOUT_SERVER_DEPLOYMENT", "").lower() == "docker"
@@ -82,6 +83,7 @@ def main() -> None:
         cwd=args.cwd,
         gui_static_dir=args.serve_gui,
         multi_user=multi_user,
+        mcp_bootstrap_path=args.mcp_bootstrap,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower())
 

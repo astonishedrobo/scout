@@ -196,6 +196,7 @@ class ScoutAgent:
         is_subagent: bool = False,
         parent_subagent_manager: SubAgentManager | None = None,
         on_subagent_complete: Any | None = None,
+        external_tools: list | None = None,
     ) -> None:
         self._cwd = str(Path(cwd or os.getcwd()).resolve())
         self._guard = guard
@@ -204,6 +205,7 @@ class ScoutAgent:
         self._server_mode = server_mode
         self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
         self._is_subagent = is_subagent
+        self._external_tools = list(external_tools or [])
         self._grant_store = grant_store
         self._capability_approval_callback = capability_approval_callback
         self._subagent_capability_approval = None
@@ -393,6 +395,7 @@ class ScoutAgent:
             request_permissions_fn=self._request_permissions_fn,
             subagent_manager=self._subagents if not self._is_subagent else None,
             is_subagent=self._is_subagent,
+            external_tools=self._external_tools,
         )
         system_prompt = build_system_prompt(
             self._data_dir,
@@ -434,6 +437,11 @@ class ScoutAgent:
     def set_model(self, model: str) -> None:
         """Switch models while preserving active conversation messages."""
         self._config.agent.model = model
+        self._rebuild_graph(focus_path=self._focus_path)
+
+    def set_external_tools(self, tools: list) -> None:
+        """Replace user-scoped MCP tools while preserving conversation state."""
+        self._external_tools = list(tools)
         self._rebuild_graph(focus_path=self._focus_path)
 
     def _record_memory_citations(self, text: str) -> None:

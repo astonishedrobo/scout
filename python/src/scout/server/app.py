@@ -21,11 +21,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import os as _os
 import re
 import shutil
+import socket
 import threading
 import time
 import traceback
@@ -34,6 +36,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile, File as FAFile
@@ -94,6 +97,8 @@ from ..memories import (
     save_memory_summary,
 )
 from ..memory_pipeline import schedule_memory_pipeline
+from ..mcp_manager import McpManager
+from ..mcp_store import McpStore
 from ..permissions import profile_from_user, resolve_profile
 from ..session_snapshot import copy_session_snapshot, load_session_snapshot, save_session_snapshot
 from .session_title import (
@@ -163,7 +168,7 @@ class ApprovalResponse(BaseModel):
     approval_id: str
     action: str       # "yes", "no", "suggest", "edit", "always", "shared", "allow_once", "allow_session", "deny"
     feedback: str = ""
-    kind: str = "file_changes"  # "file_changes" | "capability" | "permission_elevation"
+    kind: str = "file_changes"  # "file_changes" | "capability" | "mcp_tool" | "permission_elevation"
     save_execpolicy: bool = False
     execpolicy_prefix: str = ""
     execpolicy_scope: str = "session"
@@ -510,6 +515,7 @@ def create_app(
     cwd: str | Path | None = None,
     gui_static_dir: str | Path | None = None,
     multi_user: bool = False,
+    mcp_bootstrap_path: str | Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with a ScoutAgent instance.
 
@@ -576,6 +582,7 @@ def create_app(
             self.turn_metrics: list[dict[str, Any]] = []
             # Approvals while no /chat stream is open (background sub-agents).
             self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
+            self.mcp_revision: tuple[int, int] = (-1, -1)
 
         def touch(self) -> None:
             self.last_activity = time.monotonic()
@@ -626,6 +633,8 @@ def create_app(
         "pending_turns": set(),
         "session_registry_lock": threading.RLock(),
         "retriever_lock": threading.RLock(),
+        "mcp_store": McpStore(),
+        "mcp_manager": McpManager(),
     }
 
     def _load_base_config() -> AppConfig:
@@ -746,6 +755,25 @@ def create_app(
             or "Execution worker unavailable or isolation probe failed"
         )
         logger.error("Server mode execution sandbox unavailable: %s", _state["init_error"])
+
+    @app.on_event("startup")
+    async def _initialize_mcp_integrations() -> None:
+        """Warm configured remote MCP connections without making startup fatal."""
+        servers = _state["mcp_store"].list_servers()
+        remote = [s for s in servers if s["enabled"] and s["transport"] == "streamable_http"]
+        if not remote:
+            return
+        results = await asyncio.gather(
+            *(asyncio.wait_for(_state["mcp_manager"].connect(s["id"]), timeout=8) for s in remote),
+            return_exceptions=True,
+        )
+        for server, result in zip(remote, results):
+            if isinstance(result, Exception):
+                logger.warning("MCP %s skipped during startup: %s", server["id"], result)
+
+    @app.on_event("shutdown")
+    async def _close_mcp_integrations() -> None:
+        await _state["mcp_manager"].close()
 
     def _session_cwd(user_id: str | int) -> str:
         """Return the cwd to use for session storage and agent init."""
@@ -1017,7 +1045,7 @@ def create_app(
             name=f"scout-subagent-continue-{session_id}",
         )
 
-    def _create_session_state(session_id: str, user_id: str | int, user: User | None) -> SessionState:
+    def _create_session_state(session_id: str, user_id: str | int, user: User | None, external_tools: list | None = None) -> SessionState:
         """Construct one session state. Called in a bounded worker thread."""
         key = (str(user_id), session_id)
         if key not in _state["sessions"]:
@@ -1141,6 +1169,7 @@ def create_app(
                         config=agent_config,
                         request_permissions_fn=_req_perms,
                         on_subagent_complete=_on_subagent_complete,
+                        external_tools=external_tools,
                     )
                     if agent.subagent_manager is not None:
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
@@ -1161,6 +1190,7 @@ def create_app(
                         config=agent_config,
                         request_permissions_fn=_req_perms,
                         on_subagent_complete=_on_subagent_complete,
+                        external_tools=external_tools,
                     )
                     if agent.subagent_manager is not None:
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
@@ -1323,6 +1353,13 @@ def create_app(
         with _state["session_registry_lock"]:
             existing = _state["sessions"].get(key)
         if existing is not None:
+            current_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
+            if current_revision != existing.mcp_revision and not existing.is_busy:
+                tools = await _state["mcp_manager"].ensure_user_tools(
+                    user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                )
+                existing.agent.set_external_tools(tools)
+                existing.mcp_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
             existing.touch()
             return existing
 
@@ -1332,6 +1369,13 @@ def create_app(
             with _state["session_registry_lock"]:
                 existing = _state["sessions"].get(key)
             if existing is not None:
+                current_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
+                if current_revision != existing.mcp_revision and not existing.is_busy:
+                    tools = await _state["mcp_manager"].ensure_user_tools(
+                        user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                    )
+                    existing.agent.set_external_tools(tools)
+                    existing.mcp_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
                 existing.touch()
                 return existing
 
@@ -1389,12 +1433,18 @@ def create_app(
                         headers={"Retry-After": "5"},
                     ) from exc
                 try:
+                    external_tools = await _state["mcp_manager"].ensure_user_tools(
+                        user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                    )
+                    mcp_revision = _state["mcp_manager"].revision
                     state = await asyncio.to_thread(
                         _create_session_state,
                         session_id,
                         user_id,
                         user,
+                        external_tools,
                     )
+                    state.mcp_revision = (_state["mcp_store"].revision(), mcp_revision)
                 finally:
                     _state["agent_init_semaphore"].release()
             finally:
@@ -1444,6 +1494,198 @@ def create_app(
         if not user or not is_user_admin(user.id):
             raise HTTPException(status_code=403, detail="Admin privileges required")
         return user
+
+    def _validate_mcp_definition(body: dict[str, Any]) -> dict[str, Any]:
+        name = str(body.get("name") or "").strip()
+        server_id = str(body.get("id") or name.lower().replace(" ", "-")).strip()
+        transport = str(body.get("transport") or "streamable_http")
+        if not name or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", server_id):
+            raise HTTPException(status_code=400, detail="MCP id must be 2-64 lowercase characters")
+        if transport not in {"streamable_http", "container_stdio"}:
+            raise HTTPException(status_code=400, detail="Unsupported MCP transport")
+        url = str(body.get("url") or "").strip() or None
+        image = str(body.get("image") or "").strip() or None
+        if transport == "streamable_http" and (not url or not url.startswith(("http://", "https://"))):
+            raise HTTPException(status_code=400, detail="Remote MCP servers require an http(s) URL")
+        if transport == "streamable_http" and url:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if not host:
+                raise HTTPException(status_code=400, detail="MCP URL must include a hostname")
+            allow_private = _os.environ.get("SCOUT_MCP_ALLOW_PRIVATE_NETWORK", "").lower() in {"1", "true", "yes"}
+            blocked = host in {"localhost", "metadata.google.internal"} or host.endswith(".local")
+            try:
+                address = ipaddress.ip_address(host)
+                blocked = blocked or address.is_private or address.is_loopback or address.is_link_local
+            except ValueError:
+                if not allow_private:
+                    try:
+                        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+                        blocked = blocked or any(
+                            (address := ipaddress.ip_address(value)).is_private or address.is_loopback or address.is_link_local
+                            for value in addresses
+                        )
+                    except OSError:
+                        pass
+            if blocked and not allow_private:
+                raise HTTPException(status_code=400, detail="Private or local MCP endpoints are disabled")
+        if transport == "container_stdio" and (not image or "@sha256:" not in image):
+            raise HTTPException(status_code=400, detail="Container MCP servers require an image pinned by digest")
+        availability = str(body.get("availability") or "everyone")
+        if availability not in {"everyone", "selected"}:
+            raise HTTPException(status_code=400, detail="Invalid MCP availability")
+        return {
+            "id": server_id, "name": name, "transport": transport, "url": url, "image": image,
+            "command": body.get("command") or [], "args": body.get("args") or [],
+            "availability": availability, "enabled": bool(body.get("enabled", True)),
+            "auth_mode": str(body.get("auth_mode") or "none"),
+        }
+
+    # Deployment bootstrap uses exactly the same validation path as the admin
+    # API. Invalid or unreachable optional integrations never prevent Scout
+    # itself from starting.
+    if mcp_bootstrap_path:
+        bootstrap = Path(mcp_bootstrap_path)
+        if bootstrap.exists():
+            try:
+                raw = yaml.safe_load(bootstrap.read_text(encoding="utf-8")) or {}
+                items = raw.get("servers", raw) if isinstance(raw, dict) else raw
+                definitions = []
+                for item in items if isinstance(items, list) else []:
+                    try:
+                        definitions.append(_validate_mcp_definition(item))
+                    except HTTPException as exc:
+                        logger.warning("Skipping invalid MCP bootstrap entry: %s", exc.detail)
+                _state["mcp_store"].import_bootstrap(definitions)
+            except Exception:
+                logger.warning("Could not import MCP bootstrap file %s", bootstrap, exc_info=True)
+
+    @app.get("/admin/mcp/servers")
+    async def admin_mcp_servers(admin: User = Depends(require_admin)) -> dict:
+        servers = _state["mcp_store"].list_servers()
+        for server in servers:
+            server["health"] = _state["mcp_manager"].health().get(server["id"], {"status": "not_connected"})
+            server["tools"] = _state["mcp_store"].list_tools(server["id"], include_disabled=True)
+            server["assigned_user_ids"] = _state["mcp_store"].assigned_users(server["id"])
+            server["has_shared_credential"] = _state["mcp_store"].has_shared_credential(server["id"])
+        return {"servers": servers}
+
+    @app.post("/admin/mcp/servers")
+    async def admin_add_mcp_server(body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        definition = _validate_mcp_definition(body)
+        server = _state["mcp_store"].upsert_server(definition)
+        if body.get("shared_credential") is not None:
+            _state["mcp_store"].set_shared_credential(server["id"], str(body["shared_credential"]))
+        for uid in body.get("user_ids") or []:
+            _state["mcp_store"].set_user(server["id"], int(uid), enabled=False)
+        health = {"status": "saved"}
+        if server["transport"] == "streamable_http":
+            try:
+                health = await _state["mcp_manager"].refresh(server["id"])
+            except Exception as exc:
+                health = {"status": "unavailable", "error": str(exc)[:300]}
+        return {"server": server, "health": health, "tools": _state["mcp_store"].list_tools(server["id"])}
+
+    @app.patch("/admin/mcp/servers/{server_id}")
+    async def admin_update_mcp_server(server_id: str, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        current = _state["mcp_store"].get_server(server_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        definition = {**current, **body, "id": server_id}
+        definition = _validate_mcp_definition(definition)
+        server = _state["mcp_store"].upsert_server(definition)
+        if "shared_credential" in body:
+            _state["mcp_store"].set_shared_credential(server_id, body.get("shared_credential"))
+        if "enabled" in body:
+            _state["mcp_store"].set_server_enabled(server_id, bool(body["enabled"]))
+        health = {"status": "saved"}
+        try:
+            if not server["enabled"]:
+                await _state["mcp_manager"].disconnect(server_id)
+                health = {"status": "disabled"}
+            elif server["transport"] == "streamable_http":
+                health = await _state["mcp_manager"].refresh(server_id)
+        except Exception as exc:
+            health = {"status": "unavailable", "error": str(exc)[:300]}
+        return {"server": server, "health": health}
+
+    @app.delete("/admin/mcp/servers/{server_id}")
+    async def admin_delete_mcp_server(server_id: str, admin: User = Depends(require_admin)) -> dict:
+        if not _state["mcp_store"].delete_server(server_id):
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        await _state["mcp_manager"].disconnect(server_id)
+        return {"status": "deleted", "id": server_id}
+
+    @app.post("/admin/mcp/servers/{server_id}/refresh")
+    async def admin_refresh_mcp_server(server_id: str, admin: User = Depends(require_admin)) -> dict:
+        server = _state["mcp_store"].get_server(server_id)
+        if not server:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if server["transport"] == "container_stdio":
+            return {"health": {"status": "requires_user_connection"}, "tools": _state["mcp_store"].list_tools(server_id)}
+        try:
+            health = await _state["mcp_manager"].refresh(server_id)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"MCP connection failed: {exc}") from exc
+        return {"health": health, "tools": _state["mcp_store"].list_tools(server_id)}
+
+    @app.patch("/admin/mcp/servers/{server_id}/tools/{tool_name}")
+    async def admin_update_mcp_tool(server_id: str, tool_name: str, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        if not _state["mcp_store"].set_tool_policy(server_id, tool_name, enabled=body.get("enabled"), read_only=body.get("read_only")):
+            raise HTTPException(status_code=404, detail="MCP tool not found")
+        return {"tools": _state["mcp_store"].list_tools(server_id, include_disabled=True)}
+
+    @app.put("/admin/mcp/servers/{server_id}/users/{user_id}")
+    async def admin_set_mcp_user(server_id: str, user_id: int, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        server = _state["mcp_store"].get_server(server_id)
+        if not server:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if server["availability"] != "selected":
+            raise HTTPException(status_code=409, detail="User assignments apply only to selected integrations")
+        assigned = bool(body.get("assigned", body.get("enabled", False)))
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(user_id))
+        _state["mcp_store"].set_user_assignment(server_id, user_id, assigned)
+        return {"server_id": server_id, "user_id": user_id, "assigned": assigned}
+
+    @app.get("/mcp/integrations")
+    async def user_mcp_integrations(user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        result = []
+        for server in _state["mcp_store"].list_for_user(uid):
+            server["tools"] = _state["mcp_store"].list_tools(server["id"])
+            server["health"] = _state["mcp_manager"].health().get(server["id"], {"status": "not_connected"})
+            result.append(server)
+        return {"integrations": result}
+
+    @app.put("/mcp/integrations/{server_id}/enabled")
+    async def user_set_mcp_enabled(server_id: str, body: dict[str, Any], user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, enabled=bool(body.get("enabled", False)))
+        return {"status": "ok", "enabled": bool(body.get("enabled", False))}
+
+    @app.post("/mcp/integrations/{server_id}/credentials")
+    async def user_set_mcp_credentials(server_id: str, body: dict[str, Any], user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        credential = str(body.get("credential") or "").strip()
+        if not credential:
+            raise HTTPException(status_code=400, detail="credential is required")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, credential=credential, enabled=True)
+        return {"status": "ok", "connected": False}
+
+    @app.delete("/mcp/integrations/{server_id}/credentials")
+    async def user_delete_mcp_credentials(server_id: str, user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, credential="", enabled=False)
+        return {"status": "ok"}
 
     async def _wait_for_approval(
         s: SessionState,
@@ -1648,7 +1890,7 @@ def create_app(
         approval_id = str(uuid.uuid4())
         event_data = {
             "type": "approval_request",
-            "kind": "capability",
+            "kind": "mcp_tool" if cap.capability == "mcp_tool" else "capability",
             "approval_id": approval_id,
             "capability": {
                 "capability": cap.capability,

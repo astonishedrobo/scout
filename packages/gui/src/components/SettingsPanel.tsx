@@ -14,7 +14,7 @@ interface SettingsPanelProps {
   onClose: () => void;
 }
 
-type Tab = "general" | "models" | "memories";
+type Tab = "general" | "models" | "memories" | "integrations";
 
 interface ProviderState {
   name: string;
@@ -48,6 +48,9 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
   const [desktopEnvs, setDesktopEnvs] = useState<DesktopEnvOption[]>([]);
   const [selectedDesktopEnv, setSelectedDesktopEnv] = useState("");
   const [desktopEnvStatus, setDesktopEnvStatus] = useState("");
+  const [integrations, setIntegrations] = useState<any[]>([]);
+  const [integrationsError, setIntegrationsError] = useState("");
+  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
 
   // General tab state
   const [preferences, setPreferences] = useState("");
@@ -233,9 +236,38 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
     if (initialTab) setTab(initialTab);
   }, [initialTab, open]);
 
+  useEffect(() => {
+    if (!open || tab !== "integrations" || !isMultiUser) return;
+    fetch(`${baseUrl}/mcp/integrations`, { headers: authHeaders })
+      .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? "Could not load integrations."); return r.json(); })
+      .then((d) => { setIntegrations(d.integrations ?? []); setIntegrationsError(""); })
+      .catch((e) => setIntegrationsError(e.message));
+  }, [open, tab, baseUrl, token, isMultiUser]);
+
+  const toggleIntegration = async (integration: any) => {
+    const enabled = !integration.user_enabled;
+    const r = await fetch(`${baseUrl}/mcp/integrations/${integration.id}/enabled`, {
+      method: "PUT", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+    });
+    if (!r.ok) { setIntegrationsError((await r.json().catch(() => ({}))).detail ?? "Could not update integration."); return; }
+    setIntegrations((items) => items.map((item) => item.id === integration.id ? { ...item, user_enabled: enabled } : item));
+  };
+
+  const saveIntegrationCredential = async (integration: any) => {
+    const credential = credentialDrafts[integration.id]?.trim();
+    if (!credential) return;
+    const r = await fetch(`${baseUrl}/mcp/integrations/${integration.id}/credentials`, {
+      method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ credential }),
+    });
+    if (!r.ok) { setIntegrationsError((await r.json().catch(() => ({}))).detail ?? "Could not save credential."); return; }
+    setCredentialDrafts((items) => ({ ...items, [integration.id]: "" }));
+    setIntegrations((items) => items.map((item) => item.id === integration.id ? { ...item, user_enabled: true, has_credential: true } : item));
+  };
+
   const TABS: { id: Tab; label: string }[] = isMultiUser
     ? [
         { id: "general", label: "General" },
+        { id: "integrations", label: "Integrations" },
         { id: "memories", label: "Memories" },
       ]
     : [
@@ -362,6 +394,22 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                   </Button>
                 </div>
               </section>
+            </div>
+          )}
+          {tab === "integrations" && (
+            <div className="space-y-5 max-w-2xl">
+              <section>
+                <h2 className="text-[15px] font-semibold text-scout-text mb-1">Integrations</h2>
+                <p className="text-[13px] text-scout-muted">Enable tools your administrator has made available to your agent.</p>
+              </section>
+              {integrationsError && <p className="text-xs text-scout-error">{integrationsError}</p>}
+              {integrations.length === 0 ? <p className="text-[13px] text-scout-muted py-6">No integrations are available yet.</p> : integrations.map((integration) => (
+                <div key={integration.id} className="rounded-xl border border-scout-hairline-faint px-3.5 py-3 space-y-2">
+                  <div className="flex items-center gap-3"><div className="flex-1 min-w-0"><p className="text-sm font-medium text-scout-text">{integration.name}</p><p className="text-[11px] text-scout-muted truncate">{integration.transport === "container_stdio" ? "isolated container" : "remote"} · {integration.tools?.length ?? 0} tools · {integration.health?.status ?? "not connected"}{integration.has_credential ? " · credential saved" : ""}</p></div>
+                  <button onClick={() => toggleIntegration(integration)} className={`w-9 h-5 rounded-full transition-colors ${integration.user_enabled ? "bg-scout-success" : "bg-scout-hairline"}`} aria-label={`${integration.user_enabled ? "Disable" : "Enable"} ${integration.name}`}><span className={`block w-4 h-4 rounded-full bg-white transition-transform ${integration.user_enabled ? "translate-x-4" : "translate-x-0.5"}`} /></button></div>
+                  {integration.transport !== "container_stdio" && <div className="flex gap-2"><input type="password" value={credentialDrafts[integration.id] ?? ""} onChange={(e) => setCredentialDrafts((items) => ({ ...items, [integration.id]: e.target.value }))} placeholder={integration.has_credential ? "Replace saved credential" : "API token (optional)"} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" /><Button variant="outline" onClick={() => saveIntegrationCredential(integration)} disabled={!credentialDrafts[integration.id]?.trim()}>Save token</Button></div>}
+                </div>
+              ))}
             </div>
           )}
           {tab === "models" && (

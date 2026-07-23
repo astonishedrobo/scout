@@ -817,6 +817,9 @@ class SubAgentManager:
         # capability is stored only as wrapped form on parent sometimes —
         # use execution service's callback path via constructing similar wrappers.
         req_perm = getattr(parent, "_request_permissions_fn", None) if can_req else None
+        external_tools = list(getattr(parent, "_external_tools", []) or [])
+        if agent_type in READONLY_AGENT_TYPES:
+            external_tools = [t for t in external_tools if bool(getattr(t, "mcp_read_only", False))]
 
         async def tagged_approval(name, diffs, args):
             if parent_approval is None:
@@ -860,6 +863,7 @@ class SubAgentManager:
             capability_approval_callback=tagged_capability if parent_cap else None,
             request_permissions_fn=req_perm,
             is_subagent=True,
+            external_tools=external_tools,
         )
         # Tag child for server-side approval routing
         child._subagent_id = record.agent_id
