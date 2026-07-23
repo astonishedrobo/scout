@@ -634,15 +634,29 @@ export function useSubagents({
     upsertAgent,
   ]);
 
-  // Backup poll when disconnected
+  const hasLiveAgents = agents.some(
+    (agent) => agent.status === "pending" || agent.status === "running",
+  );
+
+  // Reconcile live workers from the authoritative session snapshot.  The event
+  // stream gives the panel low-latency updates, but a proxy/browser can keep a
+  // stale SSE connection open after a network change.  Without this check an
+  // agent that was stopped or completed by the parent chat could look "working"
+  // until the page was reloaded.  Poll only while work is live, so idle chats
+  // make no periodic request.
   useEffect(() => {
-    if (!enabled || !sessionId || connected) return;
+    if (!enabled || !sessionId || !hasLiveAgents) return;
+
+    // Start immediately: this closes the race between a parent tool call
+    // (for example stop_subagent) and its corresponding SSE lifecycle event.
+    void refreshList();
+    if (selectedIdRef.current) void loadDetail(selectedIdRef.current);
     const t = setInterval(() => {
       void refreshList();
       if (selectedIdRef.current) void loadDetail(selectedIdRef.current);
-    }, 3000);
+    }, connected ? 2000 : 1000);
     return () => clearInterval(t);
-  }, [connected, enabled, loadDetail, refreshList, sessionId]);
+  }, [connected, enabled, hasLiveAgents, loadDetail, refreshList, sessionId]);
 
   // While viewing a live agent, soft-refresh detail periodically as a safety net
   useEffect(() => {

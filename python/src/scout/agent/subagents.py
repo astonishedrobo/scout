@@ -558,10 +558,19 @@ class SubAgentManager:
             record.finished_at = time.time()
             record.summary = "Stopped"
             self._arm_eviction(record)
+
+        # Cancelling an active task makes _run_loop set ``stopped`` before
+        # control returns here.  Emit the terminal event based on the final
+        # state rather than only the pre-cancellation state, otherwise the
+        # Agents panel never learns that a running worker was stopped.
+        if record.status == "stopped":
             await self._emit(record, "subagent_stopped", {
                 "agent_id": agent_id,
                 "status": "stopped",
+                "description": record.description,
+                "summary": record.summary or "Stopped",
             })
+            self.persist_snapshot()
             await self._enqueue_notification(record)
         return f"status: stopped\nagent_id: {agent_id}\ndescription: {record.description}"
 

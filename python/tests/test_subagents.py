@@ -305,6 +305,12 @@ async def test_stop_running(tmp_path, monkeypatch):
     multi = MultiAgentConfig(enabled=True)
     mgr = _mgr()
     mgr.bind_parent(_FakeParent(tmp_path, multi))
+    events = []
+
+    async def on_event(event):
+        events.append(event)
+
+    mgr.set_event_listener(on_event)
     from scout import agent as agent_mod
 
     started = asyncio.Event()
@@ -333,6 +339,12 @@ async def test_stop_running(tmp_path, monkeypatch):
     stop = await mgr.stop(agent_id)
     assert "stopped" in stop
     assert mgr._agents[agent_id].status == "stopped"
+    assert any(
+        event["type"] == "subagent_stopped"
+        and event["agent_id"] == agent_id
+        and event["status"] == "stopped"
+        for event in events
+    )
 
 
 def test_snoop_tools_read_only():
