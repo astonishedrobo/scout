@@ -84,13 +84,18 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
 function TaskNoticeRow({ notice }: { notice: TaskNotice }) {
   const failed = notice.status === "failed";
   const stopped = notice.status === "cancelled" || notice.status === "interrupted";
-  const verb = failed ? "failed" : stopped ? "stopped" : "finished";
+  const label = failed
+    ? `${notice.title} failed:`
+    : stopped
+      ? `${notice.title} stopped:`
+      : "Finished:";
+  const detail = notice.result_preview || notice.summary;
   return (
     <div className="flex items-center gap-2 px-1 text-[13px] text-scout-muted">
       <span className={failed ? "text-scout-error" : stopped ? "text-scout-warning" : "text-scout-success"}>●</span>
-      <span className="font-medium text-scout-text">{notice.title}</span>
-      <span>{verb}</span>
-      {notice.summary && <span className="truncate">— {notice.summary}</span>}
+      <span className="shrink-0 font-medium text-scout-text">{label}</span>
+      {!failed && !stopped && <span className="min-w-0 truncate">{notice.title}</span>}
+      {detail && <span className="min-w-0 truncate">— {detail}</span>}
     </div>
   );
 }

@@ -416,6 +416,8 @@ def test_multi_agent_prompt_distinguishes_notify_from_parent_resume(tmp_path):
     )
 
     assert "resume_parent_on_complete=false" in prompt
+    assert "only** workers whose `spawn_subagent`" in prompt
+    assert "historical" in prompt
     assert "additional supervisor work" in prompt
 
 

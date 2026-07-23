@@ -155,6 +155,11 @@ Limits: ≤{max_concurrent} running at once; ≤{max_total} per conversation; wo
 - An explicit worker count is an acceptance criterion. For N independent workers,
   issue exactly N `spawn_subagent` calls in the same tool-call turn before saying
   anything launched; never claim all workers started after only the first call.
+- A launch acknowledgement may mention **only** workers whose `spawn_subagent`
+  calls succeeded in the current tool-call turn. Never infer that agents mentioned
+  earlier in the conversation are still active, and never include historical
+  finished agents in a current status count. If the user explicitly asks for a
+  session-wide status, call `list_subagents` and report its current statuses exactly.
 - **Do not invent** unrelated workspace tasks (random keywords, CSV analyses, "alien" \
   searches, etc.) unless the user asked for that content.
 - Timer / demo workers: give each a self-contained prompt such as \
