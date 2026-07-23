@@ -493,6 +493,11 @@ class ContainerSandboxBackend:
     async def write_stdin(self, request: UnifiedExecStdinRequest) -> UnifiedExecResponse:
         return await run_in_executor(self._unified_exec.write_stdin, request)
 
+    async def cancel_process(self, process_id: int, user_id: str, session_id: str) -> bool:
+        return await run_in_executor(
+            self._unified_exec.cancel_process, process_id, user_id, session_id,
+        )
+
     def set_output_chunk_callback(self, callback: OutputChunkCallback | None) -> None:
         self._unified_exec.set_chunk_callback(callback)
 

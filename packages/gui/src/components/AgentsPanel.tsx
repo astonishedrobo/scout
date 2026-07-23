@@ -34,6 +34,7 @@ interface AgentsPanelProps {
   onSelect: (id: string) => void;
   onBack: () => void;
   onStop: (id: string) => Promise<void>;
+  onStopTerminal?: (taskId: string) => Promise<void>;
   onSend: (id: string, message: string) => Promise<void>;
   onOpenArtifact?: (artifact: Artifact) => void;
   onOpenFileChanges?: (changeSet: FileChangeSet) => void;
@@ -114,7 +115,7 @@ function AgentRow({
   );
 }
 
-function TerminalTaskRow({ task }: { task: TaskEvent }) {
+function TerminalTaskRow({ task, onStop }: { task: TaskEvent; onStop?: () => Promise<void> }) {
   const live = task.status === "running" || task.status === "queued";
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => {
@@ -123,10 +124,11 @@ function TerminalTaskRow({ task }: { task: TaskEvent }) {
     return () => window.clearInterval(timer);
   }, [live]);
   const elapsed = elapsedLabel(task.started_at ?? task.created_at, task.finished_at, now);
+  const [stopping, setStopping] = useState(false);
   return (
     <div className="flex items-start gap-2.5 rounded-xl px-2.5 py-2">
       {live ? <ActivityOrb activity="working" label={`${task.title} is running`} className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
-      <div className="min-w-0 flex-1"><div className="flex gap-2"><span className="truncate text-[13px] font-medium text-scout-text">{task.title}</span><span className="text-[11px] text-scout-muted">{live ? "running" : task.status}</span>{elapsed && <span className="ml-auto text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}</div><div className="line-clamp-2 text-[12px] text-scout-muted">{task.summary || task.result_preview || "Running command"}</div></div>
+      <div className="min-w-0 flex-1"><div className="flex gap-2"><span className="truncate text-[13px] font-medium text-scout-text">{task.title}</span><span className="text-[11px] text-scout-muted">{live ? "running" : task.status}</span>{elapsed && <span className="ml-auto text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}{live && onStop && <button type="button" className="rounded p-1 text-scout-muted hover:bg-scout-lift hover:text-scout-text disabled:opacity-50" title="Stop command" disabled={stopping} onClick={async () => { setStopping(true); try { await onStop(); } finally { setStopping(false); } }}><Square size={13} /></button>}</div><div className="line-clamp-2 text-[12px] text-scout-muted">{task.summary || task.result_preview || "Running command"}</div></div>
     </div>
   );
 }
@@ -272,6 +274,7 @@ export function AgentsPanel({
   onSelect,
   onBack,
   onStop,
+  onStopTerminal,
   onSend,
   onOpenArtifact,
   onOpenFileChanges,
@@ -391,7 +394,7 @@ export function AgentsPanel({
               Nothing running
             </div>
           )}
-          {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => <TerminalTaskRow key={task.task_id} task={task} />)}
+          {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => <TerminalTaskRow key={task.task_id} task={task} onStop={onStopTerminal ? () => onStopTerminal(task.task_id) : undefined} />)}
           <div className="mt-4 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-scout-muted">
             Done{done.length ? ` · ${done.length}` : ""}
           </div>

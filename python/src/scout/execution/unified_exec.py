@@ -625,6 +625,21 @@ class UnifiedExecManager:
             self._finish_entry(entry)
         return len(entries)
 
+    def cancel_process(self, process_id: int, user_id: str, session_id: str) -> bool:
+        """Terminate one owned persistent shell process.
+
+        Background task controls identify a command by its process id, whereas
+        agent cancellation identifies a whole tool invocation by execution id.
+        Keep the ownership check here so a task id can never stop another
+        user's process.
+        """
+        with self._lock:
+            entry = self._processes.get(process_id)
+        if entry is None or entry.user_id != user_id or entry.session_id != session_id:
+            return False
+        self._finish_entry(entry)
+        return True
+
     def close_session(self, session_id: str) -> None:
         with self._lock:
             to_close = [

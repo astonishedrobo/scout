@@ -570,6 +570,10 @@ def create_app(
             self.event_history: list[dict] = []
             self.task_store: TaskStore | None = None
             self.terminal_tasks: dict[int, asyncio.Task] = {}
+            # Local, bounded timing history.  This is intentionally per
+            # session: it helps diagnose perceived slowness without exporting
+            # prompts or user activity into global telemetry.
+            self.turn_metrics: list[dict[str, Any]] = []
             # Approvals while no /chat stream is open (background sub-agents).
             self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
 
@@ -894,7 +898,8 @@ def create_app(
                 return
             mgr = getattr(current.agent, "subagent_manager", None)
             notes = list(getattr(mgr, "_notifications", []) or []) if mgr else []
-            if not notes:
+            has_terminal_notes = bool(getattr(current.agent, "has_pending_task_notifications", lambda: False)())
+            if not notes and not has_terminal_notes:
                 current.auto_continue_pending = False
                 return
             current.auto_continue_pending = False
@@ -1152,6 +1157,11 @@ def create_app(
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
                 s = SessionState(agent, agent_config.agent.model)
                 s.task_store = TaskStore(_session_dir(_session_cwd(user_id), user_id) / f"{session_id}.tasks.sqlite")
+                # In-process monitors are intentionally not resurrected after
+                # a server restart. Surface the truth instead of a permanent
+                # spinner; users can retry a command from the conversation.
+                for task in s.task_store.interrupt_orphaned_running():
+                    s.broadcast_event({"type": "task_event", "session_id": session_id, "task": task})
                 snap = load_session_snapshot(_session_dir(_session_cwd(user_id), user_id), session_id)
                 if snap and snap.get("active_profile"):
                     s.active_permission_profile = snap["active_profile"]
@@ -1867,6 +1877,7 @@ def create_app(
             )
 
         retry_after = _state["base_config"].server.request_queue_timeout_seconds
+        admission_started_monotonic = time.monotonic()
         turn_key = (str(uid), req.session_id)
         with _state["session_registry_lock"]:
             if turn_key in _state["pending_turns"] or s.abort_event is not None:
@@ -1931,8 +1942,19 @@ def create_app(
 
         cwd = _session_cwd(uid)
         session_path = _session_file(cwd, req.session_id, uid)
+        turn_started_wall = time.time()
+        turn_started_monotonic = time.monotonic()
+        turn_metric: dict[str, Any] = {
+            "started_at": turn_started_wall,
+            "queue_wait_ms": round((turn_started_monotonic - admission_started_monotonic) * 1000),
+            "time_to_first_visible_ms": None,
+            "duration_ms": None,
+            "outcome": "completed",
+            "events": 0,
+        }
         async def _generate_admitted():
             event_count = 0
+            first_visible_at: float | None = None
 
             stream_task: asyncio.Task | None = None
             # Bound the final agent-to-SSE bridge as well as execution output.
@@ -1963,18 +1985,28 @@ def create_app(
                         if "Process running with session ID" in text:
                             continue
                         failed = text.startswith("[EXEC ERROR]") or "Process exited with code -" in text
+                        status = "failed" if failed else "completed"
+                        summary = "Command failed" if failed else "Command finished"
                         await _publish_terminal_task({
                             "task_id": task_id, "task_type": "terminal", "title": title,
-                            "status": "failed" if failed else "completed", "created_at": None,
+                            "status": status, "created_at": None,
                             "started_at": None, "finished_at": time.time(),
-                            "summary": "Command failed" if failed else "Command finished",
+                            "summary": summary,
                             "result_preview": text[-600:], "error": text[-300:] if failed else None,
                         })
+                        agent.queue_task_notification(
+                            f"Terminal task '{title}' {status}. {summary}. Output:\n{text[-1200:]}"
+                        )
+                        _schedule_subagent_auto_continue(req.session_id, uid)
                         return
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     await _publish_terminal_task({"task_id": task_id, "task_type": "terminal", "title": title, "status": "interrupted", "created_at": None, "started_at": None, "finished_at": time.time(), "summary": "Terminal monitor interrupted", "error": str(exc)})
+                    agent.queue_task_notification(
+                        f"Terminal task '{title}' was interrupted: {exc}"
+                    )
+                    _schedule_subagent_auto_continue(req.session_id, uid)
                 finally:
                     s.terminal_tasks.pop(process_id, None)
 
@@ -2026,6 +2058,13 @@ def create_app(
                         if task is agent_get:
                             kind, payload = result
                             if kind == "event":
+                                if first_visible_at is None and payload.get("type") in {
+                                    "status", "response_delta", "response", "tool_call", "thinking",
+                                }:
+                                    first_visible_at = time.monotonic()
+                                    turn_metric["time_to_first_visible_ms"] = round(
+                                        (first_visible_at - turn_started_monotonic) * 1000,
+                                    )
                                 if payload.get("type") == "tool_call" and payload.get("name") == "exec_command":
                                     terminal_calls[str(payload.get("tool_call_id") or "")] = payload.get("args") or {}
                                 if payload.get("type") == "tool_result" and payload.get("name") == "exec_command":
@@ -2056,6 +2095,7 @@ def create_app(
                                     event=payload["type"],
                                 )
                             elif kind == "error":
+                                turn_metric["outcome"] = "error"
                                 exc = payload
                                 from ..agent.exceptions import ProviderRateLimitError
                                 if isinstance(exc, ProviderRateLimitError):
@@ -2082,6 +2122,7 @@ def create_app(
                                 done = True
 
                         elif task is abort_get:
+                            turn_metric["outcome"] = "interrupted"
                             logger.info("Chat interrupted by user (session %s)", req.session_id)
                             # Drain any already-queued agent events (partial tools /
                             # text) so the client can keep them, then signal stop.
@@ -2137,6 +2178,7 @@ def create_app(
                     except (asyncio.CancelledError, Exception):
                         pass
                 logger.info("SSE stream finished (%d events emitted)", event_count)
+                turn_metric["events"] = event_count
 
         async def _generate():
             # The outer boundary is active before the first SSE yield, so a
@@ -2145,6 +2187,10 @@ def create_app(
                 async for event in _generate_admitted():
                     yield event
             finally:
+                turn_metric["duration_ms"] = round((time.monotonic() - turn_started_monotonic) * 1000)
+                s.turn_metrics.append(dict(turn_metric))
+                if len(s.turn_metrics) > 100:
+                    del s.turn_metrics[:-100]
                 s.approval_queue = None
                 s.abort_event = None
                 s.touch()
@@ -2259,6 +2305,60 @@ def create_app(
                 "error": agent.get("error"),
             })
         return {"session_id": session_id, "tasks": tasks}
+
+    @app.get("/sessions/{session_id}/diagnostics")
+    async def session_diagnostics(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Opt-in local responsiveness diagnostics for a conversation."""
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        tasks = s.task_store.list() if s.task_store is not None else []
+        return {
+            "session_id": session_id,
+            "turns": list(s.turn_metrics[-50:]),
+            "tasks": tasks,
+            "event_replay_depth": len(s.event_history),
+        }
+
+    @app.post("/sessions/{session_id}/tasks/{task_id}/stop")
+    async def stop_session_task(
+        session_id: str,
+        task_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Stop a running background terminal task owned by this session."""
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        task = next((item for item in (s.task_store.list() if s.task_store else []) if item["task_id"] == task_id), None)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.get("task_type") != "terminal":
+            raise HTTPException(status_code=400, detail="Only terminal tasks can be stopped here")
+        if task.get("status") not in ("queued", "running"):
+            return {"status": "ok", "message": "Task already finished"}
+        match = re.fullmatch(r"terminal-(\d+)", task_id)
+        if match is None:
+            raise HTTPException(status_code=400, detail="Invalid terminal task id")
+        service = getattr(s.agent, "execution_service", None)
+        stopped = bool(service and await service.cancel_process(int(match.group(1))))
+        if not stopped:
+            raise HTTPException(status_code=409, detail="Terminal process is no longer available")
+        watcher = s.terminal_tasks.pop(int(match.group(1)), None)
+        if watcher is not None:
+            watcher.cancel()
+        now = time.time()
+        stopped_task = {
+            **task, "status": "cancelled", "finished_at": now,
+            "summary": "Stopped by user", "error": None,
+        }
+        if s.task_store is not None:
+            stopped_task, sequence = await asyncio.to_thread(s.task_store.upsert, stopped_task)
+        else:
+            sequence = 0
+        s.broadcast_event({"type": "task_event", "session_id": session_id, "task": stopped_task, "task_sequence": sequence})
+        return {"status": "ok", "task": stopped_task}
 
     @app.post("/sessions/{session_id}/subagents/{agent_id}/message")
     async def message_session_subagent(

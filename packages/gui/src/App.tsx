@@ -703,6 +703,25 @@ export function App() {
               onStop={async (id) => {
                 await stopSubagent(id);
               }}
+              onStopTerminal={async (taskId) => {
+                if (!currentSessionId) return;
+                const response = await fetch(`${baseUrl}/sessions/${currentSessionId}/tasks/${taskId}/stop`, {
+                  method: "POST",
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                });
+                if (!response.ok) {
+                  const detail = await response.text();
+                  throw new Error(detail || "Could not stop command");
+                }
+                const payload = await response.json();
+                if (payload.task) {
+                  setMessages((previous) => previous.map((message) => (
+                    message.role === "system" && message.task?.task_id === taskId
+                      ? { ...message, task: payload.task }
+                      : message
+                  )));
+                }
+              }}
               onSend={async (id, message) => {
                 await sendSubagentMessage(id, message);
               }}

@@ -51,3 +51,25 @@ class TaskStore:
         with self._lock:
             return [dict(row) for row in self._conn.execute("SELECT task_id,task_type,title,status,created_at,started_at,finished_at,summary,result_preview,error FROM tasks ORDER BY updated_at DESC")]
 
+    def interrupt_orphaned_running(self) -> list[dict[str, Any]]:
+        """Close tasks which cannot survive a Scout server restart.
+
+        A new in-memory session has no monitor attached to an old process.  A
+        stale 'running' badge is worse than an explicit interruption, and the
+        durable event lets the UI explain why it changed.
+        """
+        with self._lock:
+            rows = list(self._conn.execute(
+                "SELECT task_id,task_type,title,created_at,started_at FROM tasks WHERE status IN ('queued', 'running')"
+            ))
+        records: list[dict[str, Any]] = []
+        now = time.time()
+        for row in rows:
+            record, _ = self.upsert({
+                **dict(row), "status": "interrupted", "finished_at": now,
+                "summary": "Interrupted because Scout restarted",
+                "result_preview": None,
+                "error": "Task monitor was not available after restart",
+            })
+            records.append(record)
+        return records

@@ -98,7 +98,8 @@ class ExecStdinPayload(BaseModel):
 
 
 class ExecCancelPayload(BaseModel):
-    execution_id: str
+    execution_id: str = ""
+    process_id: int | None = None
     user_id: str
     session_id: str
 
@@ -606,12 +607,17 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         mgr = _unified_mgr()
         if mgr is None:
             raise HTTPException(status_code=503, detail="Unified exec unavailable")
-        cancelled = await asyncio.to_thread(
-            mgr.cancel_execution,
-            payload.execution_id,
-            payload.user_id,
-            payload.session_id,
-        )
+        if payload.process_id is not None:
+            cancelled = int(await asyncio.to_thread(
+                mgr.cancel_process, payload.process_id, payload.user_id, payload.session_id,
+            ))
+        else:
+            cancelled = await asyncio.to_thread(
+                mgr.cancel_execution,
+                payload.execution_id,
+                payload.user_id,
+                payload.session_id,
+            )
         return {"status": "ok", "cancelled": cancelled}
 
     @app.get("/exec/stream/{execution_id}")

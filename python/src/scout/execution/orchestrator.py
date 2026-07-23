@@ -280,6 +280,10 @@ class ExecutionOrchestrator:
             return await self._finalize_shell_result(resp, staging, f"write_stdin({session_id})")
         return ToolExecutionResult(resp.output)
 
+    async def cancel_process(self, process_id: int) -> bool:
+        """Stop one background terminal owned by this agent session."""
+        return await self._backend.cancel_process(process_id, self._user_id, self._session_id)
+
     async def _finalize_shell_result(
         self, resp, staging: ExecutionStaging, summary: str,
     ) -> ToolExecutionResult:

@@ -348,6 +348,9 @@ class ScoutAgent:
             },
         }
         self._messages: list = []
+        # Durable background terminals use the same parent-turn handoff as
+        # sub-agents, without pretending a shell is an agent.
+        self._pending_task_notifications: list[str] = []
         self._focus_path = None
         self._rebuild_graph(focus_path=None)
 
@@ -480,16 +483,21 @@ class ScoutAgent:
         if getattr(self, "_is_subagent", False):
             return user_message
         manager = getattr(self, "_subagents", None)
-        if manager is None:
-            return user_message
-        notes = manager.drain_notifications()
-        if not notes:
+        notes = manager.drain_notifications() if manager is not None else []
+        task_notes = list(getattr(self, "_pending_task_notifications", []) or [])
+        self._pending_task_notifications = []
+        if not notes and not task_notes:
             return user_message
         pending = self._pending_user_request_from_history()
         # If this turn already has a real user message, that is the pending request.
         if user_message.strip() and not user_message.strip().startswith("["):
             pending = user_message.strip()
-        block = format_notifications_block(notes, pending_user_request=pending)
+        blocks: list[str] = []
+        if notes:
+            blocks.append(format_notifications_block(notes, pending_user_request=pending))
+        if task_notes:
+            blocks.append("<background-task-notification>\n" + "\n".join(task_notes) + "\n</background-task-notification>")
+        block = "\n\n".join(part for part in blocks if part)
         if not block:
             return user_message
         if user_message.strip():
@@ -502,6 +510,14 @@ class ScoutAgent:
             "Prefer the most recent result. Do not ask which version to use for "
             "revisions of the same deliverable."
         )
+
+    def queue_task_notification(self, message: str) -> None:
+        """Queue a terminal lifecycle result for the next parent model turn."""
+        if not self._is_subagent and message.strip():
+            self._pending_task_notifications.append(message.strip())
+
+    def has_pending_task_notifications(self) -> bool:
+        return bool(getattr(self, "_pending_task_notifications", []))
 
     def set_subagent_completion_callback(self, cb: Any) -> None:
         if self._subagents is not None:
