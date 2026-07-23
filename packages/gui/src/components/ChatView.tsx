@@ -203,19 +203,30 @@ export function ChatView({
   onRemoveAnnotation,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followsLatestRef = useRef(true);
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
   const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    const element = scrollRef.current;
+    if (!element || !followsLatestRef.current) return;
+    // Streaming should feel immediate and must never pull someone away from
+    // an earlier result they are reading.  Browser smooth scrolling on every
+    // token makes the interface visibly lag behind the model.
+    element.scrollTop = element.scrollHeight;
   }, [messages, streamingSteps, streamingText, isLoading]);
 
   return (
-    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+    <div
+      ref={scrollRef}
+      onScroll={() => {
+        const element = scrollRef.current;
+        if (!element) return;
+        followsLatestRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+      }}
+      className="flex-1 min-h-0 overflow-y-auto"
+    >
       <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
         {messages.map((msg, i) => {
           if (msg.role === "system" && msg.task) {

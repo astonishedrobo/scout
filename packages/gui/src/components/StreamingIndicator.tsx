@@ -48,7 +48,7 @@ export function StreamingIndicator({
         ? statusMessage
         : hasToolSteps
           ? "Preparing response"
-          : "Understanding";
+          : "Starting";
   const label = `${rawLabel.replace(/[.…]+$/u, "")}…`;
   const activity = text
     ? "composing"

@@ -204,7 +204,17 @@ function deriveToolGroupTitle(tools: ToolStep[]): string {
   }
   if (tools.some((step) => step.status === "executing")) return "Running tools";
   if (tools.some((step) => step.status === "interrupted")) return "Stopped tools";
-  return "Completed tools";
+  const names = new Set(tools.map((step) => step.name));
+  if ([...names].every((name) => name === "read_file" || name === "list_files")) {
+    return `Checked ${tools.length} ${tools.length === 1 ? "file" : "files"}`;
+  }
+  if ([...names].every((name) => name === "search_workspace" || name === "filter_table")) {
+    return "Searched workspace";
+  }
+  if ([...names].some((name) => name === "write_file" || name === "apply_patch")) {
+    return "Updated workspace";
+  }
+  return `${tools.length} actions complete`;
 }
 
 /**
