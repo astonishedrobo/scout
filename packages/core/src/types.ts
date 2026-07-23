@@ -40,9 +40,27 @@ export interface ScoutConfig {
 
 // ── Chat messages ────────────────────────────────────────────────
 
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+
+/** Durable lifecycle record rendered inline in the conversation. */
+export interface TaskEvent {
+  task_id: string;
+  task_type: "agent" | "terminal";
+  title: string;
+  status: TaskStatus;
+  created_at?: number;
+  started_at?: number;
+  finished_at?: number | null;
+  summary?: string;
+  result_preview?: string;
+  error?: string;
+}
+
 export interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
+  /** A durable background-work lifecycle row. */
+  task?: TaskEvent;
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
   artifacts?: Artifact[];

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from "react";
-import { FileText, BarChart3, Compass, type LucideIcon } from "lucide-react";
-import type { FileChangeSet, Message, ResponseAnnotation, ToolStep } from "scout-core";
+import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, type LucideIcon } from "lucide-react";
+import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
@@ -22,12 +22,62 @@ interface ChatViewProps {
   onOpenFileChanges?: (changeSet: FileChangeSet) => void;
   onUndoFileChanges?: (changeSet: FileChangeSet) => void;
   onOpenMemories?: () => void;
+  onOpenTask?: (task: TaskEvent) => void;
   baseUrl: string;
   token: string | null;
   annotations?: ResponseAnnotation[];
   onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
   onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
   onRemoveAnnotation?: (id: string) => void;
+}
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  const active = task.status === "queued" || task.status === "running";
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  const start = task.started_at ?? task.created_at;
+  const end = task.finished_at ?? now / 1000;
+  const elapsed = start ? formatElapsed((end - start) * 1000) : "";
+  const state = task.status === "completed"
+    ? "finished"
+    : task.status === "cancelled"
+      ? "cancelled"
+      : task.status;
+  const Icon = task.task_type === "terminal" ? Terminal : Bot;
+  const statusColor = task.status === "failed"
+    ? "bg-scout-error"
+    : task.status === "completed"
+      ? "bg-scout-success"
+      : task.status === "cancelled" || task.status === "interrupted"
+        ? "bg-scout-muted"
+        : "bg-scout-accent";
+  const body = task.error || task.summary || task.result_preview;
+  const content = (
+    <div className="flex min-w-0 items-start gap-2.5 rounded-xl border border-scout-hairline-faint bg-scout-panel/70 px-3 py-2.5 text-left transition-colors hover:bg-scout-lift/60">
+      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${statusColor} ${active ? "animate-pulse" : ""}`} />
+      <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5 text-[13px] text-scout-text">
+          <span className="truncate font-medium">{task.title}</span>
+          <span className="shrink-0 text-scout-muted">{state}</span>
+        </span>
+        {body && <span className="mt-0.5 block truncate text-[12px] text-scout-muted">{body}</span>}
+      </span>
+      {elapsed && <span className="flex shrink-0 items-center gap-1 pt-0.5 text-[11px] tabular-nums text-scout-muted"><Clock3 size={12} />{elapsed}</span>}
+    </div>
+  );
+  return onOpen ? <button type="button" onClick={onOpen} className="block w-full text-left">{content}</button> : content;
 }
 
 // Fixed vivid icon colors — theme tokens desaturate in the soft/dark themes
@@ -144,6 +194,7 @@ export function ChatView({
   onOpenFileChanges,
   onUndoFileChanges,
   onOpenMemories,
+  onOpenTask,
   baseUrl,
   token,
   annotations = [],
@@ -167,6 +218,13 @@ export function ChatView({
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
         {messages.map((msg, i) => {
+          if (msg.role === "system" && msg.task) {
+            return (
+              <div key={`task-${msg.task.task_id}`} className="animate-enter">
+                <TaskEventRow task={msg.task} onOpen={onOpenTask ? () => onOpenTask(msg.task!) : undefined} />
+              </div>
+            );
+          }
           const hasTimeline = msg.role === "assistant" && !!msg.steps?.length;
           const timelineHasText = !!msg.steps?.some((step) => step.kind === "text");
           const lastText = [...(msg.steps ?? [])]

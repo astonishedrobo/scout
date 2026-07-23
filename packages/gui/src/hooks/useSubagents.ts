@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Artifact, FileChangeSet } from "scout-core";
+import type { Artifact, FileChangeSet, TaskEvent } from "scout-core";
 
 export type SubAgentStatus =
   | "pending"
@@ -117,6 +117,8 @@ interface UseSubagentsOptions {
   onAgentFinished?: (notice: AgentFinishedNotice) => void;
   onParentAutoTurnStarted?: () => void;
   onParentAutoTurnFinished?: () => void;
+  /** Durable lifecycle event rendered inline in the parent conversation. */
+  onTaskEvent?: (event: TaskEvent) => void;
 }
 
 export function useSubagents({
@@ -131,6 +133,7 @@ export function useSubagents({
   onAgentFinished,
   onParentAutoTurnStarted,
   onParentAutoTurnFinished,
+  onTaskEvent,
 }: UseSubagentsOptions) {
   const [agents, setAgents] = useState<SubAgentInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -149,6 +152,7 @@ export function useSubagents({
   const onAgentFinishedRef = useRef(onAgentFinished);
   const onParentAutoTurnStartedRef = useRef(onParentAutoTurnStarted);
   const onParentAutoTurnFinishedRef = useRef(onParentAutoTurnFinished);
+  const onTaskEventRef = useRef(onTaskEvent);
   onApprovalRef.current = onApprovalEvent;
   onParentAutoReplyRef.current = onParentAutoReply;
   onParentAutoResponseStartRef.current = onParentAutoResponseStart;
@@ -156,6 +160,7 @@ export function useSubagents({
   onAgentFinishedRef.current = onAgentFinished;
   onParentAutoTurnStartedRef.current = onParentAutoTurnStarted;
   onParentAutoTurnFinishedRef.current = onParentAutoTurnFinished;
+  onTaskEventRef.current = onTaskEvent;
 
   useEffect(() => {
     selectedIdRef.current = null;
@@ -449,6 +454,10 @@ export function useSubagents({
       if (type === "subagents_snapshot") {
         const list = (event as { subagents?: SubAgentInfo[] }).subagents || [];
         setAgents(list);
+        return;
+      }
+      if (type === "task_event" && event.task && typeof event.task === "object") {
+        onTaskEventRef.current?.(event.task as TaskEvent);
         return;
       }
       if (type === "approval_request" || type === "approval_cancelled") {

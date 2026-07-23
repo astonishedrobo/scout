@@ -51,6 +51,13 @@ function statusLabel(status: string) {
   return status;
 }
 
+function elapsedLabel(start?: number, end?: number | null, now = Date.now() / 1000) {
+  if (!start) return "";
+  const seconds = Math.max(0, Math.floor((end ?? now) - start));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 function AgentRow({
   agent,
   onClick,
@@ -59,6 +66,13 @@ function AgentRow({
   onClick: () => void;
 }) {
   const live = isLive(agent);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  const elapsed = elapsedLabel(agent.created_at, agent.finished_at, now);
   return (
     <button
       type="button"
@@ -88,6 +102,7 @@ function AgentRow({
           <span className="shrink-0 text-[11px] text-scout-muted">
             {statusLabel(agent.status)}
           </span>
+          {elapsed && <span className="shrink-0 text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}
         </div>
         <div className="mt-0.5 line-clamp-2 text-[12px] text-scout-muted">
           {agent.summary || agent.last_activity || agent.status}
@@ -297,7 +312,7 @@ export function AgentsPanel({
         )}
         <div className="min-w-0 flex-1">
           <span className="truncate text-[13px] font-semibold text-scout-text">
-            {inDetail ? detail!.description : "Agents"}
+            {inDetail ? detail!.description : "Tasks"}
           </span>
         </div>
         {inDetail && live && (
@@ -382,7 +397,7 @@ export function AgentsPanel({
             streamingSteps={chat.streamingSteps}
             streamingText={chat.streamingText}
             currentTool={chat.currentTool}
-            statusMessage={detail.last_activity || "Understanding…"}
+            statusMessage={detail.last_activity || "Working"}
             isLoading={live}
             onOpenArtifact={onOpenArtifact}
             onOpenFileChanges={onOpenFileChanges}
@@ -449,11 +464,16 @@ export function SubagentStatusStrip({
   active: SubAgentInfo[];
   onOpen: () => void;
 }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   if (!active.length) return null;
   const label =
     active.length === 1
       ? `${active[0].description} · ${active[0].last_activity || "working"}`
-      : `${active.length} agents working`;
+      : `${active.length} tasks working`;
   return (
     <button
       type="button"
@@ -462,6 +482,11 @@ export function SubagentStatusStrip({
     >
       <ActivityOrb activity="working" label={label} />
       <span className="truncate">{label}</span>
+      {active.length === 1 && (
+        <span className="shrink-0 tabular-nums text-scout-muted">
+          {elapsedLabel(active[0].created_at, undefined, now)}
+        </span>
+      )}
       <span className="shrink-0 text-scout-accent">View</span>
     </button>
   );

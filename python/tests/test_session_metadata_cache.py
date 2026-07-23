@@ -53,6 +53,28 @@ def test_session_metadata_result_cannot_mutate_cached_value(tmp_path):
     assert _parse_session_meta(path)["title"] == "Cached"
 
 
+def test_task_lifecycle_rows_survive_session_reload(tmp_path):
+    path = tmp_path / "s1.jsonl"
+    _write_session(path)
+    _append_session_entry(path, {
+        "type": "task",
+        "timestamp": "2026-01-01T00:02:05Z",
+        "task": {
+            "task_id": "sa-1",
+            "task_type": "agent",
+            "title": "Inspect authentication",
+            "status": "completed",
+            "created_at": 1.0,
+            "finished_at": 12.0,
+        },
+    })
+
+    messages = _parse_session_file(path)["messages"]
+    assert messages[-1]["role"] == "system"
+    assert messages[-1]["task"]["title"] == "Inspect authentication"
+    assert messages[-1]["task"]["status"] == "completed"
+
+
 def test_header_updates_cannot_lose_concurrent_message_appends(tmp_path):
     path = tmp_path / "s1.jsonl"
     _write_session(path)

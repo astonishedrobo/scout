@@ -338,6 +338,7 @@ def _parse_session_file(path: Path) -> dict | None:
         return None
 
     messages = []
+    task_indexes: dict[str, int] = {}
     updated_at = header.get("createdAt", "")
     for raw in lines[1:]:
         try:
@@ -356,6 +357,20 @@ def _parse_session_file(path: Path) -> dict | None:
                 "fileChanges": entry.get("file_changes"),
                 **({"stopped": True} if entry.get("stopped") else {}),
             })
+            updated_at = entry.get("timestamp", updated_at)
+        elif entry.get("type") == "task" and isinstance(entry.get("task"), dict):
+            task = entry["task"]
+            task_id = str(task.get("task_id") or "")
+            message = {
+                "role": "system",
+                "content": "",
+                "task": task,
+            }
+            if task_id and task_id in task_indexes:
+                messages[task_indexes[task_id]] = message
+            else:
+                task_indexes[task_id] = len(messages)
+                messages.append(message)
             updated_at = entry.get("timestamp", updated_at)
 
     return {
@@ -943,15 +958,9 @@ def create_app(
                     session_path = _session_file(_session_cwd(user_id), session_id, user_id)
                     if session_path.exists():
                         _append_session_entry(session_path, {
-                            "role": "user",
-                            "content": "[Sub-agent completed — integrating results]",
-                            "created_at": _now_iso(),
-                            "system": True,
-                        })
-                        _append_session_entry(session_path, {
-                            "role": "assistant",
+                            "type": "assistant",
                             "content": reply,
-                            "created_at": _now_iso(),
+                            "timestamp": _now_iso(),
                             "source": "subagent_auto_continue",
                         })
                     # Push into the open GUI (session file alone is invisible live).
@@ -1019,6 +1028,47 @@ def create_app(
                     if state is not None:
                         state.touch()
                         state.broadcast_event(event)
+                        # Sub-agent transport events are intentionally noisy for
+                        # the task detail panel.  The main conversation gets a
+                        # small, durable lifecycle record only when work starts
+                        # or reaches a terminal state.
+                        event_type = str(event.get("type") or "")
+                        lifecycle = {
+                            "subagent_started": "queued",
+                            "subagent_status": "running",
+                            "subagent_completed": "completed",
+                            "subagent_failed": "failed",
+                            "subagent_stopped": "cancelled",
+                        }
+                        if event_type in lifecycle:
+                            mgr = getattr(state.agent, "subagent_manager", None)
+                            agent_id = str(event.get("agent_id") or "")
+                            detail = mgr.public_detail(agent_id) if mgr and agent_id else None
+                            if detail:
+                                task = {
+                                    "task_id": agent_id,
+                                    "task_type": "agent",
+                                    "title": detail.get("description") or "Background agent",
+                                    "status": lifecycle[event_type],
+                                    "created_at": detail.get("created_at"),
+                                    "started_at": detail.get("created_at"),
+                                    "finished_at": detail.get("finished_at"),
+                                    "summary": detail.get("summary"),
+                                    "result_preview": detail.get("result_preview"),
+                                    "error": detail.get("error"),
+                                }
+                                path = _session_file(_session_cwd(user_id), session_id, user_id)
+                                if path.exists():
+                                    await asyncio.to_thread(_append_session_entry, path, {
+                                        "type": "task",
+                                        "timestamp": _now_iso(),
+                                        "task": task,
+                                    })
+                                state.broadcast_event({
+                                    "type": "task_event",
+                                    "session_id": session_id,
+                                    "task": task,
+                                })
 
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
@@ -2103,6 +2153,39 @@ def create_app(
         if detail is None:
             raise HTTPException(status_code=404, detail="Sub-agent not found")
         return {"session_id": session_id, "subagent": detail}
+
+    @app.get("/sessions/{session_id}/tasks")
+    async def list_session_tasks(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Unified task snapshot. Sub-agents are the first task provider.
+
+        The endpoint deliberately has a task-shaped response so terminal task
+        providers can join without forcing clients to learn another panel API.
+        """
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        mgr = getattr(s.agent, "subagent_manager", None)
+        status_map = {
+            "pending": "queued", "running": "running", "completed": "completed",
+            "failed": "failed", "stopped": "cancelled",
+        }
+        tasks = []
+        for agent in (mgr.public_snapshot() if mgr else []):
+            tasks.append({
+                "task_id": agent["agent_id"],
+                "task_type": "agent",
+                "title": agent.get("description") or "Background agent",
+                "status": status_map.get(agent.get("status"), "interrupted"),
+                "created_at": agent.get("created_at"),
+                "started_at": agent.get("created_at"),
+                "finished_at": agent.get("finished_at"),
+                "summary": agent.get("summary"),
+                "result_preview": agent.get("result_preview"),
+                "error": agent.get("error"),
+            })
+        return {"session_id": session_id, "tasks": tasks}
 
     @app.post("/sessions/{session_id}/subagents/{agent_id}/message")
     async def message_session_subagent(

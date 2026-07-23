@@ -7,7 +7,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
 import { useSubagents } from "./hooks/useSubagents";
-import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation } from "scout-core";
+import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { BootScreen } from "./components/BootScreen";
 import { Sidebar } from "./components/Sidebar";
@@ -234,17 +234,14 @@ export function App() {
     !!activeArtifact || !!activeFileChanges || filesExplorerOpen || agentsPanelOpen;
 
   const {
-    agents: subagents,
     active: activeSubagents,
     done: doneSubagents,
     selectedId: selectedSubagentId,
     detail: subagentDetail,
-    finishedNotices,
     selectAgent,
     clearSelection: clearSubagentSelection,
     sendMessage: sendSubagentMessage,
     stopAgent: stopSubagent,
-    dismissFinishedNotice,
   } = useSubagents({
     baseUrl,
     sessionId: currentSessionId,
@@ -287,6 +284,18 @@ export function App() {
     onParentAutoTurnFinished: () => {
       setAutoStreamingText("");
       setIsAutoContinuing(false);
+    },
+    onTaskEvent: (task: TaskEvent) => {
+      setMessages((previous) => {
+        const index = previous.findIndex(
+          (message) => message.role === "system" && message.task?.task_id === task.task_id,
+        );
+        const row = { role: "system" as const, content: "", task };
+        if (index < 0) return [...previous, row];
+        const next = [...previous];
+        next[index] = row;
+        return next;
+      });
     },
   });
   const chatBusy = isLoading || isAutoContinuing;
@@ -396,7 +405,7 @@ export function App() {
         setMessagesForSession(
           sessionId,
           msgs.map((m) => ({
-            role: m.role as "user" | "assistant",
+            role: m.role as "user" | "assistant" | "system",
             content: m.content,
             steps: m.steps as ToolStep[] | undefined,
             artifacts: m.artifacts as Artifact[] | undefined,
@@ -404,6 +413,7 @@ export function App() {
             attachments: m.attachments,
             chatImages: m.chatImages,
             annotations: m.annotations,
+            task: m.task,
           })),
         );
       } catch {
@@ -611,12 +621,12 @@ export function App() {
               className={`${headerActionButtonClass} ${
                 agentsPanelOpen ? headerActionActiveClass : headerActionIdleClass
               }`}
-              title={agentsPanelOpen ? "Close subagents" : "Subagents"}
-              aria-label="Subagents"
+              title={agentsPanelOpen ? "Close tasks" : "Tasks"}
+              aria-label="Tasks"
               aria-pressed={agentsPanelOpen}
             >
               <Bot size={15} />
-              <span className="hidden sm:inline">Agents</span>
+              <span className="hidden sm:inline">Tasks</span>
               {activeSubagents.length > 0 && (
                 <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-scout-accent/20 px-1 text-[10px] font-semibold text-scout-accent">
                   {activeSubagents.length}
@@ -808,53 +818,15 @@ export function App() {
                   });
                 }}
                 onOpenMemories={openMemories}
+                onOpenTask={(task) => {
+                  if (task.task_type === "agent") {
+                    openAgentsPanel();
+                    void selectAgent(task.task_id);
+                  }
+                }}
                 baseUrl={baseUrl}
                 token={token}
               />
-              {finishedNotices.length > 0 && (
-                <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-1.5 px-4 pb-2">
-                  {finishedNotices.map((n) => (
-                    <div
-                      key={n.agent_id}
-                      className="flex items-start gap-2 rounded-xl border border-scout-hairline-faint bg-scout-panel px-3 py-2 text-left text-[12px] transition-colors hover:bg-scout-lift/50"
-                    >
-                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                        n.status === "failed" ? "bg-scout-error" : "bg-scout-success"
-                      }`} />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          openAgentsPanel();
-                          void selectAgent(n.agent_id);
-                          dismissFinishedNotice(n.agent_id);
-                        }}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <span className="font-medium text-scout-text">
-                          {n.description}
-                        </span>
-                        <span className="text-scout-muted">
-                          {n.status === "failed" ? " needs attention" : " finished"}
-                        </span>
-                        {n.summary && (
-                          <span className="mt-0.5 block truncate text-scout-muted">
-                            {n.summary}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => dismissFinishedNotice(n.agent_id)}
-                        className="shrink-0 rounded-full p-1 text-scout-muted hover:bg-scout-lift hover:text-scout-text"
-                        aria-label={`Dismiss ${n.description} notification`}
-                        title="Dismiss"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 

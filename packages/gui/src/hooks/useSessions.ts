@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { Artifact, ChatImage, FileChangeSet, ResponseAnnotation, ToolStep } from "scout-core";
+import type { Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
 
 interface StoredMessage {
   role: string;
@@ -10,6 +10,7 @@ interface StoredMessage {
   attachments?: string[];
   chatImages?: ChatImage[];
   annotations?: ResponseAnnotation[];
+  task?: TaskEvent;
 }
 
 export interface SessionMeta {
