@@ -878,7 +878,10 @@ def create_app(
             return
         cfg = getattr(s.agent, "_config", None)
         multi = getattr(cfg, "multi_agent", None) if cfg is not None else None
-        if multi is None or not getattr(multi, "auto_continue_on_complete", True):
+        has_terminal_notes = bool(getattr(s.agent, "has_pending_task_notifications", lambda: False)())
+        # Shell tasks use this same handoff even when multi-agent is disabled;
+        # a completed command must not silently vanish from the main chat.
+        if (multi is None or not getattr(multi, "auto_continue_on_complete", True)) and not has_terminal_notes:
             return
         s.auto_continue_pending = True
         if s.is_busy:
