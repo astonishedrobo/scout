@@ -414,6 +414,15 @@ export function useChat({
               }));
               continue;
             }
+            if (event.type === "response_reset") {
+              finalContent = "";
+              update(requestSessionId, (state) => ({
+                ...state,
+                streamingText: "",
+                statusMessage: undefined,
+              }));
+              continue;
+            }
             if (event.type === "response_delta") {
               finalContent += event.content ?? "";
               update(requestSessionId, (state) => ({

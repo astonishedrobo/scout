@@ -641,19 +641,14 @@ class ScoutAgent:
                             continue
                         visible_text = _message_text(msg.content).strip()
                         if msg.tool_calls:
-                            # User-facing prose that accompanies tool calls belongs
-                            # in the interleaved timeline, not as a collapsed
-                            # "activity group" title.
+                            # A model can stream a short preamble before its
+                            # tool-call JSON is complete. That prose is a plan,
+                            # not a second user-facing answer: the tool card is
+                            # the chronological record. Retract the temporary
+                            # streamed preamble and wait for the post-tool reply.
+                            # This prevents duplicate "I'll do X" paragraphs.
                             if visible_text:
-                                safe_text = strip_citation_block(
-                                    redact_paths(visible_text, self._cwd, self._shared_dir)
-                                )
-                                if safe_text:
-                                    events.append({
-                                        "type": "assistant_text",
-                                        "content": safe_text,
-                                        "tool_call_id": msg.tool_calls[0]["id"],
-                                    })
+                                events.append({"type": "response_reset"})
                             for tc in msg.tool_calls:
                                 args = tc.get("args", {}) or {}
                                 _pending_calls[tc["id"]] = {

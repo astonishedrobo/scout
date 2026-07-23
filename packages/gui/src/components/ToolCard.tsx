@@ -118,7 +118,11 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
     case "memory_add_note":
       return tense === "present" ? "Updating memory" : "Updated memory";
     case "spawn_subagent":
-      return tense === "present" ? "Launching agent" : "Launched agent";
+      {
+        const description = String(step.args?.description ?? "").trim();
+        const name = description || "agent";
+        return tense === "present" ? `Launching ${name}` : `Launched ${name}`;
+      }
     case "send_subagent_message":
       return tense === "present" ? "Messaging agent" : "Messaged agent";
     case "list_subagents":
@@ -145,7 +149,20 @@ function detailText(step: ToolStep): string {
   if (step.name === "run_node") {
     return String(step.args?.description ?? step.args?.code ?? "").split("\n")[0] ?? "";
   }
+  if (step.name === "spawn_subagent") {
+    return String(step.args?.agent_type ?? "").trim();
+  }
   return "";
+}
+
+function exposesInternalOutput(step: ToolStep): boolean {
+  return new Set([
+    "spawn_subagent",
+    "list_subagents",
+    "get_subagent_result",
+    "send_subagent_message",
+    "stop_subagent",
+  ]).has(step.name);
 }
 
 function iconFor(step: ToolStep) {
@@ -253,7 +270,11 @@ function ToolRow({
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const Icon = iconFor(step);
   const detail = detailText(step);
-  const hasOutput = Boolean(step.output && step.name !== "memory_add_note");
+  const hasOutput = Boolean(
+    step.output
+    && step.name !== "memory_add_note"
+    && !exposesInternalOutput(step),
+  );
 
   return (
     <div className="space-y-1">

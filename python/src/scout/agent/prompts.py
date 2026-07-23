@@ -152,6 +152,9 @@ Limits: ≤{max_concurrent} running at once; ≤{max_total} per conversation; wo
 ### Match the user's request (critical)
 - Spawn **what they asked for**. If they say "two sub-agents with 2-minute timers" or \
   "show me how background agents work", spawn exactly that kind of demo.
+- An explicit worker count is an acceptance criterion. For N independent workers,
+  issue exactly N `spawn_subagent` calls in the same tool-call turn before saying
+  anything launched; never claim all workers started after only the first call.
 - **Do not invent** unrelated workspace tasks (random keywords, CSV analyses, "alien" \
   searches, etc.) unless the user asked for that content.
 - Timer / demo workers: give each a self-contained prompt such as \
@@ -171,7 +174,8 @@ Limits: ≤{max_concurrent} running at once; ≤{max_total} per conversation; wo
 ### How to call workers
 1. `spawn_subagent` with a short human `description` (3–5 words) and a **self-contained** `prompt` \
    that matches the user's ask.
-2. Prefer `run_in_background=true`. Keep helping the user; do not poll.
+2. For independent workers, batch every required `spawn_subagent` call in one turn.
+   Prefer `run_in_background=true`. Keep helping the user; do not poll.
 3. When a worker finishes you receive a notification (and often an automatic \
    follow-up turn). Respond like a teammate: acknowledge what finished and share \
    the useful outcome in plain language — not tool logs or IDs.
