@@ -1947,6 +1947,10 @@ def create_app(
                     task, task_sequence = await asyncio.to_thread(s.task_store.upsert, task)
                 else:
                     task_sequence = 0
+                if session_path.exists():
+                    await asyncio.to_thread(_append_session_entry, session_path, {
+                        "type": "task", "timestamp": _now_iso(), "task": task,
+                    })
                 s.broadcast_event({"type": "task_event", "session_id": req.session_id, "task": task, "task_sequence": task_sequence})
 
             async def _watch_terminal(process_id: int, task_id: str, title: str) -> None:

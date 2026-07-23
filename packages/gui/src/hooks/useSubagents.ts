@@ -246,6 +246,20 @@ export function useSubagents({
     }
   }, [authHeaders, baseUrl, sessionId]);
 
+  const refreshTasks = useCallback(async () => {
+    if (!baseUrl || !sessionId) return;
+    try {
+      const resp = await fetch(`${baseUrl}/sessions/${sessionId}/tasks`, {
+        headers: authHeaders(),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      for (const task of (data.tasks || []) as TaskEvent[]) onTaskEventRef.current?.(task);
+    } catch {
+      /* A task snapshot is a recovery path; the live event stream remains primary. */
+    }
+  }, [authHeaders, baseUrl, sessionId]);
+
   const loadDetail = useCallback(
     async (agentId: string) => {
       if (!baseUrl || !sessionId) return;
@@ -635,6 +649,7 @@ export function useSubagents({
 
     void run();
     void refreshList();
+    void refreshTasks();
 
     return () => {
       closed = true;
@@ -647,6 +662,7 @@ export function useSubagents({
     baseUrl,
     enabled,
     refreshList,
+    refreshTasks,
     sessionId,
     upsertAgent,
   ]);
