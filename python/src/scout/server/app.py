@@ -533,14 +533,46 @@ def create_app(
             self.approval_mode = DEFAULT_APPROVAL_MODE
             self.pending_approval_id: str | None = None
             self.pending_approval_diffs: list[Any] = []
+            # Only one approval card can be active for a session. Serialize
+            # parent and worker requests so they cannot overwrite each other.
+            self.approval_lock = asyncio.Lock()
             self.abort_event: asyncio.Event | None = None
             self.active_permission_profile: str | None = None
             self.created_at = time.monotonic()
             self.last_activity = self.created_at
             self.requires_vision = False
+            # Auto-continue when a background sub-agent finishes while idle.
+            self.auto_continue_task: asyncio.Task | None = None
+            self.auto_continue_pending: bool = False
+            # Fan-out for sub-agent / session UI events (SSE subscribers).
+            self.event_subscribers: list[asyncio.Queue] = []
+            # Approvals while no /chat stream is open (background sub-agents).
+            self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
 
         def touch(self) -> None:
             self.last_activity = time.monotonic()
+
+        @property
+        def is_busy(self) -> bool:
+            return self.abort_event is not None
+
+        def broadcast_event(self, event: dict) -> None:
+            dead: list[asyncio.Queue] = []
+            for q in self.event_subscribers:
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        q.put_nowait(event)
+                    except asyncio.QueueFull:
+                        dead.append(q)
+            for q in dead:
+                if q in self.event_subscribers:
+                    self.event_subscribers.remove(q)
 
     # ── State (created on startup) ───────────────────────────────────
     _state: dict[str, Any] = {
@@ -805,6 +837,145 @@ def create_app(
         agent._messages = restored
         return len(restored)
 
+    def _schedule_subagent_auto_continue(session_id: str, user_id: str | int) -> None:
+        """If the parent is idle, run a short turn to integrate sub-agent results."""
+        key = (str(user_id), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            return
+        cfg = getattr(s.agent, "_config", None)
+        multi = getattr(cfg, "multi_agent", None) if cfg is not None else None
+        if multi is None or not getattr(multi, "auto_continue_on_complete", True):
+            return
+        s.auto_continue_pending = True
+        if s.is_busy:
+            # Parent is mid-turn; notifications will be injected on the next stream.
+            return
+        if s.auto_continue_task is not None and not s.auto_continue_task.done():
+            return
+
+        async def _run_auto_continue() -> None:
+            # Brief delay so multiple near-simultaneous completions coalesce.
+            await asyncio.sleep(0.45)
+            current = _state["sessions"].get(key)
+            if current is None:
+                return
+            if current.is_busy:
+                # Keep pending flag so the chat finally-hook can re-schedule.
+                return
+            mgr = getattr(current.agent, "subagent_manager", None)
+            notes = list(getattr(mgr, "_notifications", []) or []) if mgr else []
+            if not notes:
+                current.auto_continue_pending = False
+                return
+            current.auto_continue_pending = False
+            # Claude/Codex-style surface: tell the UI an agent finished before the
+            # parent integrates the result into the main transcript.
+            for note in notes:
+                current.broadcast_event({
+                    "type": "subagent_finished_notice",
+                    "session_id": session_id,
+                    "agent_id": note.agent_id,
+                    "description": note.description,
+                    "status": note.status,
+                    "summary": note.summary,
+                    "result_preview": (note.result or "")[:400],
+                })
+            turn_key = (str(user_id), session_id)
+            with _state["session_registry_lock"]:
+                if turn_key in _state["pending_turns"] or current.abort_event is not None:
+                    current.auto_continue_pending = True
+                    return
+                _state["pending_turns"].add(turn_key)
+                current.abort_event = asyncio.Event()
+            turn_lease = None
+            try:
+                try:
+                    turn_lease = await _state["turn_scheduler"].acquire(
+                        str(user_id), _admission_policy(user_id)
+                    )
+                except Exception:
+                    current.auto_continue_pending = True
+                    return
+                current.broadcast_event({
+                    "type": "parent_auto_turn_started",
+                    "session_id": session_id,
+                    "reason": "subagent_completed",
+                })
+                # Empty user text → notifications alone form the human message.
+                # Run through the streaming path so /chat/stop can cancel this
+                # otherwise invisible parent turn.
+                async def _collect_reply() -> str:
+                    final = ""
+                    async for event in current.agent.stream(""):
+                        if event.get("type") == "response" and event.get("content"):
+                            final = str(event["content"])
+                    return final
+
+                reply_task = asyncio.create_task(_collect_reply())
+                abort_task = asyncio.create_task(current.abort_event.wait())
+                finished, _ = await asyncio.wait(
+                    {reply_task, abort_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if abort_task in finished and current.abort_event.is_set():
+                    reply_task.cancel()
+                    await asyncio.gather(reply_task, return_exceptions=True)
+                    return
+                abort_task.cancel()
+                await asyncio.gather(abort_task, return_exceptions=True)
+                reply = await reply_task
+                if reply:
+                    session_path = _session_file(_session_cwd(user_id), session_id, user_id)
+                    if session_path.exists():
+                        _append_session_entry(session_path, {
+                            "role": "user",
+                            "content": "[Sub-agent completed — integrating results]",
+                            "created_at": _now_iso(),
+                            "system": True,
+                        })
+                        _append_session_entry(session_path, {
+                            "role": "assistant",
+                            "content": reply,
+                            "created_at": _now_iso(),
+                            "source": "subagent_auto_continue",
+                        })
+                    # Push into the open GUI (session file alone is invisible live).
+                    current.broadcast_event({
+                        "type": "parent_auto_reply",
+                        "session_id": session_id,
+                        "content": reply,
+                        "source": "subagent_auto_continue",
+                    })
+                    logger.info(
+                        "Auto-continued session %s after sub-agent completion",
+                        session_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Sub-agent auto-continue failed for session %s", session_id,
+                )
+            finally:
+                if turn_lease is not None:
+                    await turn_lease.release()
+                with _state["session_registry_lock"]:
+                    _state["pending_turns"].discard(turn_key)
+                current.abort_event = None
+                current.touch()
+                current.broadcast_event({
+                    "type": "parent_auto_turn_finished",
+                    "session_id": session_id,
+                })
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        s.auto_continue_task = loop.create_task(
+            _run_auto_continue(),
+            name=f"scout-subagent-continue-{session_id}",
+        )
+
     def _create_session_state(session_id: str, user_id: str | int, user: User | None) -> SessionState:
         """Construct one session state. Called in a bounded worker thread."""
         key = (str(user_id), session_id)
@@ -820,6 +991,20 @@ def create_app(
                     return await _permission_elevation_callback(
                         session_id, user_id, reason, domains,
                     )
+
+                def _on_subagent_complete(_record: Any) -> None:
+                    # May run on the event loop thread from a sub-agent task.
+                    try:
+                        _schedule_subagent_auto_continue(session_id, user_id)
+                    except Exception:
+                        logger.debug("Failed to schedule sub-agent auto-continue", exc_info=True)
+
+                async def _on_subagent_event(event: dict) -> None:
+                    key_local = (str(user_id), session_id)
+                    state = _state["sessions"].get(key_local)
+                    if state is not None:
+                        state.touch()
+                        state.broadcast_event(event)
 
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
@@ -858,7 +1043,10 @@ def create_app(
                         profile=perm_profile,
                         config=agent_config,
                         request_permissions_fn=_req_perms,
+                        on_subagent_complete=_on_subagent_complete,
                     )
+                    if agent.subagent_manager is not None:
+                        agent.subagent_manager.set_event_listener(_on_subagent_event)
                 else:
                     agent_config = _base_config_copy()
                     if session_model:
@@ -875,7 +1063,10 @@ def create_app(
                         grant_store=_state["grant_store"],
                         config=agent_config,
                         request_permissions_fn=_req_perms,
+                        on_subagent_complete=_on_subagent_complete,
                     )
+                    if agent.subagent_manager is not None:
+                        agent.subagent_manager.set_event_listener(_on_subagent_event)
                 s = SessionState(agent, agent_config.agent.model)
                 snap = load_session_snapshot(_session_dir(_session_cwd(user_id), user_id), session_id)
                 if snap and snap.get("active_profile"):
@@ -949,7 +1140,13 @@ def create_app(
             candidates = [
                 (key, state)
                 for key, state in sessions.items()
-                if state.abort_event is None
+                if (
+                    state.abort_event is None
+                    and not (
+                        getattr(state.agent, "subagent_manager", None)
+                        and state.agent.subagent_manager.running_count() > 0
+                    )
+                )
             ]
             remove_keys = {
                 key
@@ -1139,6 +1336,67 @@ def create_app(
             raise HTTPException(status_code=403, detail="Admin privileges required")
         return user
 
+    async def _wait_for_approval(
+        s: SessionState,
+        event_data: dict[str, Any],
+        *,
+        diffs: list[Any] | None = None,
+    ) -> ApprovalResponse:
+        """Publish and await one serialized approval request for a session."""
+        async with s.approval_lock:
+            approval_id = str(event_data["approval_id"])
+            approval_event = asyncio.Event()
+            s.approval_event = approval_event
+            s.approval_response = None
+            s.pending_approval_id = approval_id
+            s.pending_approval_diffs = list(diffs or [])
+            s.touch()
+
+            # The chat stream and the durable session-event stream are separate
+            # clients. Publish to both when present. If neither is connected,
+            # retain one event for the next session-event subscriber.
+            delivered = False
+            if s.approval_queue is not None:
+                await s.approval_queue.put(event_data)
+                delivered = True
+            if s.event_subscribers:
+                s.broadcast_event(event_data)
+                delivered = True
+            if not delivered:
+                await s.idle_approval_queue.put(event_data)
+
+            try:
+                await approval_event.wait()
+                response = s.approval_response
+                if response is None:
+                    return ApprovalResponse(
+                        approval_id=approval_id,
+                        action="no",
+                        feedback="Approval was cancelled",
+                    )
+                return response
+            finally:
+                retained: list[dict[str, Any]] = []
+                while True:
+                    try:
+                        queued = s.idle_approval_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if queued.get("approval_id") != approval_id:
+                        retained.append(queued)
+                for queued in retained:
+                    s.idle_approval_queue.put_nowait(queued)
+                if s.approval_response is None:
+                    s.broadcast_event({
+                        "type": "approval_cancelled",
+                        "approval_id": approval_id,
+                    })
+                if s.approval_event is approval_event:
+                    s.approval_event = None
+                    s.approval_response = None
+                    s.pending_approval_id = None
+                    s.pending_approval_diffs = []
+
     async def _approval_callback(
         session_id: str, user_id: str | int, tool_name: str, diffs: list, args: dict,
     ) -> tuple[str, str]:
@@ -1160,12 +1418,27 @@ def create_app(
         if not approval_required(s.approval_mode, kind):
             return ("yes", "")
 
-        # No queue means we're not in an SSE /chat flow (e.g. /init-skill).
-        # Auto-approve since there's no UI to show the approval request.
-        if s.approval_queue is None:
-            return ("yes", "")
-
         approval_id = str(uuid.uuid4())
+        sub_id = ""
+        sub_desc = ""
+        if isinstance(args, dict):
+            sub_id = str(args.get("_scout_subagent_id") or "")
+            sub_desc = str(args.get("_scout_subagent_description") or "")
+
+        # No live UI channel at all → only auto-approve non-subagent local tools
+        # (e.g. /init-skill). Background sub-agents must never silent-approve.
+        has_ui = (
+            s.approval_queue is not None
+            or bool(s.event_subscribers)
+        )
+        if not has_ui and not sub_id:
+            return ("yes", "")
+        if not has_ui and sub_id:
+            # Block until a UI connects or the wait is abandoned via stop.
+            logger.info(
+                "Sub-agent %s approval waiting for UI (session %s)",
+                sub_id, session_id,
+            )
 
         diff_entries = []
         for d in diffs:
@@ -1188,21 +1461,11 @@ def create_app(
             "diffs": diff_entries,
             "can_share": _state["multi_user"] and is_user_admin(user_id) and kind == "file_changes",
         }
+        if sub_id:
+            event_data["subagent_id"] = sub_id
+            event_data["subagent_description"] = sub_desc
 
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        s.pending_approval_id = approval_id
-        s.pending_approval_diffs = list(diffs)
-
-        await s.approval_queue.put(event_data)
-
-        await s.approval_event.wait()
-
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
-        s.pending_approval_id = None
-        s.pending_approval_diffs = []
+        resp = await _wait_for_approval(s, event_data, diffs=diffs)
 
         if resp.action == "edit":
             # Wait for the CLI to finish editing and signal us
@@ -1255,7 +1518,11 @@ def create_app(
         return (resp.action, resp.feedback)
 
     async def _capability_approval_callback(
-        session_id: str, user_id: str | int, cap: CapabilityRequest,
+        session_id: str,
+        user_id: str | int,
+        cap: CapabilityRequest,
+        subagent_id: str = "",
+        subagent_description: str = "",
     ) -> tuple[str, str]:
         """Request user approval for a narrowly scoped capability."""
         key = (str(user_id), session_id)
@@ -1266,7 +1533,7 @@ def create_app(
         if not approval_required(s.approval_mode, "capability"):
             # The orchestrator records the scoped grant from this response.
             return ("allow_session", "")
-        if s.approval_queue is None:
+        if s.approval_queue is None and not s.event_subscribers and not subagent_id:
             return ("deny", "No active approval channel")
 
         approval_id = str(uuid.uuid4())
@@ -1281,13 +1548,10 @@ def create_app(
                 "command_summary": cap.command_summary,
             },
         }
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        await s.approval_queue.put(event_data)
-        await s.approval_event.wait()
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
+        if subagent_id:
+            event_data["subagent_id"] = subagent_id
+            event_data["subagent_description"] = subagent_description
+        resp = await _wait_for_approval(s, event_data)
         if resp.action in {"deny", "no"}:
             return ("deny", resp.feedback)
         if resp.action == "allow_once":
@@ -1342,13 +1606,7 @@ def create_app(
                 "network_domains": domains,
             },
         }
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        await s.approval_queue.put(event_data)
-        await s.approval_event.wait()
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
+        resp = await _wait_for_approval(s, event_data)
         if resp.action in {"deny", "no"}:
             return f"[REQUEST DENIED] {resp.feedback}".strip()
 
@@ -1635,6 +1893,11 @@ def create_app(
 
                     for task in still_pending:
                         task.cancel()
+                    if still_pending:
+                        await asyncio.gather(
+                            *still_pending,
+                            return_exceptions=True,
+                        )
 
                     for task in finished:
                         result = task.result()
@@ -1752,6 +2015,9 @@ def create_app(
                 s.abort_event = None
                 s.touch()
                 await turn_lease.release()
+                # If sub-agents finished while this turn was busy, pick them up.
+                if s.auto_continue_pending:
+                    _schedule_subagent_auto_continue(req.session_id, uid)
 
         return EventSourceResponse(_generate())
 
@@ -1781,6 +2047,163 @@ def create_app(
             return {"status": "ok", "message": "Interruption signaled"}
         return {"status": "ok", "message": "No active task to stop"}
 
+    @app.get("/sessions/{session_id}/subagents")
+    async def list_session_subagents(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """List sub-agents for a live session (status snapshot for UI / ops)."""
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            return {"session_id": session_id, "subagents": [], "live": False}
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            return {"session_id": session_id, "subagents": [], "live": True, "enabled": False}
+        return {
+            "session_id": session_id,
+            "live": True,
+            "enabled": mgr.enabled,
+            "running": mgr.running_count(),
+            "total": mgr.total_count(),
+            "retain_seconds": mgr.terminal_retain_seconds,
+            "subagents": mgr.public_snapshot(),
+        }
+
+    @app.get("/sessions/{session_id}/subagents/{agent_id}")
+    async def get_session_subagent(
+        session_id: str,
+        agent_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        detail = mgr.public_detail(agent_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Sub-agent not found")
+        return {"session_id": session_id, "subagent": detail}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/message")
+    async def message_session_subagent(
+        session_id: str,
+        agent_id: str,
+        body: dict,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        message = str((body or {}).get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        result = await mgr.send_message(agent_id, message, source="user")
+        s.touch()
+        return {"status": "ok", "result": result}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/stop")
+    async def stop_session_subagent(
+        session_id: str,
+        agent_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        result = await mgr.stop(agent_id)
+        s.touch()
+        return {"status": "ok", "result": result}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/retain")
+    async def retain_session_subagent(
+        session_id: str,
+        agent_id: str,
+        body: dict,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Pause eviction while the UI is viewing this agent (Claude retain)."""
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        retain = bool((body or {}).get("retain", True))
+        ok = mgr.set_retain_open(agent_id, retain)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Sub-agent not found")
+        return {"status": "ok", "retain": retain}
+
+    @app.get("/sessions/{session_id}/subagent-events")
+    async def stream_session_subagent_events(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> EventSourceResponse:
+        """SSE stream of sub-agent lifecycle + tool events for the Agents panel."""
+        uid = user.id if user else "default"
+        # Ensure session exists so spawn can happen after connect.
+        s = await _get_session_state(session_id, uid, user)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        s.event_subscribers.append(queue)
+        s.touch()
+
+        # Snapshot current agents
+        mgr = getattr(s.agent, "subagent_manager", None)
+        snapshot = {
+            "type": "subagents_snapshot",
+            "session_id": session_id,
+            "subagents": mgr.public_snapshot() if mgr else [],
+        }
+
+        async def _gen():
+            try:
+                yield ServerSentEvent(
+                    data=json.dumps(snapshot),
+                    event="subagents_snapshot",
+                )
+                # Drain any idle approvals waiting without a chat stream
+                while True:
+                    try:
+                        pending = s.idle_approval_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    yield ServerSentEvent(
+                        data=json.dumps(pending),
+                        event=pending.get("type") or "approval_request",
+                    )
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    except asyncio.TimeoutError:
+                        yield ServerSentEvent(data="{}", event="ping")
+                        continue
+                    yield ServerSentEvent(
+                        data=json.dumps(event),
+                        event=event.get("type") or "message",
+                    )
+            finally:
+                if queue in s.event_subscribers:
+                    s.event_subscribers.remove(queue)
+
+        return EventSourceResponse(_gen())
 
     @app.get("/test-sse")
     async def test_sse() -> EventSourceResponse:
@@ -2101,6 +2524,11 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail="No pending approval request for this session",
+            )
+        if not s.pending_approval_id or req.approval_id != s.pending_approval_id:
+            raise HTTPException(
+                status_code=409,
+                detail="This approval request is no longer active",
             )
         s.approval_response = req
         s.approval_event.set()

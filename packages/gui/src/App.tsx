@@ -1,11 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { FolderTree } from "lucide-react";
+import { Bot, FolderTree } from "lucide-react";
 import { useServer } from "./hooks/useServer";
 import { useChat } from "./hooks/useChat";
 import { useConfig } from "./hooks/useConfig";
 import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
+import { useSubagents } from "./hooks/useSubagents";
 import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { BootScreen } from "./components/BootScreen";
@@ -29,6 +30,10 @@ import { UploadButton } from "./components/UploadButton";
 import { UserInputCard } from "./components/UserInputCard";
 import { FileChangePanel } from "./components/FileChangePanel";
 import { FileExplorerPanel } from "./components/FileExplorerPanel";
+import {
+  AgentsPanel,
+  SubagentStatusStrip,
+} from "./components/AgentsPanel";
 import { useApprovalMode } from "./hooks/useApprovalMode";
 import { useResponseAnnotations } from "./hooks/useResponseAnnotations";
 import {
@@ -116,6 +121,7 @@ export function App() {
     pendingApproval,
     pendingUserInput,
     clearApproval,
+    receiveApproval,
     clearUserInput,
     isSessionLoading,
     clearSession,
@@ -171,6 +177,8 @@ export function App() {
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
   const [filesExplorerOpen, setFilesExplorerOpen] = useState(false);
+  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
+  const [isAutoContinuing, setIsAutoContinuing] = useState(false);
 
   const openMemories = useCallback(() => {
     setSettingsTab("memories");
@@ -181,25 +189,36 @@ export function App() {
   const openArtifact = useCallback((artifact: Artifact) => {
     setActiveFileChanges(null);
     setFilesExplorerOpen(false);
+    setAgentsPanelOpen(false);
     setActiveArtifact(artifact);
   }, []);
 
   const openFileChanges = useCallback((changeSet: FileChangeSet) => {
     setActiveArtifact(null);
     setFilesExplorerOpen(false);
+    setAgentsPanelOpen(false);
     setActiveFileChanges(changeSet);
   }, []);
 
   const openFilesExplorer = useCallback(() => {
     setActiveArtifact(null);
     setActiveFileChanges(null);
+    setAgentsPanelOpen(false);
     setFilesExplorerOpen(true);
+  }, []);
+
+  const openAgentsPanel = useCallback(() => {
+    setActiveArtifact(null);
+    setActiveFileChanges(null);
+    setFilesExplorerOpen(false);
+    setAgentsPanelOpen(true);
   }, []);
 
   const closeRightPanel = useCallback(() => {
     setActiveArtifact(null);
     setActiveFileChanges(null);
     setFilesExplorerOpen(false);
+    setAgentsPanelOpen(false);
   }, []);
 
   const toggleFilesExplorer = useCallback(() => {
@@ -210,7 +229,55 @@ export function App() {
     openFilesExplorer();
   }, [filesExplorerOpen, openFilesExplorer]);
 
-  const rightPanelOpen = !!activeArtifact || !!activeFileChanges || filesExplorerOpen;
+  const rightPanelOpen =
+    !!activeArtifact || !!activeFileChanges || filesExplorerOpen || agentsPanelOpen;
+
+  const {
+    agents: subagents,
+    active: activeSubagents,
+    done: doneSubagents,
+    selectedId: selectedSubagentId,
+    detail: subagentDetail,
+    finishedNotices,
+    selectAgent,
+    clearSelection: clearSubagentSelection,
+    sendMessage: sendSubagentMessage,
+    stopAgent: stopSubagent,
+    dismissFinishedNotice,
+  } = useSubagents({
+    baseUrl,
+    sessionId: currentSessionId,
+    token,
+    enabled: isReady && !!currentSessionId,
+    onApprovalEvent: (event) => {
+      if (event?.type === "approval_request") {
+        receiveApproval(event, currentSessionId || "default");
+      } else if (event?.type === "approval_cancelled") {
+        clearApproval();
+      }
+    },
+    // Claude/Codex-style: when a worker finishes and the parent integrates,
+    // push the reply into the open transcript. Server already persisted it.
+    onParentAutoReply: (content) => {
+      setIsAutoContinuing(false);
+      if (!content.trim()) return;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.content === content) return prev;
+        return [
+          ...prev,
+          {
+            role: "assistant",
+            content,
+            steps: [],
+          },
+        ];
+      });
+    },
+    onParentAutoTurnStarted: () => setIsAutoContinuing(true),
+    onParentAutoTurnFinished: () => setIsAutoContinuing(false),
+  });
+  const chatBusy = isLoading || isAutoContinuing;
 
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
@@ -264,13 +331,13 @@ export function App() {
 
   const handleSubmit = useCallback(
     async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, submittedAnnotations: ResponseAnnotation[] = []) => {
-      if (!isReady || isLoading) return false;
+      if (!isReady || chatBusy) return false;
       return sendMessage(text, attachments, chatImages, () => {
         if (submittedAnnotations.length) clearAnnotations();
         onAccepted?.();
       }, submittedAnnotations);
     },
-    [isReady, isLoading, sendMessage, clearAnnotations],
+    [isReady, chatBusy, sendMessage, clearAnnotations],
   );
 
   const handleUserInputAnswer = useCallback(
@@ -467,7 +534,7 @@ export function App() {
   );
 
   const displayError = serverError || chatError || operationError || approvalModeError;
-  const isWelcome = isReady && messages.length === 0 && !isLoading;
+  const isWelcome = isReady && messages.length === 0 && !chatBusy;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
   const sessionTitle =
     rawTitle && !["New chat", "New session"].includes(rawTitle)
@@ -519,6 +586,31 @@ export function App() {
               <FolderTree size={15} />
               <span className="hidden sm:inline">Files</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (agentsPanelOpen) {
+                  setAgentsPanelOpen(false);
+                  void clearSubagentSelection();
+                } else {
+                  openAgentsPanel();
+                }
+              }}
+              className={`${headerActionButtonClass} ${
+                agentsPanelOpen ? headerActionActiveClass : headerActionIdleClass
+              }`}
+              title={agentsPanelOpen ? "Close subagents" : "Subagents"}
+              aria-label="Subagents"
+              aria-pressed={agentsPanelOpen}
+            >
+              <Bot size={15} />
+              <span className="hidden sm:inline">Agents</span>
+              {activeSubagents.length > 0 && (
+                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-scout-accent/20 px-1 text-[10px] font-semibold text-scout-accent">
+                  {activeSubagents.length}
+                </span>
+              )}
+            </button>
             {isMultiUser && (
               <UploadButton
                 uploads={uploads}
@@ -565,12 +657,39 @@ export function App() {
           />
         }
         artifactPanel={
-          filesExplorerOpen ? (
+          agentsPanelOpen ? (
+            <AgentsPanel
+              active={activeSubagents}
+              done={doneSubagents}
+              selectedId={selectedSubagentId}
+              detail={subagentDetail}
+              expanded={rightPanelExpanded}
+              onToggleExpand={toggleRightPanelExpanded}
+              onClose={() => {
+                setAgentsPanelOpen(false);
+                void clearSubagentSelection();
+              }}
+              onSelect={(id) => {
+                void selectAgent(id);
+              }}
+              onBack={() => {
+                void clearSubagentSelection();
+              }}
+              onStop={async (id) => {
+                await stopSubagent(id);
+              }}
+              onSend={async (id, message) => {
+                await sendSubagentMessage(id, message);
+              }}
+              baseUrl={baseUrl}
+              token={token}
+            />
+          ) : filesExplorerOpen ? (
             <FileExplorerPanel
               baseUrl={baseUrl}
               token={token}
               onClose={closeRightPanel}
-              refreshSignal={`${messages.length}:${isLoading ? "running" : "idle"}`}
+              refreshSignal={`${messages.length}:${chatBusy ? "running" : "idle"}`}
               expanded={rightPanelExpanded}
               onToggleExpand={toggleRightPanelExpanded}
             />
@@ -604,14 +723,14 @@ export function App() {
                     crowd the hero title; he strolls this ledge while idle. */}
                 <div className="relative mt-9">
                   <div className="absolute inset-x-0 top-0 h-0">
-                    <PixelPet working={isLoading} size={40} idleStrollEveryMs={90_000} />
+                    <PixelPet working={chatBusy} size={40} idleStrollEveryMs={90_000} />
                   </div>
                 <InputBar
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
                   onSlashCommand={handleSlashCommand}
-                  disabled={isLoading || !isReady}
-                  isLoading={isLoading}
+                  disabled={chatBusy || !isReady}
+                  isLoading={chatBusy}
                   onStop={stop}
                   models={models}
                   capabilities={capabilities}
@@ -640,41 +759,95 @@ export function App() {
             </div>
           )}
 
-          {isReady && (messages.length > 0 || isLoading) && (
-            <ChatView
-              messages={messages}
-              streamingSteps={streamingSteps}
-              streamingText={streamingText}
-              currentTool={currentTool}
-              statusMessage={statusMessage}
-              isLoading={isLoading}
-              awaitingApproval={!!pendingApproval}
-              annotations={annotations}
-              onAddAnnotation={addAnnotation}
-              onUpdateAnnotation={updateAnnotation}
-              onRemoveAnnotation={removeAnnotation}
-              onRetry={retryAt}
-              onFork={isMultiUser ? handleFork : undefined}
-              onOpenArtifact={openArtifact}
-              onOpenFileChanges={openFileChanges}
-              onUndoFileChanges={(changeSet) => {
-                setOperationError(null);
-                void undoFileChanges(changeSet).catch((err) => {
-                  console.error("Undo failed:", err);
-                  setOperationError(err instanceof Error ? err.message : "Undo failed");
-                });
-              }}
-              onOpenMemories={openMemories}
-              baseUrl={baseUrl}
-              token={token}
-            />
+          {isReady && (messages.length > 0 || chatBusy) && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <ChatView
+                messages={messages}
+                streamingSteps={streamingSteps}
+                streamingText={streamingText}
+                currentTool={currentTool}
+                statusMessage={
+                  isAutoContinuing ? "Integrating a finished agent’s result…" : statusMessage
+                }
+                isLoading={chatBusy}
+                awaitingApproval={!!pendingApproval}
+                annotations={annotations}
+                onAddAnnotation={addAnnotation}
+                onUpdateAnnotation={updateAnnotation}
+                onRemoveAnnotation={removeAnnotation}
+                onRetry={retryAt}
+                onFork={isMultiUser ? handleFork : undefined}
+                onOpenArtifact={openArtifact}
+                onOpenFileChanges={openFileChanges}
+                onUndoFileChanges={(changeSet) => {
+                  setOperationError(null);
+                  void undoFileChanges(changeSet).catch((err) => {
+                    console.error("Undo failed:", err);
+                    setOperationError(err instanceof Error ? err.message : "Undo failed");
+                  });
+                }}
+                onOpenMemories={openMemories}
+                baseUrl={baseUrl}
+                token={token}
+              />
+              {finishedNotices.length > 0 && (
+                <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-1.5 px-4 pb-2">
+                  {finishedNotices.map((n) => (
+                    <div
+                      key={n.agent_id}
+                      className="flex items-start gap-2 rounded-xl border border-scout-hairline-faint bg-scout-panel px-3 py-2 text-left text-[12px] transition-colors hover:bg-scout-lift/50"
+                    >
+                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                        n.status === "failed" ? "bg-scout-error" : "bg-scout-success"
+                      }`} />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          openAgentsPanel();
+                          void selectAgent(n.agent_id);
+                          dismissFinishedNotice(n.agent_id);
+                        }}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <span className="font-medium text-scout-text">
+                          {n.description}
+                        </span>
+                        <span className="text-scout-muted">
+                          {n.status === "failed" ? " needs attention" : " finished"}
+                        </span>
+                        {n.summary && (
+                          <span className="mt-0.5 block truncate text-scout-muted">
+                            {n.summary}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dismissFinishedNotice(n.agent_id)}
+                        className="shrink-0 rounded-full p-1 text-scout-muted hover:bg-scout-lift hover:text-scout-text"
+                        aria-label={`Dismiss ${n.description} notification`}
+                        title="Dismiss"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           {isReady && !isWelcome && (
             <div className="shrink-0 bg-scout-canvas/95">
+              {!agentsPanelOpen && activeSubagents.length > 0 && (
+                <SubagentStatusStrip
+                  active={activeSubagents}
+                  onOpen={openAgentsPanel}
+                />
+              )}
               {!pendingUserInput && !pendingApproval && annotations.length === 0 && (
                 <div className="relative z-10 mx-auto h-0 w-full max-w-[46rem] px-4">
-                  <PixelPet working={isLoading} />
+                  <PixelPet working={chatBusy || activeSubagents.length > 0} />
                 </div>
               )}
               {pendingUserInput && (
@@ -701,8 +874,8 @@ export function App() {
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
                   onSlashCommand={handleSlashCommand}
-                  disabled={isLoading || !isReady}
-                  isLoading={isLoading}
+                  disabled={chatBusy || !isReady}
+                  isLoading={chatBusy}
                   onStop={stop}
                   models={models}
                   capabilities={capabilities}

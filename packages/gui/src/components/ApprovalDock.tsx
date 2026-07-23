@@ -113,7 +113,10 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
     const isPermission = request.kind === "permission_elevation";
     const cap = request.capability;
     const permission = request.permissionRequest;
-    const title = isPermission ? "Scout wants network access" : "Scout needs permission to continue";
+    const actor = request.subagentDescription || "Scout";
+    const title = isPermission
+      ? `${actor} wants network access`
+      : `${actor} needs permission to continue`;
     const detail = isPermission ? permission?.reason : cap?.reason;
     const command = cap?.command_summary;
 
@@ -195,9 +198,10 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
     );
   }
 
+  const actor = request.subagentDescription || "Scout";
   const title = isPromotion
-    ? `Scout wants to promote ${diffs.length} staged file${diffs.length === 1 ? "" : "s"}`
-    : `Scout wants to edit ${diffs.length} file${diffs.length === 1 ? "" : "s"}`;
+    ? `${actor} wants to promote ${diffs.length} staged file${diffs.length === 1 ? "" : "s"}`
+    : `${actor} wants to edit ${diffs.length} file${diffs.length === 1 ? "" : "s"}`;
 
   return (
     <div className="overflow-hidden rounded-[24px] border border-scout-hairline bg-scout-panel shadow-composer">

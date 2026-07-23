@@ -48,6 +48,18 @@ server:
   agent_init_timeout_seconds: 45
   maintenance_interval_seconds: 60
 
+multi_agent:
+  enabled: true
+  max_concurrent: 3
+  max_total_per_session: 12
+  max_iterations: 10
+  default_background: true
+  # Auto-continue runs a parent turn when a background sub-agent finishes while
+  # the session is idle. Disable to rely only on next-user-message injection.
+  auto_continue_on_complete: true
+  # Keep finished agents re-promptable briefly (Claude panel grace ~30s).
+  terminal_retain_seconds: 60
+
 execution:
   enabled: true
   backend: worker

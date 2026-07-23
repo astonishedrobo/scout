@@ -22,6 +22,7 @@ from .graph import ApprovalFn, CapabilityApprovalFn, PromotionApprovalFn, build_
 from .prompts import build_system_prompt
 from .session import PersistentPythonSession
 from .file_guard import WorkspaceGuard
+from .subagents import SubAgentManager, format_notifications_block
 from .tools import make_tools
 
 logger = logging.getLogger(__name__)
@@ -183,9 +184,12 @@ class ScoutAgent:
         session_id: str = "default",
         server_mode: bool = False,
         shared_dir: Path | None = None,
-        grant_store: CapabilityGrantStore | None = None,
+        grant_store: Any | None = None,
         profile: ProfileConfig | None = None,
         request_permissions_fn: Any | None = None,
+        is_subagent: bool = False,
+        parent_subagent_manager: SubAgentManager | None = None,
+        on_subagent_complete: Any | None = None,
     ) -> None:
         self._cwd = str(Path(cwd or os.getcwd()).resolve())
         self._guard = guard
@@ -193,6 +197,10 @@ class ScoutAgent:
         self._session_id = session_id
         self._server_mode = server_mode
         self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
+        self._is_subagent = is_subagent
+        self._grant_store = grant_store
+        self._capability_approval_callback = capability_approval_callback
+        self._subagent_capability_approval = None
         if config:
             self._config = config
         else:
@@ -212,7 +220,6 @@ class ScoutAgent:
         data_dir = self._resolve_data_dir()
         personal_dir = Path(data_dir)
 
-        from ..execution.grants import CapabilityGrantStore
         from ..execution.service import ExecutionService
 
         # Execution service (primary path for all code execution)
@@ -224,12 +231,19 @@ class ScoutAgent:
             async def promotion_cb(tool_name, diffs, args):
                 return await approval_callback(sid, uid, tool_name, diffs, args)
 
+        capability_cb = None
         if capability_approval_callback and approval_callback_args:
             sid, uid = approval_callback_args[0], approval_callback_args[1]
             _cap_cb = capability_approval_callback
 
             async def capability_cb(cap):
                 return await _cap_cb(sid, uid, cap)
+
+            # Sub-agents reuse the same server capability gate, tagged later.
+            self._subagent_capability_approval = capability_cb
+        elif capability_approval_callback and not approval_callback_args:
+            capability_cb = capability_approval_callback
+            self._subagent_capability_approval = capability_approval_callback
 
         self._execution: ExecutionService | None = None
         if self._config.execution.enabled:
@@ -281,15 +295,50 @@ class ScoutAgent:
                 return await orig_cb(*approval_callback_args, name, diffs, args)
             self._final_approval = wrapped_callback
 
+        # Multi-agent: parents get a manager; nested sub-agents never do.
+        self._subagents: SubAgentManager | None = None
+        if (
+            not is_subagent
+            and parent_subagent_manager is None
+            and self._config.multi_agent.enabled
+        ):
+            persist = None
+            try:
+                # Durable results under the session store when available.
+                from pathlib import Path as _P
+                home = _P.home() / ".config" / "scout" / "sessions"
+                persist = home / str(user_id) / f"subagents-{session_id}.json"
+            except Exception:
+                persist = None
+            self._subagents = SubAgentManager(
+                config=self._config.multi_agent,
+                parent_session_id=str(session_id),
+                parent_user_id=str(user_id),
+                on_complete=on_subagent_complete,
+                persist_path=persist,
+            )
+            self._subagents.bind_parent(self)
+            try:
+                self._subagents.hydrate_from_snapshot()
+            except Exception:
+                logger.debug("subagent hydrate failed", exc_info=True)
+        elif parent_subagent_manager is not None:
+            self._subagents = parent_subagent_manager
+
         self._run_config = {
             "recursion_limit": max(cfg.max_iterations * 3, 50),
-            "run_name": "scout-agent",
-            "tags": ["scout", "server" if server_mode else "local"],
+            "run_name": "scout-agent" if not is_subagent else "scout-subagent",
+            "tags": [
+                "scout",
+                "server" if server_mode else "local",
+                *(["subagent"] if is_subagent else []),
+            ],
             "metadata": {
                 "scout_user_id": str(user_id),
                 "scout_session_id": str(session_id),
                 "scout_model": cfg.model,
                 "scout_server_mode": server_mode,
+                "scout_is_subagent": is_subagent,
             },
         }
         self._messages: list = []
@@ -330,8 +379,11 @@ class ScoutAgent:
             allow_request_permissions=(
                 self._config.permissions.allow_request_permissions
                 and profile.can_request_permissions
+                and not self._is_subagent
             ),
             request_permissions_fn=self._request_permissions_fn,
+            subagent_manager=self._subagents if not self._is_subagent else None,
+            is_subagent=self._is_subagent,
         )
         system_prompt = build_system_prompt(
             self._data_dir,
@@ -401,8 +453,61 @@ class ScoutAgent:
         self._focus_path = focus
         self._rebuild_graph(focus_path=focus)
 
+    def _pending_user_request_from_history(self) -> str:
+        """Last real user message — used so auto-continue finishes their ask."""
+        from langchain_core.messages import HumanMessage
+
+        for msg in reversed(getattr(self, "_messages", []) or []):
+            if not isinstance(msg, HumanMessage):
+                continue
+            text = _message_text(msg.content).strip()
+            if not text:
+                continue
+            # Skip synthetic system-ish injections
+            if text.startswith("[Sub-agent") or text.startswith("<subagent-notification"):
+                continue
+            return text
+        return ""
+
+    def _inject_pending_subagent_notifications(self, user_message: str) -> str:
+        """Prepend completed sub-agent notifications for the parent model turn."""
+        if getattr(self, "_is_subagent", False):
+            return user_message
+        manager = getattr(self, "_subagents", None)
+        if manager is None:
+            return user_message
+        notes = manager.drain_notifications()
+        if not notes:
+            return user_message
+        pending = self._pending_user_request_from_history()
+        # If this turn already has a real user message, that is the pending request.
+        if user_message.strip() and not user_message.strip().startswith("["):
+            pending = user_message.strip()
+        block = format_notifications_block(notes, pending_user_request=pending)
+        if not block:
+            return user_message
+        if user_message.strip():
+            return f"{block}\n\n---\n\n{user_message}"
+        # Auto-continue: drive completion of the pending request with the results.
+        return (
+            f"{block}\n\n---\n\n"
+            "The user is waiting. Using the sub-agent result(s) above, complete any "
+            "unfinished part of their pending request now (including file writes). "
+            "Prefer the most recent result. Do not ask which version to use for "
+            "revisions of the same deliverable."
+        )
+
+    def set_subagent_completion_callback(self, cb: Any) -> None:
+        if self._subagents is not None:
+            self._subagents.set_completion_callback(cb)
+
+    @property
+    def subagent_manager(self) -> SubAgentManager | None:
+        return self._subagents
+
     async def chat(self, user_message: str, attachments: list[str] | None = None) -> str:
         from .multimodal import build_human_message
+        user_message = self._inject_pending_subagent_notifications(user_message)
         self._messages.append(build_human_message(user_message, attachments))
         try:
             result = await self._graph.ainvoke(
@@ -424,6 +529,7 @@ class ScoutAgent:
         import asyncio
 
         from .multimodal import build_human_message
+        user_message = self._inject_pending_subagent_notifications(user_message)
         self._messages.append(build_human_message(user_message, attachments))
         new_messages: list = []
         removed_message_ids: set[str] = set()
@@ -673,6 +779,11 @@ class ScoutAgent:
         await self.close()
 
     async def close(self) -> None:
+        if self._subagents is not None and not self._is_subagent:
+            try:
+                await self._subagents.stop_all()
+            except Exception:
+                logger.debug("Error stopping sub-agents on close", exc_info=True)
         if self._execution:
             await self._execution.close()
         if self._session:

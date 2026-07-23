@@ -17,6 +17,8 @@ export interface ApprovalRequest {
   capability?: CapabilityRequestPayload;
   permissionRequest?: PermissionElevationPayload;
   canShare: boolean;
+  subagentId?: string;
+  subagentDescription?: string;
 }
 
 interface ChatState {
@@ -196,6 +198,28 @@ export function useChat({
     update(sessionId, (state) => ({ ...state, pendingApproval: null }));
   }, [sessionId, update]);
 
+  const receiveApproval = useCallback((
+    event: Record<string, unknown>,
+    targetSessionId = sessionId,
+  ) => {
+    update(targetSessionId, (state) => ({
+      ...state,
+      pendingApproval: {
+        approvalId: String(event.approval_id ?? ""),
+        kind: (event.kind as ApprovalRequest["kind"]) ?? "file_changes",
+        toolName: String(event.tool_name ?? ""),
+        diffs: (event.diffs as FileDiffEntry[]) ?? [],
+        capability: event.capability as CapabilityRequestPayload | undefined,
+        permissionRequest: event.permission_request as PermissionElevationPayload | undefined,
+        canShare: Boolean(event.can_share),
+        subagentId: event.subagent_id ? String(event.subagent_id) : undefined,
+        subagentDescription: event.subagent_description
+          ? String(event.subagent_description)
+          : undefined,
+      },
+    }));
+  }, [sessionId, update]);
+
   const clearUserInput = useCallback(() => {
     update(sessionId, (state) => ({ ...state, pendingUserInput: null }));
   }, [sessionId, update]);
@@ -347,11 +371,7 @@ export function useChat({
               break;
             }
             if (event.type === "approval_request") {
-              update(requestSessionId, (state) => ({ ...state, pendingApproval: {
-                approvalId: event.approval_id ?? "", kind: event.kind ?? "file_changes",
-                toolName: event.tool_name ?? "", diffs: event.diffs ?? [], capability: event.capability,
-                permissionRequest: event.permission_request, canShare: !!event.can_share,
-              } }));
+              receiveApproval(event as unknown as Record<string, unknown>, requestSessionId);
               continue;
             }
             if (event.type === "user_input_request") {
@@ -456,7 +476,7 @@ export function useChat({
       }));
     }
     return accepted;
-  }, [baseUrl, sessionId, token, onUserMessage, onUserAccepted, onAssistantMessage, onSessionTitle, update]);
+  }, [baseUrl, sessionId, token, onUserMessage, onUserAccepted, onAssistantMessage, onSessionTitle, receiveApproval, update]);
 
   const stop = useCallback(async () => {
     // Clear approval UI immediately; server declines pending approval on /chat/stop.
@@ -504,6 +524,6 @@ export function useChat({
     streamingSteps: active.streamingSteps, currentTool: active.currentTool,
     streamingText: active.streamingText, statusMessage: active.statusMessage, isLoading: active.isLoading,
     error: active.error, pendingApproval: active.pendingApproval, pendingUserInput: active.pendingUserInput,
-    clearApproval, clearUserInput, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
+    clearApproval, receiveApproval, clearUserInput, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
   };
 }

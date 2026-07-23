@@ -183,6 +183,56 @@ class ExecutionConfig(BaseModel):
     )
 
 
+class MultiAgentConfig(BaseModel):
+    """Background sub-agent spawning limits and defaults.
+
+    Inspired by Claude Code / Codex multi-agent controls: hard caps prevent
+    spawn storms, sub-agents cannot nest, and background completion notifies
+    the parent automatically.
+    """
+
+    enabled: bool = True
+    max_concurrent: int = Field(
+        3,
+        ge=1,
+        le=16,
+        description="Maximum concurrently running sub-agents per parent session.",
+    )
+    max_total_per_session: int = Field(
+        12,
+        ge=1,
+        le=64,
+        description="Hard cap on total sub-agents spawned in one parent session.",
+    )
+    max_iterations: int = Field(
+        10,
+        ge=1,
+        le=50,
+        description="Max tool-calling rounds for each sub-agent.",
+    )
+    default_background: bool = Field(
+        True,
+        description="Default for spawn_subagent run_in_background when omitted.",
+    )
+    auto_continue_on_complete: bool = Field(
+        True,
+        description=(
+            "When a background sub-agent finishes and the parent session is idle, "
+            "automatically run a parent turn to integrate the result."
+        ),
+    )
+    terminal_retain_seconds: int = Field(
+        60,
+        ge=15,
+        le=300,
+        description=(
+            "Seconds to keep a finished sub-agent alive for re-prompt / UI "
+            "(Claude Code uses ~30s panel grace). Evicted afterward unless the "
+            "UI is actively viewing it."
+        ),
+    )
+
+
 class AgentConfig(BaseModel):
     """Settings for the agentic (conversational) mode."""
 
@@ -374,6 +424,7 @@ class AppConfig(BaseModel):
     csv_sources: dict[str, CSVSourceConfig] = Field(default_factory=dict)
     json_sources: dict[str, JSONSourceConfig] = Field(default_factory=dict)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     memories: MemoriesConfig = Field(default_factory=MemoriesConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)

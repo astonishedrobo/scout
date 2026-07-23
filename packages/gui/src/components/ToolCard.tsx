@@ -75,6 +75,10 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
         return file
           ? `Stopped presenting ${file}`
           : "Stopped presenting files";
+      case "spawn_subagent":
+        return "Stopped launching agent";
+      case "send_subagent_message":
+        return "Stopped messaging agent";
       default:
         return "Stopped tool";
     }
@@ -113,6 +117,16 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
       return tense === "present" ? "Checking command output" : "Checked command output";
     case "memory_add_note":
       return tense === "present" ? "Updating memory" : "Updated memory";
+    case "spawn_subagent":
+      return tense === "present" ? "Launching agent" : "Launched agent";
+    case "send_subagent_message":
+      return tense === "present" ? "Messaging agent" : "Messaged agent";
+    case "list_subagents":
+      return tense === "present" ? "Checking agents" : "Checked agents";
+    case "get_subagent_result":
+      return tense === "present" ? "Reading agent result" : "Read agent result";
+    case "stop_subagent":
+      return tense === "present" ? "Stopping agent" : "Stopped agent";
     default:
       return tense === "present" ? "Using a tool" : "Used a tool";
   }
