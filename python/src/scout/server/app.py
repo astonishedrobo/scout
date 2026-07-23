@@ -561,6 +561,11 @@ def create_app(
             self.auto_continue_pending: bool = False
             # Fan-out for sub-agent / session UI events (SSE subscribers).
             self.event_subscribers: list[asyncio.Queue] = []
+            # Ordered, bounded replay log.  A browser reconnect must be able to
+            # catch up from an event id instead of relying on polling a stale
+            # task snapshot.
+            self.event_sequence = 0
+            self.event_history: list[dict] = []
             # Approvals while no /chat stream is open (background sub-agents).
             self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
 
@@ -572,6 +577,11 @@ def create_app(
             return self.abort_event is not None
 
         def broadcast_event(self, event: dict) -> None:
+            self.event_sequence += 1
+            event = {**event, "event_id": self.event_sequence}
+            self.event_history.append(event)
+            if len(self.event_history) > 512:
+                del self.event_history[:-512]
             dead: list[asyncio.Queue] = []
             for q in self.event_subscribers:
                 try:
@@ -2252,6 +2262,7 @@ def create_app(
     @app.get("/sessions/{session_id}/subagent-events")
     async def stream_session_subagent_events(
         session_id: str,
+        after: int = 0,
         user: User | None = Depends(get_user_context),
     ) -> EventSourceResponse:
         """SSE stream of sub-agent lifecycle + tool events for the Agents panel."""
@@ -2276,6 +2287,16 @@ def create_app(
                     data=json.dumps(snapshot),
                     event="subagents_snapshot",
                 )
+                # Replay events emitted after the client's last confirmed id.
+                # The snapshot is authoritative for list state; replay restores
+                # completion/approval notifications that happened mid-refresh.
+                for event in s.event_history:
+                    if int(event.get("event_id") or 0) > after:
+                        yield ServerSentEvent(
+                            data=json.dumps(event),
+                            event=event.get("type") or "message",
+                            id=str(event.get("event_id")),
+                        )
                 # Drain any idle approvals waiting without a chat stream
                 while True:
                     try:

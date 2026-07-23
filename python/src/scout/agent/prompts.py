@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_DESCRIPTIONS = {
     "exec_command": "**`exec_command`** — Run a command in a PTY. Returns output or a session ID for long-running commands. Commands run from `/workspace` by default; use bare relative filenames for personal workspace files and `/shared/...` for shared files. Network and sensitive operations may require approval. For Python, write a script and run `python script.py`.",
-    "write_stdin": "**`write_stdin`** — Send input to or poll a running `exec_command` session. Poll required sessions until they finish before responding.",
+    "write_stdin": "**`write_stdin`** — Send input to or inspect a running `exec_command` session. Do not repeatedly poll a long-running command: let the task UI report completion while you continue useful work.",
     "run_node": "**`run_node`** — Execute JavaScript/Node.js in an isolated sandbox.",
     "apply_patch": "**`apply_patch`** — Apply unified-diff patches to one or more files in a single approval.",
     "write_file": "**`write_file`** — Create or overwrite a text file with a clear approval preview.",
@@ -81,7 +81,7 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.append("- **Use the real sandbox paths.** Personal files are under `/workspace` and shared files are under `/shared`. Prefer relative names such as `script.py` or `plot.png`; never use `/app/workspace/...`, `/srv/scout-source/...`, `users/<id>/...`, or duplicated `workspace/workspace/...` paths.")
         tips.append("- **Install only after a real import failure.** On `ModuleNotFoundError`, request narrow PyPI network permission, then run `python -m pip install <package>` once (packages land in `/workspace/.scout-cache/python-packages`). Do not use `pip install --user` or invent `./.local` targets. Do not `uv init` unless the user asked for a managed project.")
     if "exec_command" in enabled_tools and "write_stdin" in enabled_tools:
-        tips.append("- **Finish command sessions.** Poll required long-running commands with `write_stdin` until they finish before responding.")
+        tips.append("- **Keep long commands in the background.** If a command returns a running session, do not busy-poll it. Continue the task; inspect it only when its output is needed to make the next decision.")
     if enabled_tools & WRITE_TOOLS:
         tips.append("- **Verify changes.** After edits, run the smallest relevant checks or inspect the resulting file. Report clearly when verification could not be run.")
     if "write_file" in enabled_tools or "write_binary_artifact" in enabled_tools:

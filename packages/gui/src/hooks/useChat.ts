@@ -173,6 +173,11 @@ export function useChat({
   const statesRef = useRef(states);
   statesRef.current = states;
   const abortRefs = useRef(new Map<string, AbortController>());
+  // Network chunks can arrive far faster than the browser can paint.  Keeping
+  // the canonical turn state in the request closure while flushing the visual
+  // copy once per animation frame makes streaming feel immediate instead of
+  // making React re-render the whole transcript for every token/PTY chunk.
+  const renderFrames = useRef(new Map<string, number>());
   const active = states[sessionId] ?? emptyState();
 
   const update = useCallback((id: string, fn: (state: ChatState) => ChatState) => {
@@ -230,6 +235,9 @@ export function useChat({
 
   const clearSession = useCallback((id: string) => {
     abortRefs.current.get(id)?.abort();
+    const frame = renderFrames.current.get(id);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    renderFrames.current.delete(id);
     setStates((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -267,8 +275,34 @@ export function useChat({
     const artifacts: Artifact[] = [];
     const fileChanges: FileChangeSet[] = [];
 
+    const flushVisualState = () => {
+      const frame = renderFrames.current.get(requestSessionId);
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+        renderFrames.current.delete(requestSessionId);
+      }
+      update(requestSessionId, (state) => ({
+        ...state,
+        streamingText: finalContent,
+        streamingSteps: [...steps],
+        statusMessage: undefined,
+        currentTool: steps.find((step) => step.status === "executing")?.name,
+      }));
+    };
+    const scheduleVisualState = () => {
+      if (renderFrames.current.has(requestSessionId)) return;
+      const frame = requestAnimationFrame(() => {
+        renderFrames.current.delete(requestSessionId);
+        flushVisualState();
+      });
+      renderFrames.current.set(requestSessionId, frame);
+    };
+
     const commitAssistant = async (opts: { stopped?: boolean } = {}) => {
       if (committed || userInputRequested) return;
+      // Ensure the final committed card includes chunks still waiting for the
+      // next paint; otherwise a fast terminal can lose its final visual tail.
+      flushVisualState();
       const sealed = opts.stopped ? sealSteps(steps) : [...steps];
       steps = sealed;
       if (!finalContent && !sealed.length && !artifacts.length && !fileChanges.length) return;
@@ -425,11 +459,7 @@ export function useChat({
             }
             if (event.type === "response_delta") {
               finalContent += event.content ?? "";
-              update(requestSessionId, (state) => ({
-                ...state,
-                streamingText: finalContent,
-                statusMessage: undefined,
-              }));
+              scheduleVisualState();
               continue;
             }
             if (event.type === "response") {
@@ -458,11 +488,7 @@ export function useChat({
               || event.type === "reflection"
             ) {
               steps = applyEvent(steps, event);
-              update(requestSessionId, (state) => ({
-                ...state, streamingSteps: [...steps],
-                statusMessage: undefined,
-                currentTool: event.type === "tool_call" ? event.name : steps.find((step) => step.status === "executing")?.name,
-              }));
+              scheduleVisualState();
             }
           } catch { /* skip malformed event */ }
         }
@@ -491,6 +517,9 @@ export function useChat({
         }));
       }
     } finally {
+      const frame = renderFrames.current.get(requestSessionId);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      renderFrames.current.delete(requestSessionId);
       abortRefs.current.delete(requestSessionId);
       update(requestSessionId, (state) => ({
         ...state,

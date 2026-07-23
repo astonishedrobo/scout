@@ -145,6 +145,7 @@ export function useSubagents({
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
   const detailEventsLenRef = useRef(0);
+  const lastEventIdRef = useRef(0);
   const onApprovalRef = useRef(onApprovalEvent);
   const onParentAutoReplyRef = useRef(onParentAutoReply);
   const onParentAutoResponseStartRef = useRef(onParentAutoResponseStart);
@@ -169,6 +170,7 @@ export function useSubagents({
     setDetail(null);
     setFinishedNotices([]);
     setConnected(false);
+    lastEventIdRef.current = 0;
   }, [sessionId]);
 
   const authHeaders = useCallback((): HeadersInit => {
@@ -379,6 +381,9 @@ export function useSubagents({
     }
 
     const url = new URL(`${baseUrl}/sessions/${sessionId}/subagent-events`);
+    if (lastEventIdRef.current > 0) {
+      url.searchParams.set("after", String(lastEventIdRef.current));
+    }
     const controller = new AbortController();
     let closed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -450,6 +455,9 @@ export function useSubagents({
     function handleEvent(event: SubAgentEvent, eventType: string) {
       const type = event.type || eventType;
       if (type === "ping") return;
+      const eventId = Number(event.event_id || 0);
+      if (eventId && eventId <= lastEventIdRef.current) return;
+      if (eventId) lastEventIdRef.current = eventId;
 
       if (type === "subagents_snapshot") {
         const list = (event as { subagents?: SubAgentInfo[] }).subagents || [];
