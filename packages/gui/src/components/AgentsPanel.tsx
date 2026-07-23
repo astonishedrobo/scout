@@ -114,6 +114,23 @@ function AgentRow({
   );
 }
 
+function TerminalTaskRow({ task }: { task: TaskEvent }) {
+  const live = task.status === "running" || task.status === "queued";
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  const elapsed = elapsedLabel(task.started_at ?? task.created_at, task.finished_at, now);
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl px-2.5 py-2">
+      {live ? <ActivityOrb activity="working" label={`${task.title} is running`} className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
+      <div className="min-w-0 flex-1"><div className="flex gap-2"><span className="truncate text-[13px] font-medium text-scout-text">{task.title}</span><span className="text-[11px] text-scout-muted">{live ? "running" : task.status}</span>{elapsed && <span className="ml-auto text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}</div><div className="line-clamp-2 text-[12px] text-scout-muted">{task.summary || task.result_preview || "Running command"}</div></div>
+    </div>
+  );
+}
+
 function toolStepFromEvent(event: SubAgentEvent): ToolStep {
   return {
     kind: "tool",
@@ -374,12 +391,7 @@ export function AgentsPanel({
               Nothing running
             </div>
           )}
-          {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => (
-            <div key={task.task_id} className="flex items-start gap-2.5 rounded-xl px-2.5 py-2">
-              <ActivityOrb activity="working" label={`${task.title} is running`} className="-ml-1 -mt-0.5" />
-              <div className="min-w-0 flex-1"><div className="flex gap-2 text-[13px] font-medium text-scout-text"><span className="truncate">{task.title}</span><span className="text-[11px] font-normal text-scout-muted">running</span></div><div className="text-[12px] text-scout-muted">{task.summary || "Running command"}</div></div>
-            </div>
-          ))}
+          {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => <TerminalTaskRow key={task.task_id} task={task} />)}
           <div className="mt-4 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-scout-muted">
             Done{done.length ? ` · ${done.length}` : ""}
           </div>
@@ -396,9 +408,7 @@ export function AgentsPanel({
               No finished agents yet
             </div>
           )}
-          {terminalTasks.filter((task) => !["running", "queued"].includes(task.status)).map((task) => (
-            <div key={task.task_id} className="flex items-start gap-2.5 rounded-xl px-2.5 py-2"><span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} /><div className="min-w-0"><div className="text-[13px] font-medium text-scout-text">{task.title}</div><div className="line-clamp-2 text-[12px] text-scout-muted">{task.summary || task.result_preview || task.status}</div></div></div>
-          ))}
+          {terminalTasks.filter((task) => !["running", "queued"].includes(task.status)).map((task) => <TerminalTaskRow key={task.task_id} task={task} />)}
         </div>
       )}
 
