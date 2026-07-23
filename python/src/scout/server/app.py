@@ -1035,8 +1035,6 @@ def create_app(
 
                 def _on_subagent_complete(record: Any) -> None:
                     # May run on the event loop thread from a sub-agent task.
-                    if not bool(getattr(record, "resume_parent_on_complete", False)):
-                        return
                     try:
                         _schedule_subagent_auto_continue(session_id, user_id)
                     except Exception:
@@ -1404,6 +1402,12 @@ def create_app(
                     _state["session_init_reservations"].discard(key)
                 locks.pop(key, None)
             state.touch()
+            manager = getattr(state.agent, "subagent_manager", None)
+            if manager is not None and getattr(manager, "_notifications", None):
+                # A process restart may have occurred after a worker persisted
+                # its result but before the parent consumed it. Resume the
+                # durable queue once the session is back on the event loop.
+                _schedule_subagent_auto_continue(session_id, user_id)
             return state
 
     def _persist_runtime_session_state(

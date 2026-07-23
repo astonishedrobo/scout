@@ -244,7 +244,48 @@ def test_health_and_spawn_one_explore_subagent():
             timeout=30,
         )
         assert detail.status_code == 200, detail.text[:400]
-        timeline = detail.json().get("subagent", {}).get("events") or []
+        agent_detail = detail.json().get("subagent", {})
+        timeline = agent_detail.get("events") or []
         assert any(
             event.get("type") == "subagent_user_message" for event in timeline
         ), "Agent chat is missing its delegated task"
+
+        tasks = client.get(
+            f"{BASE}/sessions/{session_id}/tasks",
+            headers=headers,
+            timeout=30,
+        )
+        assert tasks.status_code == 200, tasks.text[:400]
+        matching_task = next(
+            task
+            for task in tasks.json().get("tasks") or []
+            if task.get("task_id") == agents[0]["agent_id"]
+        )
+        assert matching_task.get("created_at") == agent_detail.get("created_at")
+        assert matching_task.get("finished_at") == agent_detail.get("finished_at")
+
+        # Claude Code-style pickup: once the worker finishes, the idle parent
+        # must consume its queued result and append a second assistant turn
+        # without another user prompt.
+        if agents[0].get("status") == "completed":
+            pickup_deadline = time.time() + 120
+            assistant_messages = []
+            while time.time() < pickup_deadline:
+                loaded = client.get(
+                    f"{BASE}/sessions/{session_id}",
+                    headers=headers,
+                    timeout=30,
+                )
+                assert loaded.status_code == 200, loaded.text[:400]
+                assistant_messages = [
+                    message
+                    for message in loaded.json().get("messages") or []
+                    if message.get("role") == "assistant"
+                ]
+                if len(assistant_messages) >= 2:
+                    break
+                time.sleep(1.0)
+            assert len(assistant_messages) >= 2, (
+                "Worker completed, but the supervisor never appended its automatic "
+                f"pickup turn: {assistant_messages}"
+            )

@@ -152,7 +152,7 @@ async def test_spawn_background_runs_and_notifies(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_background_result_defaults_to_compact_notice_only(tmp_path, monkeypatch):
+async def test_background_result_always_queues_parent_pickup(tmp_path, monkeypatch):
     multi = MultiAgentConfig(
         enabled=True,
         terminal_retain_seconds=60,
@@ -180,8 +180,60 @@ async def test_background_result_defaults_to_compact_notice_only(tmp_path, monke
         await asyncio.sleep(0.05)
 
     assert mgr._agents[agent_id].result == "final delegated answer"
-    assert mgr.drain_notifications() == []
+    notes = mgr.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].result == "final delegated answer"
     assert completed == [agent_id]
+
+
+@pytest.mark.asyncio
+async def test_undelivered_parent_pickup_survives_restart(tmp_path, monkeypatch):
+    persist_path = tmp_path / "subagents.json"
+    multi = MultiAgentConfig(enabled=True, terminal_retain_seconds=60)
+    mgr = SubAgentManager(
+        config=multi,
+        parent_session_id="sess-1",
+        parent_user_id="u1",
+        persist_path=persist_path,
+    )
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+    _patch_child_stream(monkeypatch, ["durable delegated answer"])
+
+    result = await mgr.spawn(
+        description="Durable answer",
+        prompt="Return the answer",
+        run_in_background=True,
+    )
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in result.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if mgr._agents[agent_id].status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    restored = SubAgentManager(
+        config=multi,
+        parent_session_id="sess-1",
+        parent_user_id="u1",
+        persist_path=persist_path,
+    )
+    assert restored.hydrate_from_snapshot() == 1
+    notes = restored.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].agent_id == agent_id
+    assert notes[0].result == "durable delegated answer"
+
+    drained_again = SubAgentManager(
+        config=multi,
+        parent_session_id="sess-1",
+        parent_user_id="u1",
+        persist_path=persist_path,
+    )
+    drained_again.hydrate_from_snapshot()
+    assert drained_again.drain_notifications() == []
 
 
 @pytest.mark.asyncio
@@ -342,11 +394,13 @@ async def test_stop_running(tmp_path, monkeypatch):
     mgr = _mgr()
     mgr.bind_parent(_FakeParent(tmp_path, multi))
     events = []
+    completed = []
 
     async def on_event(event):
         events.append(event)
 
     mgr.set_event_listener(on_event)
+    mgr.set_completion_callback(lambda record: completed.append(record.agent_id))
     from scout import agent as agent_mod
 
     started = asyncio.Event()
@@ -375,6 +429,10 @@ async def test_stop_running(tmp_path, monkeypatch):
     stop = await mgr.stop(agent_id)
     assert "stopped" in stop
     assert mgr._agents[agent_id].status == "stopped"
+    assert completed == [agent_id]
+    notes = mgr.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].status == "stopped"
     assert any(
         event["type"] == "subagent_stopped"
         and event["agent_id"] == agent_id
@@ -407,7 +465,7 @@ def test_trailhand_prompt_respects_explicit_text_output():
     assert "Write files only when the assignment explicitly requests" in prompt
 
 
-def test_multi_agent_prompt_distinguishes_notify_from_parent_resume(tmp_path):
+def test_multi_agent_prompt_describes_automatic_parent_pickup(tmp_path):
     cfg = AppConfig(multi_agent=MultiAgentConfig(enabled=True))
     prompt = build_system_prompt(
         str(tmp_path),
@@ -415,10 +473,10 @@ def test_multi_agent_prompt_distinguishes_notify_from_parent_resume(tmp_path):
         allowed_tools=resolve_profile("contributor").allowed_tools,
     )
 
-    assert "resume_parent_on_complete=false" in prompt
+    assert "Completion is automatically queued back to you" in prompt
+    assert "automatic follow-up" in prompt
     assert "only** workers whose `spawn_subagent`" in prompt
     assert "historical" in prompt
-    assert "additional supervisor work" in prompt
 
 
 def test_profiles_include_send_message():

@@ -454,9 +454,8 @@ def make_tools(
         Prefer background mode so you can keep working; you will be notified
         when it finishes. Types: snoop (read-only search), cartographer
         (read-only plan), trailhand (multi-step work / timers / edits).
-        Set resume_parent_on_complete only when you must perform additional
-        supervisor work using the result. Leave it false when the worker's
-        returned result itself completes the user's request.
+        Completion is always delivered back to the supervisor automatically.
+        resume_parent_on_complete is retained for API compatibility.
         """
         if is_subagent or subagent_manager is None:
             return (

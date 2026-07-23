@@ -256,37 +256,8 @@ export function App() {
         clearApproval();
       }
     },
-    // A worker completion must be visible in the main transcript even when no
-    // dependent supervisor turn is needed. This is a deterministic UI handoff:
-    // it does not invoke the model or duplicate the full worker response.
-    onAgentFinished: (notice) => {
-      setMessages((previous) => {
-        if (previous.some((message) => message.taskNotice?.task_id === notice.agent_id)) {
-          return previous;
-        }
-        return [
-          ...previous,
-          {
-            role: "system",
-            content: "",
-            taskNotice: {
-              task_id: notice.agent_id,
-              title: notice.description,
-              status:
-                notice.status === "failed"
-                  ? "failed"
-                  : notice.status === "cancelled"
-                    ? "cancelled"
-                    : "completed",
-              summary: notice.summary,
-              result_preview: notice.result_preview,
-            },
-          },
-        ];
-      });
-    },
-    // When dependent supervisor work was requested, push that completed parent
-    // turn into the open transcript. Ordinary worker results stay in task details.
+    // Background completions are queued by the server and integrated by one
+    // normal supervisor turn; stream that durable reply into the transcript.
     onParentAutoReply: (content) => {
       setIsAutoContinuing(false);
       setAutoStreamingText("");

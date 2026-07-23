@@ -456,6 +456,7 @@ class SubAgentManager:
             record.summary = ""
             record.error = ""
             record.notified_completion = False
+            self.persist_snapshot()
         await record.inbox.put({"role": "user", "content": message, "source": source})
         # Show as a normal user turn in the agent timeline (not "queued" jargon).
         await self._emit(record, "subagent_user_message", {
@@ -581,6 +582,7 @@ class SubAgentManager:
             })
             self.persist_snapshot()
             await self._enqueue_notification(record)
+            await self._fire_complete(record)
         return f"status: stopped\nagent_id: {agent_id}\ndescription: {record.description}"
 
     async def stop_all(self) -> None:
@@ -618,6 +620,8 @@ class SubAgentManager:
     def drain_notifications(self) -> list[SubAgentNotification]:
         notes = list(self._notifications)
         self._notifications.clear()
+        if notes:
+            self.persist_snapshot()
         return notes
 
     def persist_snapshot(self) -> None:
@@ -628,6 +632,17 @@ class SubAgentManager:
             payload = {
                 "session_id": self.parent_session_id,
                 "updated_at": time.time(),
+                "pending_notifications": [
+                    {
+                        "agent_id": note.agent_id,
+                        "description": note.description,
+                        "status": note.status,
+                        "summary": note.summary,
+                        "result": note.result,
+                        "error": note.error,
+                    }
+                    for note in self._notifications
+                ],
                 "agents": [
                     {
                         "agent_id": a.agent_id,
@@ -713,6 +728,30 @@ class SubAgentManager:
             self._agents[agent_id] = rec
             self._spawn_count += 1
             n += 1
+        if self._persist_path is not None and self._persist_path.is_file():
+            try:
+                data = __import__("json").loads(
+                    self._persist_path.read_text(encoding="utf-8")
+                )
+                known = {note.agent_id for note in self._notifications}
+                for row in data.get("pending_notifications") or []:
+                    agent_id = str(row.get("agent_id") or "")
+                    if not agent_id or agent_id in known:
+                        continue
+                    status = str(row.get("status") or "completed")
+                    if status not in {"completed", "failed", "stopped"}:
+                        status = "completed"
+                    self._notifications.append(SubAgentNotification(
+                        agent_id=agent_id,
+                        description=str(row.get("description") or agent_id),
+                        status=status,  # type: ignore[arg-type]
+                        summary=str(row.get("summary") or status),
+                        result=str(row.get("result") or ""),
+                        error=str(row.get("error") or ""),
+                    ))
+                    known.add(agent_id)
+            except Exception:
+                logger.debug("Failed to hydrate pending notifications", exc_info=True)
         return n
 
     # ── Internals ────────────────────────────────────────────────────
@@ -1053,11 +1092,6 @@ class SubAgentManager:
         if record.notified_completion:
             return
         record.notified_completion = True
-        # The durable task event already tells the user this worker finished.
-        # Only place the full result into the parent's model context when the
-        # supervisor explicitly declared that it still has dependent work.
-        if not record.resume_parent_on_complete:
-            return
         if record.status == "completed":
             summary = f'Agent "{record.description}" completed'
         elif record.status == "failed":
@@ -1074,6 +1108,9 @@ class SubAgentManager:
         )
         async with self._lock:
             self._notifications.append(note)
+        # Completion pickup is durable. If the process restarts before the
+        # parent drains this queue, hydration restores the undelivered result.
+        self.persist_snapshot()
 
     async def _fire_complete(self, record: SubAgentRecord) -> None:
         if self._on_complete is None:
