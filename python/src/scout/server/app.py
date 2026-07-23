@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import os as _os
+import re
 import shutil
 import threading
 import time
@@ -568,6 +569,7 @@ def create_app(
             self.event_sequence = 0
             self.event_history: list[dict] = []
             self.task_store: TaskStore | None = None
+            self.terminal_tasks: dict[int, asyncio.Task] = {}
             # Approvals while no /chat stream is open (background sub-agents).
             self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
 
@@ -1938,6 +1940,39 @@ def create_app(
             # this queue for the lifetime of a long tool-heavy turn.
             agent_events: asyncio.Queue = asyncio.Queue(maxsize=256)
             first_assistant_response: str | None = None
+            terminal_calls: dict[str, dict] = {}
+
+            async def _publish_terminal_task(task: dict) -> None:
+                if s.task_store is not None:
+                    task, task_sequence = await asyncio.to_thread(s.task_store.upsert, task)
+                else:
+                    task_sequence = 0
+                s.broadcast_event({"type": "task_event", "session_id": req.session_id, "task": task, "task_sequence": task_sequence})
+
+            async def _watch_terminal(process_id: int, task_id: str, title: str) -> None:
+                """Own a long shell process after the LLM turn has moved on."""
+                service = getattr(agent, "execution_service", None)
+                try:
+                    while service is not None:
+                        result = await service.write_stdin(process_id, "", yield_time_ms=30_000)
+                        text = result.text
+                        if "Process running with session ID" in text:
+                            continue
+                        failed = text.startswith("[EXEC ERROR]") or "Process exited with code -" in text
+                        await _publish_terminal_task({
+                            "task_id": task_id, "task_type": "terminal", "title": title,
+                            "status": "failed" if failed else "completed", "created_at": None,
+                            "started_at": None, "finished_at": time.time(),
+                            "summary": "Command failed" if failed else "Command finished",
+                            "result_preview": text[-600:], "error": text[-300:] if failed else None,
+                        })
+                        return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    await _publish_terminal_task({"task_id": task_id, "task_type": "terminal", "title": title, "status": "interrupted", "created_at": None, "started_at": None, "finished_at": time.time(), "summary": "Terminal monitor interrupted", "error": str(exc)})
+                finally:
+                    s.terminal_tasks.pop(process_id, None)
 
             def session_event(payload: dict) -> dict:
                 return {**payload, "session_id": req.session_id}
@@ -1987,6 +2022,19 @@ def create_app(
                         if task is agent_get:
                             kind, payload = result
                             if kind == "event":
+                                if payload.get("type") == "tool_call" and payload.get("name") == "exec_command":
+                                    terminal_calls[str(payload.get("tool_call_id") or "")] = payload.get("args") or {}
+                                if payload.get("type") == "tool_result" and payload.get("name") == "exec_command":
+                                    match = re.search(r"Process running with session ID\\s+(\\d+)", str(payload.get("output") or ""))
+                                    if match:
+                                        process_id = int(match.group(1))
+                                        args = terminal_calls.get(str(payload.get("tool_call_id") or ""), {})
+                                        title = str(args.get("description") or args.get("cmd") or "Background command")[:100]
+                                        task_id = f"terminal-{process_id}"
+                                        now = time.time()
+                                        await _publish_terminal_task({"task_id": task_id, "task_type": "terminal", "title": title, "status": "running", "created_at": now, "started_at": now, "finished_at": None, "summary": "Running command"})
+                                        if process_id not in s.terminal_tasks:
+                                            s.terminal_tasks[process_id] = asyncio.create_task(_watch_terminal(process_id, task_id, title))
                                 if payload.get("file_changes"):
                                     now = _now_iso()
                                     for change_set in payload.get("file_changes") or []:
