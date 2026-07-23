@@ -86,6 +86,8 @@ Work style:
 - Explicit wait/timer demos: sleep for about the requested duration, then report done. \
   Do not invent unrelated workspace exploration.
 - Otherwise finish as soon as the real task is done.
+- On a follow-up, perform the requested work immediately. Do not answer with
+  "acknowledged", "ready to deliver", or a promise to do it later.
 
 Final report: a few sentences or tight bullets — paths, numbers, outcomes. \
 No phase lists, no meta-command menus. You cannot spawn sub-agents.
@@ -362,6 +364,12 @@ class SubAgentManager:
             "agent_type": agent_type,
             "color": color,
             "status": "pending",
+        })
+        await self._emit(record, "subagent_user_message", {
+            "agent_id": agent_id,
+            "source": "parent",
+            "content": prompt[:2_000],
+            "preview": prompt[:200],
         })
 
         if run_in_background:
@@ -934,6 +942,8 @@ class SubAgentManager:
                             "output": out,
                             "tool_call_id": ev.get("tool_call_id"),
                             "last_activity": record.last_activity,
+                            "artifacts": ev.get("artifacts") or [],
+                            "file_changes": ev.get("file_changes") or [],
                         })
                     elif et == "thinking":
                         record.last_activity = ev.get("title") or "Thinking…"
@@ -943,6 +953,22 @@ class SubAgentManager:
                             "content": _bound_text(ev.get("content") or ""),
                             "last_activity": record.last_activity,
                         })
+                    elif et == "response_start":
+                        final_text = ""
+                        await self._emit(record, "subagent_response_start", {
+                            "agent_id": record.agent_id,
+                            "last_activity": "Composing…",
+                        }, persist=False)
+                    elif et == "response_delta":
+                        text = ev.get("content") or ""
+                        if text:
+                            final_text += text
+                            record.last_activity = "Composing…"
+                            await self._emit(record, "subagent_text_delta", {
+                                "agent_id": record.agent_id,
+                                "content": text,
+                                "last_activity": record.last_activity,
+                            }, persist=False)
                     elif et in {"assistant_text", "response"}:
                         text = ev.get("content") or ""
                         if text:
@@ -978,9 +1004,17 @@ class SubAgentManager:
                 record.summary = f"Failed: {exc}"
                 logger.exception("Sub-agent %s turn failed", record.agent_id)
 
-    async def _emit(self, record: SubAgentRecord, etype: str, payload: dict[str, Any]) -> None:
+    async def _emit(
+        self,
+        record: SubAgentRecord,
+        etype: str,
+        payload: dict[str, Any],
+        *,
+        persist: bool = True,
+    ) -> None:
         event = SubAgentEvent(type=etype, payload=payload)
-        record.events.append(event)
+        if persist:
+            record.events.append(event)
         if self._on_event is not None:
             try:
                 full = {

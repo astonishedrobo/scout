@@ -181,6 +181,8 @@ def test_health_and_spawn_one_explore_subagent():
         assert events, "No SSE events received from /chat"
         errors = [e for e in events if e.get("type") == "error"]
         assert not errors, f"Chat errors: {errors[:2]}"
+        deltas = [e for e in events if e.get("type") == "response_delta"]
+        assert deltas, "Live model response did not emit token deltas"
 
         tool_calls = [e for e in events if e.get("type") == "tool_call"]
         spawn_calls = [e for e in tool_calls if e.get("name") == "spawn_subagent"]
@@ -236,3 +238,13 @@ def test_health_and_spawn_one_explore_subagent():
         assert agents[0].get("status") in {
             "completed", "failed", "stopped", "running", "pending",
         }
+        detail = client.get(
+            f"{BASE}/sessions/{session_id}/subagents/{agents[0]['agent_id']}",
+            headers=headers,
+            timeout=30,
+        )
+        assert detail.status_code == 200, detail.text[:400]
+        timeline = detail.json().get("subagent", {}).get("events") or []
+        assert any(
+            event.get("type") == "subagent_user_message" for event in timeline
+        ), "Agent chat is missing its delegated task"

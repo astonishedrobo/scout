@@ -179,6 +179,7 @@ export function App() {
   const [filesExplorerOpen, setFilesExplorerOpen] = useState(false);
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [isAutoContinuing, setIsAutoContinuing] = useState(false);
+  const [autoStreamingText, setAutoStreamingText] = useState("");
 
   const openMemories = useCallback(() => {
     setSettingsTab("memories");
@@ -260,6 +261,7 @@ export function App() {
     // push the reply into the open transcript. Server already persisted it.
     onParentAutoReply: (content) => {
       setIsAutoContinuing(false);
+      setAutoStreamingText("");
       if (!content.trim()) return;
       setMessages((prev) => {
         const last = prev[prev.length - 1];
@@ -274,8 +276,18 @@ export function App() {
         ];
       });
     },
-    onParentAutoTurnStarted: () => setIsAutoContinuing(true),
-    onParentAutoTurnFinished: () => setIsAutoContinuing(false),
+    onParentAutoResponseStart: () => setAutoStreamingText(""),
+    onParentAutoResponseDelta: (content) => {
+      setAutoStreamingText((current) => current + content);
+    },
+    onParentAutoTurnStarted: () => {
+      setAutoStreamingText("");
+      setIsAutoContinuing(true);
+    },
+    onParentAutoTurnFinished: () => {
+      setAutoStreamingText("");
+      setIsAutoContinuing(false);
+    },
   });
   const chatBusy = isLoading || isAutoContinuing;
 
@@ -681,6 +693,15 @@ export function App() {
               onSend={async (id, message) => {
                 await sendSubagentMessage(id, message);
               }}
+              onOpenArtifact={openArtifact}
+              onOpenFileChanges={openFileChanges}
+              onUndoFileChanges={(changeSet) => {
+                void undoFileChanges(changeSet).catch((err) => {
+                  setOperationError(
+                    err instanceof Error ? err.message : "Undo failed",
+                  );
+                });
+              }}
               baseUrl={baseUrl}
               token={token}
             />
@@ -764,7 +785,7 @@ export function App() {
               <ChatView
                 messages={messages}
                 streamingSteps={streamingSteps}
-                streamingText={streamingText}
+                streamingText={isAutoContinuing ? autoStreamingText : streamingText}
                 currentTool={currentTool}
                 statusMessage={
                   isAutoContinuing ? "Integrating a finished agent’s result…" : statusMessage

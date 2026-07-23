@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Artifact, FileChangeSet } from "scout-core";
 
 export type SubAgentStatus =
   | "pending"
@@ -28,6 +29,8 @@ export interface SubAgentEvent {
   source?: string;
   preview?: string;
   final?: boolean;
+  artifacts?: Artifact[];
+  file_changes?: FileChangeSet[];
   [key: string]: unknown;
 }
 
@@ -108,6 +111,8 @@ interface UseSubagentsOptions {
   onApprovalEvent?: (event: Record<string, unknown>) => void;
   /** Claude/Codex-style: parent finished integrating a worker result into main chat. */
   onParentAutoReply?: (content: string) => void;
+  onParentAutoResponseStart?: () => void;
+  onParentAutoResponseDelta?: (content: string) => void;
   /** Toast / inline notice when a worker finishes. */
   onAgentFinished?: (notice: AgentFinishedNotice) => void;
   onParentAutoTurnStarted?: () => void;
@@ -121,6 +126,8 @@ export function useSubagents({
   enabled = true,
   onApprovalEvent,
   onParentAutoReply,
+  onParentAutoResponseStart,
+  onParentAutoResponseDelta,
   onAgentFinished,
   onParentAutoTurnStarted,
   onParentAutoTurnFinished,
@@ -137,11 +144,15 @@ export function useSubagents({
   const detailEventsLenRef = useRef(0);
   const onApprovalRef = useRef(onApprovalEvent);
   const onParentAutoReplyRef = useRef(onParentAutoReply);
+  const onParentAutoResponseStartRef = useRef(onParentAutoResponseStart);
+  const onParentAutoResponseDeltaRef = useRef(onParentAutoResponseDelta);
   const onAgentFinishedRef = useRef(onAgentFinished);
   const onParentAutoTurnStartedRef = useRef(onParentAutoTurnStarted);
   const onParentAutoTurnFinishedRef = useRef(onParentAutoTurnFinished);
   onApprovalRef.current = onApprovalEvent;
   onParentAutoReplyRef.current = onParentAutoReply;
+  onParentAutoResponseStartRef.current = onParentAutoResponseStart;
+  onParentAutoResponseDeltaRef.current = onParentAutoResponseDelta;
   onAgentFinishedRef.current = onAgentFinished;
   onParentAutoTurnStartedRef.current = onParentAutoTurnStarted;
   onParentAutoTurnFinishedRef.current = onParentAutoTurnFinished;
@@ -448,7 +459,18 @@ export function useSubagents({
         onParentAutoReplyRef.current?.(String(event.content));
         return;
       }
+      if (type === "parent_auto_response_start") {
+        onParentAutoResponseStartRef.current?.();
+        return;
+      }
+      if (type === "parent_auto_response_delta" && event.content) {
+        onParentAutoResponseDeltaRef.current?.(String(event.content));
+        return;
+      }
       if (type === "parent_auto_turn_started") {
+        // The live parent response replaces the temporary completion notice;
+        // keeping both makes the transcript look duplicated and unfinished.
+        setFinishedNotices([]);
         onParentAutoTurnStartedRef.current?.();
         return;
       }
@@ -497,12 +519,16 @@ export function useSubagents({
         type === "subagent_tool_result" ||
         type === "subagent_thinking" ||
         type === "subagent_text" ||
+        type === "subagent_response_start" ||
+        type === "subagent_text_delta" ||
         type === "subagent_user_message" ||
         type === "subagent_message_queued"
       ) {
         const activity =
           type === "subagent_user_message" || type === "subagent_message_queued"
             ? "Working on follow-up…"
+            : type === "subagent_response_start" || type === "subagent_text_delta"
+              ? "Composing…"
             : event.last_activity || event.title || event.name;
         upsertAgent({
           agent_id: agentId,

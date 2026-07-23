@@ -405,6 +405,24 @@ export function useChat({
               update(requestSessionId, (state) => ({ ...state, statusMessage: event.message }));
               continue;
             }
+            if (event.type === "response_start") {
+              finalContent = "";
+              update(requestSessionId, (state) => ({
+                ...state,
+                streamingText: "",
+                statusMessage: undefined,
+              }));
+              continue;
+            }
+            if (event.type === "response_delta") {
+              finalContent += event.content ?? "";
+              update(requestSessionId, (state) => ({
+                ...state,
+                streamingText: finalContent,
+                statusMessage: undefined,
+              }));
+              continue;
+            }
             if (event.type === "response") {
               finalContent = event.content ?? "";
               update(requestSessionId, (state) => ({ ...state, streamingText: finalContent, statusMessage: undefined }));

@@ -218,6 +218,9 @@ def _init_chat_model(
         model=model,
         temperature=temperature,
         max_retries=max_retries,
+        # LangGraph's ``messages`` stream mode can only surface token deltas
+        # when the underlying chat model actually uses its streaming path.
+        streaming=True,
         **(client_kwargs or {}),
     )
 
@@ -472,7 +475,20 @@ def build_graph(
         client_kwargs=llm_client_kwargs,
         max_retries=agent_config.provider_max_retries,
     )
-    llm_with_tools = llm.bind_tools(tools)
+    # Only calls tagged as visible responses are forwarded to the browser.
+    # Compression also uses ``llm`` and must never leak its private summary
+    # tokens into the user-facing answer stream.
+    visible_llm = (
+        llm.with_config(tags=["scout_visible_response"])
+        if hasattr(llm, "with_config")
+        else llm
+    )
+    bound_llm = llm.bind_tools(tools)
+    llm_with_tools = (
+        bound_llm.with_config(tags=["scout_visible_response"])
+        if hasattr(bound_llm, "with_config")
+        else bound_llm
+    )
 
     _tools_by_name = {t.name: t for t in tools}
 
@@ -883,7 +899,7 @@ def build_graph(
                         "Tool call failed %d times — retrying original "
                         "request without tools.", bad_req_retries,
                     )
-                    response = llm.invoke(original_messages)
+                    response = visible_llm.invoke(original_messages)
             else:
                 raise
 
@@ -943,7 +959,7 @@ def build_graph(
             "completed, report any failures honestly, and respond without calling tools."
         )))
         logger.info("Tool-call limit reached — producing protocol-safe wrap-up.")
-        response = llm.invoke(messages)
+        response = visible_llm.invoke(messages)
         if response.tool_calls:
             logger.warning("Tool-free wrap-up returned tool calls; stripping them.")
             content = response.content or (

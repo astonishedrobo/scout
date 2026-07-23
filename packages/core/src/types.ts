@@ -165,6 +165,8 @@ export interface ChatEvent {
     | "tool_call"
     | "tool_result"
     | "tool_output_chunk"
+    | "response_start"
+    | "response_delta"
     | "response"
     | "error"
     | "interrupted"

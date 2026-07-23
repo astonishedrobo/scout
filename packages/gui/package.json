@@ -29,7 +29,8 @@
     "react-resizable-panels": "^4.11.2",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "scout-core": "0.1.0"
+    "scout-core": "0.1.0",
+    "thinking-orbs": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

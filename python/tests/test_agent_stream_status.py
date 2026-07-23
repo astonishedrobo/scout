@@ -1,5 +1,5 @@
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from scout.agent import ScoutAgent
 
@@ -14,10 +14,59 @@ async def test_stream_emits_status_before_graph_runs():
     try:
         assert await anext(stream) == {
             "type": "status",
-            "message": "Thinking through the request",
+            "message": "Understanding…",
         }
     finally:
         await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_tagged_model_token_deltas():
+    class FakeGraph:
+        async def astream(self, *_args, stream_mode=None, **_kwargs):
+            assert stream_mode == ["messages", "updates"]
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="Hello", id="run-1"),
+                    {"tags": ["scout_visible_response"]},
+                ),
+            )
+            # Untagged internal model output must not reach the browser.
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="private summary", id="internal"),
+                    {"tags": []},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content=" world", id="run-1"),
+                    {"tags": ["scout_visible_response"]},
+                ),
+            )
+            yield (
+                "updates",
+                {"agent": {"messages": [AIMessage(content="Hello world")]}},
+            )
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("hello")]
+    assert [event for event in events if event["type"] == "response_delta"] == [
+        {"type": "response_delta", "content": "Hello"},
+        {"type": "response_delta", "content": " world"},
+    ]
+    assert sum(event["type"] == "response_start" for event in events) == 1
+    assert events[-1] == {"type": "response", "content": "Hello world"}
 
 
 @pytest.mark.asyncio

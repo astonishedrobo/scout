@@ -7,7 +7,13 @@ import os
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    ToolMessage,
+    RemoveMessage,
+)
 
 from ..config import AppConfig, load_config
 from ..retriever import BM25Retriever, RetrieverProxy
@@ -545,15 +551,57 @@ class ScoutAgent:
         if self._execution:
             self._execution.set_output_sink(output_q)
 
-        yield {"type": "status", "message": "Thinking through the request"}
+        yield {"type": "status", "message": "Understanding…"}
 
         async def _drain_graph() -> None:
+            import inspect
+
             try:
-                async for chunk in self._graph.astream(
+                stream_kwargs: dict[str, Any] = {"config": self._run_config}
+                try:
+                    if "stream_mode" in inspect.signature(
+                        self._graph.astream,
+                    ).parameters:
+                        stream_kwargs["stream_mode"] = ["messages", "updates"]
+                except (TypeError, ValueError):
+                    pass
+                async for item in self._graph.astream(
                     {"messages": self._messages, "iteration": 0},
-                    config=self._run_config,
+                    **stream_kwargs,
                 ):
-                    await graph_q.put(("chunk", chunk))
+                    # Multiple stream modes yield ``(mode, payload)``. Keep a
+                    # compatibility path for test doubles and older LangGraph.
+                    if (
+                        isinstance(item, tuple)
+                        and len(item) == 2
+                        and item[0] in {"messages", "updates"}
+                    ):
+                        mode, payload = item
+                        if mode == "updates":
+                            await graph_q.put(("chunk", payload))
+                            continue
+                        if not isinstance(payload, tuple) or len(payload) != 2:
+                            continue
+                        message, metadata = payload
+                        tags = set((metadata or {}).get("tags") or [])
+                        if (
+                            isinstance(message, AIMessageChunk)
+                            and "scout_visible_response" in tags
+                        ):
+                            text = _message_text(message.content)
+                            if text:
+                                await graph_q.put((
+                                    "delta",
+                                    {
+                                        "content": text,
+                                        "message_id": (
+                                            message.id
+                                            or str((metadata or {}).get("langgraph_step") or "")
+                                        ),
+                                    },
+                                ))
+                    else:
+                        await graph_q.put(("chunk", item))
             except Exception as exc:
                 await graph_q.put(("error", exc))
             finally:
@@ -676,6 +724,7 @@ class ScoutAgent:
                 tool_steps.append((name, pending.get("args", {}), note))
 
         graph_done = False
+        streamed_message_id = ""
         committed = False
         discard_turn = False
         try:
@@ -688,6 +737,8 @@ class ScoutAgent:
                 )
                 for task in pending:
                     task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
                 for task in finished:
                     if task is chunk_get:
@@ -701,6 +752,15 @@ class ScoutAgent:
                         if kind == "chunk":
                             for ev in _process_graph_chunk(payload):
                                 yield ev
+                        elif kind == "delta":
+                            message_id = str(payload.get("message_id") or "")
+                            if message_id != streamed_message_id:
+                                streamed_message_id = message_id
+                                yield {"type": "response_start"}
+                            yield {
+                                "type": "response_delta",
+                                "content": str(payload.get("content") or ""),
+                            }
                         elif kind == "error":
                             raise payload
                         elif kind == "done":

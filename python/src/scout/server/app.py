@@ -908,6 +908,20 @@ def create_app(
                 async def _collect_reply() -> str:
                     final = ""
                     async for event in current.agent.stream(""):
+                        if event.get("type") == "response_start":
+                            current.broadcast_event({
+                                "type": "parent_auto_response_start",
+                                "session_id": session_id,
+                            })
+                        elif (
+                            event.get("type") == "response_delta"
+                            and event.get("content")
+                        ):
+                            current.broadcast_event({
+                                "type": "parent_auto_response_delta",
+                                "session_id": session_id,
+                                "content": str(event["content"]),
+                            })
                         if event.get("type") == "response" and event.get("content"):
                             final = str(event["content"])
                     return final

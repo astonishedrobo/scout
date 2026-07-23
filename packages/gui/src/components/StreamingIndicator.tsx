@@ -1,3 +1,5 @@
+import { ActivityOrb, activityForTool } from "./ActivityOrb";
+
 interface StreamingIndicatorProps {
   currentTool: string | undefined;
   text: string;
@@ -35,21 +37,31 @@ export function StreamingIndicator({
   statusMessage,
   hasToolSteps,
 }: StreamingIndicatorProps) {
-  const label = text
-    ? currentTool
-      ? `${humanToolName(currentTool)}...`
-      : "Writing..."
+  // Once prose is visibly streaming, the text itself is the progress signal.
+  if (text && !currentTool) return null;
+
+  const rawLabel = text
+    ? humanToolName(currentTool!)
     : currentTool
-      ? `${humanToolName(currentTool)}...`
+      ? humanToolName(currentTool)
       : statusMessage
-        ? `${statusMessage}...`
+        ? statusMessage
         : hasToolSteps
-          ? "Preparing response..."
-          : "Thinking...";
+          ? "Preparing response"
+          : "Understanding";
+  const label = `${rawLabel.replace(/[.…]+$/u, "")}…`;
+  const activity = text
+    ? "composing"
+    : currentTool
+      ? activityForTool(currentTool)
+      : hasToolSteps
+        ? "solving"
+        : "listening";
 
   return (
     <div className="flex items-center gap-2 py-1.5">
-      <span className="shimmer-text text-[13px]">{label}</span>
+      <ActivityOrb activity={activity} label={label} />
+      <span className="text-[13px] text-scout-muted">{label}</span>
     </div>
   );
 }
