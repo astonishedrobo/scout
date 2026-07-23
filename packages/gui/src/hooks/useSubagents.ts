@@ -479,7 +479,23 @@ export function useSubagents({
         return;
       }
       if (type === "task_event" && event.task && typeof event.task === "object") {
-        onTaskEventRef.current?.(event.task as TaskEvent);
+        const task = event.task as TaskEvent;
+        onTaskEventRef.current?.(task);
+        // Derive the transcript handoff from the same durable terminal event
+        // that updates the task card. A separate best-effort notice must never
+        // be able to leave the card finished while the main thread stays silent.
+        if (
+          task.task_type === "agent" &&
+          ["completed", "failed", "cancelled", "interrupted"].includes(task.status)
+        ) {
+          onAgentFinishedRef.current?.({
+            agent_id: task.task_id,
+            description: task.title,
+            status: task.status,
+            summary: task.summary || task.error || task.status,
+            result_preview: task.result_preview,
+          });
+        }
         return;
       }
       if (type === "approval_request" || type === "approval_cancelled") {
