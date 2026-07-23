@@ -40,9 +40,10 @@ export function StreamingIndicator({
 }: StreamingIndicatorProps) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const activeKey = currentTool || statusMessage || "";
 
   useEffect(() => {
-    if (!currentTool) {
+    if (!activeKey) {
       setStartedAt(null);
       return;
     }
@@ -51,7 +52,7 @@ export function StreamingIndicator({
     setNow(started);
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [currentTool]);
+  }, [activeKey]);
 
   // Once prose is visibly streaming, the text itself is the progress signal.
   if (text && !currentTool) return null;

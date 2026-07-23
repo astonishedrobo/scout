@@ -42,6 +42,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from ..execution.grants import CapabilityGrantStore
+from ..task_store import TaskStore
 from ..execution.models import CapabilityRequest
 from ..artifacts import MAX_ARTIFACT_SIZE, RENDERERS
 from ..config import (
@@ -566,6 +567,7 @@ def create_app(
             # task snapshot.
             self.event_sequence = 0
             self.event_history: list[dict] = []
+            self.task_store: TaskStore | None = None
             # Approvals while no /chat stream is open (background sub-agents).
             self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
 
@@ -1067,6 +1069,10 @@ def create_app(
                                     "result_preview": detail.get("result_preview"),
                                     "error": detail.get("error"),
                                 }
+                                if state.task_store is not None:
+                                    task, task_sequence = await asyncio.to_thread(state.task_store.upsert, task)
+                                else:
+                                    task_sequence = 0
                                 path = _session_file(_session_cwd(user_id), session_id, user_id)
                                 if path.exists():
                                     await asyncio.to_thread(_append_session_entry, path, {
@@ -1078,6 +1084,7 @@ def create_app(
                                     "type": "task_event",
                                     "session_id": session_id,
                                     "task": task,
+                                    "task_sequence": task_sequence,
                                 })
 
                 session_model = None
@@ -1142,6 +1149,7 @@ def create_app(
                     if agent.subagent_manager is not None:
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
                 s = SessionState(agent, agent_config.agent.model)
+                s.task_store = TaskStore(_session_dir(_session_cwd(user_id), user_id) / f"{session_id}.tasks.sqlite")
                 snap = load_session_snapshot(_session_dir(_session_cwd(user_id), user_id), session_id)
                 if snap and snap.get("active_profile"):
                     s.active_permission_profile = snap["active_profile"]
@@ -2181,8 +2189,11 @@ def create_app(
             "pending": "queued", "running": "running", "completed": "completed",
             "failed": "failed", "stopped": "cancelled",
         }
-        tasks = []
+        tasks = s.task_store.list() if s.task_store is not None else []
+        task_ids = {task["task_id"] for task in tasks}
         for agent in (mgr.public_snapshot() if mgr else []):
+            if agent["agent_id"] in task_ids:
+                continue
             tasks.append({
                 "task_id": agent["agent_id"],
                 "task_type": "agent",
