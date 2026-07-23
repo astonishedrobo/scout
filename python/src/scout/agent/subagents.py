@@ -1180,6 +1180,9 @@ def format_notifications_block(
         "- If the user's pending request asked YOU to save/write a file from the "
         "sub-agent's output (e.g. write the essay to test-cat-sub.md), do that now "
         "with write_file / apply_patch using the result below.",
+        "- If a sub-agent changed or created files, explicitly present the relevant "
+        "file(s) in your reply with present_files after you verify their paths. The "
+        "main transcript does not show the worker's tool cards automatically.",
         "- When multiple results exist for the same task, prefer the **most recent** "
         "completed result (bottom of this list). Do not ask the user which version "
         "unless the results are about clearly different topics.",

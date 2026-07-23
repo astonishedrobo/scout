@@ -22,7 +22,7 @@ export function activityForTool(tool?: string): ScoutActivity {
 }
 
 export function ActivityOrb({
-  activity,
+  activity: _activity,
   label,
   className = "",
 }: {
@@ -32,7 +32,9 @@ export function ActivityOrb({
 }) {
   return (
     <ThinkingOrb
-      state={activity as OrbState}
+      // A single calm visual language reads faster than a different animated
+      // orb for every tool. Text still says what Scout is doing.
+      state={"listening" as OrbState}
       size={20}
       theme="auto"
       aria-label={label}
