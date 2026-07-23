@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Upload, Trash2, RefreshCw, Shield, Users, Settings, Plug, Plus, Link2 } from "lucide-react";
-import { RightDrawer } from "./ui/RightDrawer";
+import { ArrowLeft, Upload, Trash2, RefreshCw, Shield, Users, Settings, Plug, Plus, Link2 } from "lucide-react";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
 
@@ -27,6 +26,8 @@ interface AdminPanelProps {
   onClose: () => void;
   baseUrl: string;
   token: string | null;
+  initialTab?: "files" | "users" | "execution" | "mcp" | "config";
+  onTabChange?: (tab: "files" | "users" | "execution" | "mcp" | "config") => void;
 }
 
 interface ExecutionHealth {
@@ -61,8 +62,8 @@ function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
-  const [tab, setTab] = useState<"files" | "users" | "execution" | "mcp" | "config">("files");
+export function AdminPanel({ open, onClose, baseUrl, token, initialTab, onTabChange }: AdminPanelProps) {
+  const [tab, setTab] = useState<"files" | "users" | "execution" | "mcp" | "config">(initialTab ?? "files");
   const [configInfo, setConfigInfo] = useState<any>(null);
   const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
   const [users, setUsers] = useState<UserEntry[]>([]);
@@ -89,6 +90,29 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+  // The admin console is a full workspace, so preserve the drawer's keyboard
+  // behavior and keep the underlying chat from scrolling while it is open.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (open && initialTab) setTab(initialTab);
+  }, [open, initialTab]);
 
   const loadFiles = async () => {
     setLoadingFiles(true);
@@ -336,28 +360,46 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
 
   return (
     <>
-    <RightDrawer open={open} onClose={onClose} title="Admin" width={480}>
-        <div className="flex border-b border-scout-hairline">
-          {(["files", "users", "execution", "mcp", "config"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 py-2.5 text-[13px] transition-colors flex items-center justify-center gap-1.5 border-b-2 -mb-px
-                ${tab === t ? "border-scout-text text-scout-text font-semibold" : "border-transparent font-medium text-scout-muted hover:text-scout-text"}`}
-            >
-              {t === "files" ? <Upload size={14} /> : t === "users" ? <Users size={14} /> : t === "execution" ? <Shield size={14} /> : t === "mcp" ? <Plug size={14} /> : <Settings size={14} />}
-              {t === "files" ? "Files" : t === "users" ? "Users" : t === "execution" ? "Execution" : t === "mcp" ? "Tools" : "Config"}
-            </button>
-          ))}
+    {!open ? null : <div className="fixed inset-0 z-50 bg-scout-canvas flex flex-col">
+      <header className="flex items-center gap-3 px-4 sm:px-6 h-[52px] shrink-0 border-b border-scout-hairline-faint bg-scout-canvas">
+        <button
+          onClick={onClose}
+          className="p-2 -ml-2 rounded-btn hover:bg-scout-lift text-scout-muted hover:text-scout-text transition-colors"
+          aria-label="Back to chat"
+        >
+          <ArrowLeft size={18} />
+        </button>
+        <div>
+          <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-scout-text">Admin console</h1>
+          <p className="text-[10px] text-scout-muted">Workspace, access, execution, and integrations</p>
         </div>
+      </header>
+
+      <div className="flex flex-1 flex-col md:flex-row overflow-hidden max-w-6xl mx-auto w-full px-3 sm:px-4 py-3 md:pb-6 gap-3 md:gap-4">
+        <nav className="flex w-full shrink-0 gap-1 overflow-x-auto px-1 md:w-52 md:block md:space-y-1 md:overflow-visible md:px-2 md:py-3" aria-label="Admin sections">
+          {(["files", "users", "execution", "mcp", "config"] as const).map((t) => {
+            const label = t === "files" ? "Shared files" : t === "users" ? "Users & access" : t === "execution" ? "Execution" : t === "mcp" ? "MCP tools" : "Configuration";
+            const icon = t === "files" ? <Upload size={15} /> : t === "users" ? <Users size={15} /> : t === "execution" ? <Shield size={15} /> : t === "mcp" ? <Plug size={15} /> : <Settings size={15} />;
+            return <button
+              key={t}
+              onClick={() => { setTab(t); onTabChange?.(t); }}
+              className={`shrink-0 md:w-full flex items-center gap-2.5 text-left px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-colors
+                ${tab === t ? "bg-scout-input-bg text-scout-text font-semibold ring-1 ring-scout-hairline" : "text-scout-muted hover:bg-scout-input-bg hover:text-scout-text"}`}
+            >
+              {icon}<span>{label}</span>
+            </button>;
+          })}
+        </nav>
+
+        <main className="flex-1 min-h-0 overflow-y-auto bg-scout-panel/80 rounded-hero border border-scout-hairline-faint shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
 
         {error && (
-          <div className="mx-4 mt-3 px-3 py-2 rounded-btn bg-scout-error-muted border border-scout-error/20 text-xs text-scout-error">
+          <div className="mx-5 mt-5 px-3.5 py-2.5 rounded-xl bg-scout-error-muted border border-scout-error/20 text-xs text-scout-error">
             {error}
           </div>
         )}
 
-        <div className="px-5 py-4">
+        <div className="px-5 py-6 sm:px-8 sm:py-7">
           {tab === "files" && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -558,40 +600,39 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
           )}
 
           {tab === "mcp" && (
-            <div className="space-y-4">
+            <div className="space-y-6 text-[13px]">
               <div>
-                <h2 className="text-sm font-semibold text-scout-text">MCP integrations</h2>
-                <p className="text-xs text-scout-muted mt-1">Install a remote MCP server. Users can enable allowed integrations in Settings.</p>
+                <h2 className="text-base font-semibold text-scout-text">MCP integrations</h2>
+                <p className="text-[13px] text-scout-muted mt-1.5 leading-relaxed">Install a remote MCP server. Users can enable allowed integrations in Settings.</p>
               </div>
-              <div className="space-y-2 rounded-xl border border-scout-hairline-faint p-3">
-                <input value={mcpName} onChange={(e) => setMcpName(e.target.value)} placeholder="Integration name" className="w-full px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" />
-                <select value={mcpTransport} onChange={(e) => setMcpTransport(e.target.value as "streamable_http" | "container_stdio")} className="w-full px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none">
+              <div className="space-y-3 rounded-2xl border border-scout-hairline-faint bg-scout-canvas/50 p-4 sm:p-5">
+                <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Integration name</span><input value={mcpName} onChange={(e) => setMcpName(e.target.value)} placeholder="e.g. Linear, Sentry, or Internal tools" className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text placeholder:text-scout-muted/60 outline-none focus:border-scout-text/30" /></label>
+                <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Connection type</span><select value={mcpTransport} onChange={(e) => setMcpTransport(e.target.value as "streamable_http" | "container_stdio")} className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text outline-none">
                   <option value="streamable_http">Remote · Streamable HTTP</option>
                   <option value="container_stdio">Container · isolated stdio</option>
-                </select>
-                <div className="flex gap-2">
+                </select></label>
+                <div className="flex flex-col sm:flex-row gap-2.5 items-end">
                   {mcpTransport === "streamable_http"
-                    ? <input value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} placeholder="https://example.com/mcp" className="flex-1 px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" />
-                    : <input value={mcpImage} onChange={(e) => setMcpImage(e.target.value)} placeholder="image@sha256:…" className="flex-1 px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" />}
-                  <Button onClick={addMcp} disabled={mcpSaving}><Plus size={13} /> Add</Button>
+                    ? <label className="flex-1 w-full space-y-1.5"><span className="text-[12px] font-medium text-scout-text">MCP endpoint</span><input value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} placeholder="https://example.com/mcp" className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text placeholder:text-scout-muted/60 outline-none focus:border-scout-text/30" /></label>
+                    : <label className="flex-1 w-full space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Container image</span><input value={mcpImage} onChange={(e) => setMcpImage(e.target.value)} placeholder="image@sha256:…" className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text placeholder:text-scout-muted/60 outline-none focus:border-scout-text/30" /></label>}
+                  <Button onClick={addMcp} disabled={mcpSaving} className="shrink-0"><Plus size={14} /> {mcpSaving ? "Adding…" : "Add integration"}</Button>
                 </div>
                 {mcpTransport === "streamable_http"
-                  ? <input type="password" value={mcpCredential} onChange={(e) => setMcpCredential(e.target.value)} placeholder="Shared API token (optional)" className="w-full px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" />
-                  : <input value={mcpCommand} onChange={(e) => setMcpCommand(e.target.value)} placeholder="Command and arguments (optional)" className="w-full px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" />}
-                <select value={mcpAvailability} onChange={(e) => setMcpAvailability(e.target.value as "everyone" | "selected")} className="w-full px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none">
+                  ? <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Shared API token <span className="text-scout-muted font-normal">(optional)</span></span><input type="password" value={mcpCredential} onChange={(e) => setMcpCredential(e.target.value)} placeholder="Paste token" className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text placeholder:text-scout-muted/60 outline-none focus:border-scout-text/30" /></label>
+                  : <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Command and arguments <span className="text-scout-muted font-normal">(optional)</span></span><input value={mcpCommand} onChange={(e) => setMcpCommand(e.target.value)} placeholder="node /app/server.js" className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text placeholder:text-scout-muted/60 outline-none focus:border-scout-text/30" /></label>}
+                <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Availability</span><select value={mcpAvailability} onChange={(e) => setMcpAvailability(e.target.value as "everyone" | "selected")} className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text outline-none">
                   <option value="everyone">Available to everyone</option>
                   <option value="selected">Selected users only</option>
-                </select>
+                </select></label>
               </div>
               <div className="space-y-2">
                 {mcpServers.length === 0 ? <p className="text-xs text-scout-muted/70 py-5 text-center">No MCP integrations installed.</p> : mcpServers.map((server) => (
-                  <div key={server.id} className="rounded-xl border border-scout-hairline-faint p-3 space-y-2">
-                    <div className="flex items-center gap-2"><Link2 size={14} className="text-scout-muted" /><span className="flex-1 text-sm font-medium text-scout-text">{server.name}</span><span className="text-[11px] text-scout-muted">{server.health?.status ?? "not connected"}</span><button onClick={() => toggleMcp(server)} className={`w-8 h-4 rounded-full ${server.enabled ? "bg-scout-success" : "bg-scout-hairline"}`}><span className={`block w-3 h-3 rounded-full bg-white transition-transform ${server.enabled ? "translate-x-4" : "translate-x-0.5"}`} /></button></div>
-                    <p className="text-[11px] text-scout-muted truncate">{server.url ?? server.image ?? server.id} · {server.tools?.length ?? 0} tools</p>
-                    <select value={server.availability} onChange={(e) => setMcpAvailabilityFor(server, e.target.value as "everyone" | "selected")} className="w-full px-2 py-1.5 rounded-lg bg-scout-input-bg text-[11px] text-scout-text outline-none">
+                  <div key={server.id} className="rounded-2xl border border-scout-hairline-faint bg-scout-canvas/50 p-4 sm:p-5 space-y-4">
+                    <div className="flex items-start gap-3"><div className="mt-0.5 p-2 rounded-xl bg-scout-input-bg text-scout-text"><Link2 size={15} /></div><div className="flex-1 min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-[15px] font-semibold text-scout-text">{server.name}</span><span className={`px-2 py-0.5 rounded-pill text-[11px] font-medium ${server.health?.status === "connected" ? "bg-scout-success/10 text-scout-success" : "bg-scout-input-bg text-scout-muted"}`}>{server.health?.status ?? "not connected"}</span></div><p className="mt-1 text-[12px] text-scout-muted break-all leading-relaxed">{server.url ?? server.image ?? server.id}</p><p className="mt-0.5 text-[12px] text-scout-muted">{server.tools?.length ?? 0} tools available</p></div><button onClick={() => toggleMcp(server)} aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`} className={`w-10 h-5 rounded-full shrink-0 transition-colors ${server.enabled ? "bg-scout-success" : "bg-scout-hairline"}`}><span className={`block w-4 h-4 rounded-full bg-white transition-transform ${server.enabled ? "translate-x-5" : "translate-x-0.5"}`} /></button></div>
+                    <label className="block space-y-1.5"><span className="text-[12px] font-medium text-scout-text">Who can use this integration?</span><select value={server.availability} onChange={(e) => setMcpAvailabilityFor(server, e.target.value as "everyone" | "selected")} className="w-full px-3 py-2.5 rounded-xl bg-scout-input-bg border border-scout-hairline-faint text-[13px] text-scout-text outline-none">
                       <option value="everyone">Available to everyone</option>
                       <option value="selected">Selected users only</option>
-                    </select>
+                    </select></label>
                     {server.transport === "streamable_http" && (
                       <div className="flex gap-1.5">
                         <input type="password" value={mcpSharedDrafts[server.id] ?? ""} onChange={(e) => setMcpSharedDrafts((current) => ({ ...current, [server.id]: e.target.value }))} placeholder={server.has_shared_credential ? "Replace shared token" : "Shared token (optional)"} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-scout-input-bg text-[11px] text-scout-text outline-none" />
@@ -607,12 +648,12 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
                       </div>
                     )}
                     {!!server.tools?.length && (
-                      <div className="space-y-1 border-t border-scout-hairline-faint pt-2">
+                      <div className="space-y-1.5 border-t border-scout-hairline-faint pt-4">
                         {server.tools.map((tool) => (
-                          <div key={tool.name} className="flex items-center gap-2 text-[10px]">
-                            <span className="flex-1 truncate text-scout-muted" title={tool.description}>{tool.name}</span>
-                            <button onClick={() => setMcpToolPolicy(server, tool, { read_only: !tool.read_only })} className={`px-1.5 py-0.5 rounded ${tool.read_only ? "text-scout-success bg-scout-success/10" : "text-scout-muted bg-scout-input-bg"}`}>{tool.read_only ? "read-only" : "write"}</button>
-                            <button onClick={() => setMcpToolPolicy(server, tool, { enabled: !tool.enabled })} className={`px-1.5 py-0.5 rounded ${tool.enabled ? "text-scout-text bg-scout-input-bg" : "text-scout-muted/60 bg-scout-input-bg"}`}>{tool.enabled ? "on" : "off"}</button>
+                          <div key={tool.name} className="flex items-center gap-3 rounded-xl bg-scout-input-bg/70 border border-scout-hairline-faint px-3 py-2.5">
+                            <div className="flex-1 min-w-0"><p className="text-[13px] font-medium text-scout-text truncate">{tool.name}</p>{tool.description && <p className="text-[11px] text-scout-muted truncate mt-0.5">{tool.description}</p>}</div>
+                            <button onClick={() => setMcpToolPolicy(server, tool, { read_only: !tool.read_only })} className={`px-2 py-1 rounded-lg text-[11px] font-medium shrink-0 ${tool.read_only ? "text-scout-success bg-scout-success/10" : "text-scout-muted bg-scout-canvas"}`}>{tool.read_only ? "Read-only" : "Write"}</button>
+                            <button onClick={() => setMcpToolPolicy(server, tool, { enabled: !tool.enabled })} className={`px-2 py-1 rounded-lg text-[11px] font-medium shrink-0 ${tool.enabled ? "text-scout-text bg-scout-canvas" : "text-scout-muted/60 bg-scout-canvas"}`}>{tool.enabled ? "Enabled" : "Off"}</button>
                           </div>
                         ))}
                       </div>
@@ -646,7 +687,9 @@ export function AdminPanel({ open, onClose, baseUrl, token }: AdminPanelProps) {
             </div>
           )}
         </div>
-    </RightDrawer>
+        </main>
+      </div>
+    </div>}
 
     <CenterModal
       open={!!deleteTarget}

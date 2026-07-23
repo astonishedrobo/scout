@@ -443,6 +443,7 @@ def build_graph(
     personal_dir: str | None = None,
     shared_dir: str | None = None,
     server_mode: bool = False,
+    drain_steers: Callable[[], list[HumanMessage]] | None = None,
 ) -> StateGraph:
     """Construct and compile the ReAct agent graph.
 
@@ -791,7 +792,8 @@ def build_graph(
     def agent_node(state: AgentState) -> dict:
         """Call the LLM with the current messages (after optional compression)."""
         state_messages = list(state["messages"])
-        messages = list(state_messages)
+        steered_messages = drain_steers() if drain_steers is not None else []
+        messages = [*state_messages, *steered_messages]
         iteration = state.get("iteration", 0)
         compacted = False
 
@@ -942,7 +944,10 @@ def build_graph(
                 "messages": [*removals, *compacted_state, response],
                 "iteration": iteration + 1,
             }
-        return {"messages": [response], "iteration": iteration + 1}
+        return {
+            "messages": [*steered_messages, response],
+            "iteration": iteration + 1,
+        }
 
     def wrap_up_node(state: AgentState) -> dict:
         """Produce a final tool-free response after all pending tools complete."""

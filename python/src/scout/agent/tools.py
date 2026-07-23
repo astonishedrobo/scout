@@ -486,11 +486,20 @@ def make_tools(
         return subagent_manager.get_result(agent_id)
 
     @tool
+    def get_subagent_transcript(agent_id: str) -> str:
+        """Fetch a retained sub-agent activity transcript only when details are needed."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Sub-agent transcripts are only available on the parent agent."
+        return subagent_manager.get_transcript(agent_id)
+
+    @tool
     async def stop_subagent(agent_id: str) -> str:
         """Stop a running sub-agent when its direction is wrong or no longer needed."""
         if is_subagent or subagent_manager is None:
             return "[UNAVAILABLE] Stopping sub-agents is only available on the parent agent."
-        return await subagent_manager.stop(agent_id)
+        # The supervisor sees this tool result in the current turn. Mark the
+        # origin so the server does not launch a duplicate automatic pickup.
+        return await subagent_manager.stop(agent_id, initiated_by_parent=True)
 
     @tool
     async def send_subagent_message(agent_id: str, message: str) -> str:
@@ -513,6 +522,7 @@ def make_tools(
     if not is_subagent and subagent_manager is not None and subagent_manager.enabled:
         multi_agent_tools = [
             spawn_subagent, list_subagents, get_subagent_result,
+            get_subagent_transcript,
             stop_subagent, send_subagent_message,
         ]
     tools = [

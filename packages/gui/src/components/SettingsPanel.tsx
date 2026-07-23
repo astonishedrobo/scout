@@ -11,6 +11,7 @@ interface SettingsPanelProps {
   isMultiUser?: boolean;
   token?: string | null;
   initialTab?: Tab;
+  onTabChange?: (tab: Tab) => void;
   onClose: () => void;
 }
 
@@ -29,7 +30,7 @@ interface DesktopEnvOption {
   type: "venv" | "conda" | "system";
 }
 
-export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, onClose }: SettingsPanelProps) {
+export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, onTabChange, onClose }: SettingsPanelProps) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
   const [newMemory, setNewMemory] = useState("");
   const [memoryEntries, setMemoryEntries] = useState<string[]>([]);
@@ -298,7 +299,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
           {TABS.map((t) => (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
+              onClick={() => { setTab(t.id); onTabChange?.(t.id); }}
               className={`shrink-0 md:w-full text-left px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-colors
                 ${tab === t.id
                   ? "bg-scout-input-bg text-scout-text font-semibold ring-1 ring-scout-hairline"

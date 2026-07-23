@@ -132,6 +132,14 @@ class ChatRequest(BaseModel):
     chat_image_ids: list[str] = []
 
 
+class SteerRequest(BaseModel):
+    message: str
+    expected_turn_id: str
+    client_id: str
+    attachments: list[str] = []
+    chat_image_ids: list[str] = []
+
+
 class ConfigSetRequest(BaseModel):
     key: str        # dotted path, e.g. "agent.model"
     value: Any
@@ -201,6 +209,27 @@ class SessionMessageRequest(BaseModel):
     chat_images: list[dict] | None = None
     annotations: list[dict] | None = None
     stopped: bool | None = None
+
+
+class EditDoneRequest(BaseModel):
+    approval_id: str
+    session_id: str
+
+
+class ForkSessionRequest(BaseModel):
+    from_message_index: int
+
+
+class MemoriesRequest(BaseModel):
+    content: str = ""
+    entry: str = ""
+    remove_index: int | None = None
+    summary: str | None = None
+
+
+class MemoryPreferencesRequest(BaseModel):
+    use_memories: bool
+    generate_memories: bool
 
 
 # ── Session store helpers (matches Node.js JSONL format) ─────────────────
@@ -560,6 +589,8 @@ def create_app(
             # parent and worker requests so they cannot overwrite each other.
             self.approval_lock = asyncio.Lock()
             self.abort_event: asyncio.Event | None = None
+            self.active_turn_id: str | None = None
+            self.accepted_steer_clients: dict[str, str] = {}
             self.active_permission_profile: str | None = None
             self.created_at = time.monotonic()
             self.last_activity = self.created_at
@@ -630,6 +661,9 @@ def create_app(
         "maintenance_tasks": [],
         "session_init_locks": {},
         "session_init_reservations": set(),
+        # Active sub-agents consume the same global/per-user capacity pool as
+        # loaded conversation agents. Values are (user, parent session, agent).
+        "active_subagents": set(),
         "pending_turns": set(),
         "session_registry_lock": threading.RLock(),
         "retriever_lock": threading.RLock(),
@@ -941,6 +975,7 @@ def create_app(
                     return
                 _state["pending_turns"].add(turn_key)
                 current.abort_event = asyncio.Event()
+                current.active_turn_id = str(uuid.uuid4())
             turn_lease = None
             try:
                 try:
@@ -954,6 +989,7 @@ def create_app(
                     "type": "parent_auto_turn_started",
                     "session_id": session_id,
                     "reason": "subagent_completed",
+                    "turn_id": current.active_turn_id,
                 })
                 # Empty user text → notifications alone form the human message.
                 # Run through the streaming path so /chat/stop can cancel this
@@ -961,20 +997,11 @@ def create_app(
                 async def _collect_reply() -> str:
                     final = ""
                     async for event in current.agent.stream(""):
-                        if event.get("type") == "response_start":
-                            current.broadcast_event({
-                                "type": "parent_auto_response_start",
-                                "session_id": session_id,
-                            })
-                        elif (
-                            event.get("type") == "response_delta"
-                            and event.get("content")
-                        ):
-                            current.broadcast_event({
-                                "type": "parent_auto_response_delta",
-                                "session_id": session_id,
-                                "content": str(event["content"]),
-                            })
+                        current.broadcast_event({
+                            "type": "parent_auto_event",
+                            "session_id": session_id,
+                            "event": event,
+                        })
                         if event.get("type") == "response" and event.get("content"):
                             final = str(event["content"])
                     return final
@@ -1022,6 +1049,7 @@ def create_app(
                 with _state["session_registry_lock"]:
                     _state["pending_turns"].discard(turn_key)
                 current.abort_event = None
+                current.active_turn_id = None
                 current.touch()
                 current.broadcast_event({
                     "type": "parent_auto_turn_finished",
@@ -1045,6 +1073,134 @@ def create_app(
             name=f"scout-subagent-continue-{session_id}",
         )
 
+    def _schedule_steer_followup(session_id: str, user_id: str | int) -> None:
+        """Resume a conversation from an accepted steer after its prior turn stops."""
+        key = (str(user_id), session_id)
+        state = _state["sessions"].get(key)
+        if state is None or state.is_busy or not state.agent.pending_steers():
+            return
+        if state.auto_continue_task is not None and not state.auto_continue_task.done():
+            return
+
+        async def _run() -> None:
+            await asyncio.sleep(0.05)
+            current = _state["sessions"].get(key)
+            if current is None or current.is_busy:
+                return
+            pending = current.agent.pending_steers()
+            if not pending:
+                return
+            first = pending[0]
+            if not current.agent.cancel_steer(first["steer_id"]):
+                return
+
+            turn_key = (str(user_id), session_id)
+            with _state["session_registry_lock"]:
+                if turn_key in _state["pending_turns"] or current.abort_event is not None:
+                    current.agent.enqueue_steer(
+                        first["steer_id"],
+                        first["content"],
+                        first.get("attachments"),
+                        client_id=first.get("client_id"),
+                        display_content=first.get("display_content"),
+                    )
+                    return
+                _state["pending_turns"].add(turn_key)
+                current.abort_event = asyncio.Event()
+                current.active_turn_id = str(uuid.uuid4())
+
+            turn_lease = None
+            try:
+                turn_lease = await _state["turn_scheduler"].acquire(
+                    str(user_id), _admission_policy(user_id),
+                )
+                current.broadcast_event({
+                    "type": "parent_auto_turn_started",
+                    "session_id": session_id,
+                    "reason": "steer_followup",
+                    "turn_id": current.active_turn_id,
+                })
+                current.broadcast_event({
+                    "type": "steer_consumed",
+                    "session_id": session_id,
+                    "steer_id": first["steer_id"],
+                    "client_id": first.get("client_id"),
+                    "content": first.get("display_content", first["content"]),
+                })
+                session_path = _session_file(_session_cwd(user_id), session_id, user_id)
+                if session_path.exists():
+                    _append_session_entry(session_path, {
+                        "type": "user",
+                        "content": first.get("display_content", first["content"]),
+                        "attachments": first.get("attachments") or [],
+                        "timestamp": _now_iso(),
+                        "source": "steer_followup",
+                    })
+
+                final = ""
+                async for event in current.agent.stream(
+                    first["content"], first.get("attachments") or None,
+                ):
+                    event_type = event.get("type")
+                    if event_type == "steer_consumed":
+                        current.broadcast_event({
+                            **event,
+                            "session_id": session_id,
+                        })
+                    else:
+                        current.broadcast_event({
+                            "type": "parent_auto_event",
+                            "session_id": session_id,
+                            "event": event,
+                        })
+                    if event_type == "response" and event.get("content"):
+                        final = str(event["content"])
+
+                if final:
+                    if session_path.exists():
+                        _append_session_entry(session_path, {
+                            "type": "assistant",
+                            "content": final,
+                            "timestamp": _now_iso(),
+                            "source": "steer_followup",
+                        })
+                    current.broadcast_event({
+                        "type": "parent_auto_reply",
+                        "session_id": session_id,
+                        "content": final,
+                        "source": "steer_followup",
+                    })
+            except Exception:
+                logger.exception("Steer follow-up failed for session %s", session_id)
+                current.broadcast_event({
+                    "type": "steer_rejected",
+                    "session_id": session_id,
+                    "steer_id": first["steer_id"],
+                    "client_id": first.get("client_id"),
+                    "message": "Could not run queued steer",
+                })
+            finally:
+                if turn_lease is not None:
+                    await turn_lease.release()
+                with _state["session_registry_lock"]:
+                    _state["pending_turns"].discard(turn_key)
+                current.abort_event = None
+                current.active_turn_id = None
+                current.auto_continue_task = None
+                current.touch()
+                current.broadcast_event({
+                    "type": "parent_auto_turn_finished",
+                    "session_id": session_id,
+                })
+                if current.agent.pending_steers():
+                    _schedule_steer_followup(session_id, user_id)
+                elif current.auto_continue_pending:
+                    _schedule_subagent_auto_continue(session_id, user_id)
+
+        state.auto_continue_task = asyncio.get_running_loop().create_task(
+            _run(), name=f"scout-steer-followup-{session_id}",
+        )
+
     def _create_session_state(session_id: str, user_id: str | int, user: User | None, external_tools: list | None = None) -> SessionState:
         """Construct one session state. Called in a bounded worker thread."""
         key = (str(user_id), session_id)
@@ -1061,9 +1217,69 @@ def create_app(
                         session_id, user_id, reason, domains,
                     )
 
+                def _acquire_subagent_slot(agent_id: str) -> str | None:
+                    uid = str(user_id)
+                    token = (uid, session_id, agent_id)
+                    runtime = _state["base_config"].server
+                    with _state["session_registry_lock"]:
+                        active = _state["active_subagents"]
+                        if token in active:
+                            return None
+                        reservations = _state["session_init_reservations"]
+                        global_used = (
+                            len(_state["sessions"])
+                            + len(reservations)
+                            + len(active)
+                        )
+                        user_used = (
+                            sum(1 for key in _state["sessions"] if key[0] == uid)
+                            + sum(1 for item in reservations if item[0] == uid)
+                            + sum(1 for item in active if item[0] == uid)
+                        )
+                        if user_used >= runtime.max_live_sessions_per_user:
+                            return (
+                                "This account has reached its active thread "
+                                f"capacity ({runtime.max_live_sessions_per_user}). "
+                                "Wait for a conversation or sub-agent to become idle."
+                            )
+                        if global_used >= runtime.max_live_sessions:
+                            return (
+                                "Scout has reached its active thread capacity "
+                                f"({runtime.max_live_sessions}). Try again shortly."
+                            )
+                        active.add(token)
+                    return None
+
+                def _release_subagent_slot(agent_id: str) -> None:
+                    with _state["session_registry_lock"]:
+                        _state["active_subagents"].discard(
+                            (str(user_id), session_id, agent_id)
+                        )
+
                 def _on_subagent_complete(record: Any) -> None:
                     # May run on the event loop thread from a sub-agent task.
                     try:
+                        if (
+                            getattr(record, "status", "") == "stopped"
+                            and getattr(record, "stop_initiated_by_parent", False)
+                        ):
+                            # The active supervisor turn already receives the
+                            # stop_subagent tool result. Consume the queued
+                            # lifecycle note so it cannot cause a duplicate
+                            # automatic reply after that turn finishes.
+                            current = _state["sessions"].get(key)
+                            if current is not None:
+                                manager = getattr(
+                                    current.agent, "subagent_manager", None,
+                                )
+                                if manager is not None:
+                                    manager.discard_notification(record.agent_id)
+                            return
+                        # Completed, failed, and user-stopped workers all use
+                        # the same structured pickup path. The lifecycle card
+                        # updates immediately; the parent model gets the
+                        # durable notification without synthetic assistant
+                        # prose being inserted into the transcript.
                         _schedule_subagent_auto_continue(session_id, user_id)
                     except Exception:
                         logger.debug("Failed to schedule sub-agent auto-continue", exc_info=True)
@@ -1173,6 +1389,9 @@ def create_app(
                     )
                     if agent.subagent_manager is not None:
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
+                        agent.subagent_manager.set_resource_gate(
+                            _acquire_subagent_slot, _release_subagent_slot,
+                        )
                 else:
                     agent_config = _base_config_copy()
                     if session_model:
@@ -1194,6 +1413,9 @@ def create_app(
                     )
                     if agent.subagent_manager is not None:
                         agent.subagent_manager.set_event_listener(_on_subagent_event)
+                        agent.subagent_manager.set_resource_gate(
+                            _acquire_subagent_slot, _release_subagent_slot,
+                        )
                 s = SessionState(agent, agent_config.agent.model)
                 s.task_store = TaskStore(_session_dir(_session_cwd(user_id), user_id) / f"{session_id}.tasks.sqlite")
                 # In-process monitors are intentionally not resurrected after
@@ -1295,7 +1517,12 @@ def create_app(
                 )
                 user_allowed = max(
                     0,
-                    runtime.max_live_sessions_per_user - per_user_reserve,
+                    runtime.max_live_sessions_per_user
+                    - per_user_reserve
+                    - sum(
+                        1 for item in _state["active_subagents"]
+                        if item[0] == user_id
+                    ),
                 )
                 if remaining_user_count > user_allowed:
                     user_lru = sorted(
@@ -1315,7 +1542,12 @@ def create_app(
                     )
 
             remaining_count = len(sessions) - len(remove_keys)
-            allowed = max(0, runtime.max_live_sessions - reserve)
+            allowed = max(
+                0,
+                runtime.max_live_sessions
+                - reserve
+                - len(_state["active_subagents"]),
+            )
             if remaining_count > allowed:
                 lru = sorted(
                     (
@@ -1389,12 +1621,18 @@ def create_app(
             with _state["session_registry_lock"]:
                 reservations = _state["session_init_reservations"]
                 global_at_capacity = (
-                    len(_state["sessions"]) + len(reservations)
+                    len(_state["sessions"])
+                    + len(reservations)
+                    + len(_state["active_subagents"])
                     >= runtime.max_live_sessions
                 )
                 user_at_capacity = (
                     sum(1 for session_key in _state["sessions"] if session_key[0] == uid)
                     + sum(1 for reservation in reservations if reservation[0] == uid)
+                    + sum(
+                        1 for item in _state["active_subagents"]
+                        if item[0] == uid
+                    )
                     >= runtime.max_live_sessions_per_user
                 )
                 at_capacity = global_at_capacity or user_at_capacity
@@ -2184,6 +2422,7 @@ def create_app(
             session_became_busy = s.abort_event is not None
             if not session_became_busy:
                 s.abort_event = asyncio.Event()
+                s.active_turn_id = str(uuid.uuid4())
         if session_became_busy:
             await turn_lease.release()
             raise HTTPException(
@@ -2272,7 +2511,10 @@ def create_app(
 
             event_count += 1
             yield ServerSentEvent(
-                data=json.dumps(session_event({"type": "accepted"})),
+                data=json.dumps(session_event({
+                    "type": "accepted",
+                    "turn_id": s.active_turn_id,
+                })),
                 event="accepted",
             )
 
@@ -2342,6 +2584,8 @@ def create_app(
                                             change_set["created_at"] = now
                                 if payload.get("type") == "response" and payload.get("content"):
                                     first_assistant_response = payload["content"]
+                                if payload.get("type") == "steer_consumed":
+                                    s.broadcast_event(session_event(payload))
                                 event_count += 1
                                 logger.debug(
                                     "SSE event #%d: type=%s",
@@ -2450,13 +2694,133 @@ def create_app(
                     del s.turn_metrics[:-100]
                 s.approval_queue = None
                 s.abort_event = None
+                s.active_turn_id = None
                 s.touch()
                 await turn_lease.release()
+                if agent.pending_steers():
+                    _schedule_steer_followup(req.session_id, uid)
                 # If sub-agents finished while this turn was busy, pick them up.
                 if s.auto_continue_pending:
                     _schedule_subagent_auto_continue(req.session_id, uid)
 
         return EventSourceResponse(_generate())
+
+    @app.post("/sessions/{session_id}/steer")
+    async def steer_chat(
+        session_id: str,
+        req: SteerRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Queue input behind the active turn; it may be promoted to a steer."""
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None or state.abort_event is None or not state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "NO_ACTIVE_TURN", "message": "There is no active turn to steer."},
+            )
+        if req.expected_turn_id != state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "TURN_MISMATCH", "message": "The active turn changed before this steer arrived."},
+            )
+        message = req.message.strip()
+        if not message and not req.attachments and not req.chat_image_ids:
+            raise HTTPException(status_code=400, detail="Steer input must not be empty")
+
+        existing_id = state.accepted_steer_clients.get(req.client_id)
+        if existing_id:
+            return {
+                "status": "accepted",
+                "steer_id": existing_id,
+                "turn_id": state.active_turn_id,
+                "duplicate": True,
+            }
+
+        sdir = _session_dir(_session_cwd(uid), uid)
+        try:
+            private_images = [
+                str(path) for path in resolve_assets(sdir, session_id, req.chat_image_ids)
+            ]
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat image not found")
+        all_attachments = [*req.attachments, *private_images]
+        enriched = message
+        if req.attachments:
+            notes = await asyncio.to_thread(build_attachment_notes, req.attachments)
+            if notes:
+                enriched = f"{message}\n\n{notes}"
+
+        steer_id = str(uuid.uuid4())
+        accepted = state.agent.enqueue_steer(
+            steer_id,
+            enriched,
+            all_attachments,
+            client_id=req.client_id,
+            display_content=message,
+        )
+        if not accepted:
+            raise HTTPException(status_code=409, detail="Duplicate steer")
+        state.accepted_steer_clients[req.client_id] = steer_id
+        if len(state.accepted_steer_clients) > 128:
+            oldest = next(iter(state.accepted_steer_clients))
+            state.accepted_steer_clients.pop(oldest, None)
+        state.touch()
+        return {
+            "status": "queued",
+            "steer_id": steer_id,
+            "turn_id": state.active_turn_id,
+        }
+
+    @app.post("/sessions/{session_id}/steers/{steer_id}/activate")
+    async def activate_chat_steer(
+        session_id: str,
+        steer_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Promote queued input to a steer by interrupting the active turn."""
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None or state.abort_event is None or not state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "NO_ACTIVE_TURN", "message": "There is no active turn to steer."},
+            )
+        if not any(item["steer_id"] == steer_id for item in state.agent.pending_steers()):
+            raise HTTPException(status_code=404, detail="Queued message not found")
+
+        state.abort_event.set()
+        if state.approval_event is not None and not state.approval_event.is_set():
+            state.approval_response = ApprovalResponse(
+                approval_id="",
+                action="no",
+                feedback="Interrupted by user steer",
+            )
+            state.approval_event.set()
+        if state.edit_done_event is not None and not state.edit_done_event.is_set():
+            state.edit_done_event.set()
+        state.touch()
+        return {"status": "interrupting", "steer_id": steer_id}
+
+    @app.delete("/sessions/{session_id}/steers/{steer_id}")
+    async def cancel_chat_steer(
+        session_id: str,
+        steer_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not state.agent.cancel_steer(steer_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This steer has already been consumed or is no longer pending.",
+            )
+        for client_id, accepted_id in list(state.accepted_steer_clients.items()):
+            if accepted_id == steer_id:
+                state.accepted_steer_clients.pop(client_id, None)
+        return {"status": "cancelled", "steer_id": steer_id}
 
     @app.post("/chat/stop")
     async def stop_chat(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
@@ -2797,6 +3161,7 @@ def create_app(
         exec_health: dict | None = _state.get("execution_health")
         with _state["session_registry_lock"]:
             live_sessions = list(_state["sessions"].values())
+            active_subagent_count = len(_state["active_subagents"])
         for s in live_sessions:
             svc = s.agent.execution_service
             if svc:
@@ -2842,6 +3207,10 @@ def create_app(
                 resident = [proxy for proxy in proxies if proxy.is_resident]
                 body["resources"] = {
                     "live_sessions": len(live_sessions),
+                    "active_subagents": active_subagent_count,
+                    "active_thread_slots_used": (
+                        len(live_sessions) + active_subagent_count
+                    ),
                     "max_live_sessions": _state["base_config"].server.max_live_sessions,
                     "max_live_sessions_per_user": _state["base_config"].server.max_live_sessions_per_user,
                     "initializing_sessions": len(_state["session_init_reservations"]),
@@ -3071,10 +3440,6 @@ def create_app(
         s.approval_response = req
         s.approval_event.set()
         return {"status": "ok", "approval_id": req.approval_id, "action": req.action}
-
-    class EditDoneRequest(BaseModel):
-        approval_id: str
-        session_id: str
 
     @app.post("/edit-done")
     async def edit_done(req: EditDoneRequest, user: User | None = Depends(get_user_context)) -> dict:
@@ -3387,9 +3752,6 @@ def create_app(
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Chat image not found")
         return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
-
-    class ForkSessionRequest(BaseModel):
-        from_message_index: int
 
     @app.post("/sessions/{session_id}/fork")
     async def fork_session(
@@ -3867,16 +4229,6 @@ def create_app(
             "entries": list_memory_entries(uid, personal, _state["multi_user"]),
         }
 
-    class MemoriesRequest(BaseModel):
-        content: str = ""
-        entry: str = ""
-        remove_index: int | None = None
-        summary: str | None = None
-
-    class MemoryPreferencesRequest(BaseModel):
-        use_memories: bool
-        generate_memories: bool
-
     def _memory_preferences_response(user: User | None) -> dict:
         defaults = _base_config_copy().memories
         stored = (
@@ -4057,6 +4409,19 @@ def create_app(
     if gui_static_dir:
         gui_path = Path(gui_static_dir)
         if gui_path.is_dir():
+            # Utility screens use real browser paths so they can be bookmarked
+            # and carry query parameters. Return the SPA shell for those paths;
+            # the React app owns the actual tab/query routing.
+            gui_index = gui_path / "index.html"
+
+            @app.get("/admin", include_in_schema=False)
+            async def admin_gui_route() -> FileResponse:
+                return FileResponse(gui_index)
+
+            @app.get("/settings", include_in_schema=False)
+            async def settings_gui_route() -> FileResponse:
+                return FileResponse(gui_index)
+
             from starlette.staticfiles import StaticFiles
 
             app.mount("/", StaticFiles(directory=str(gui_path), html=True))

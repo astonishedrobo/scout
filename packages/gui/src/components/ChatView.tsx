@@ -329,7 +329,6 @@ export function ChatView({
             {streamingSteps.length > 0 && (
               <ToolCard
                 steps={streamingSteps}
-                defaultExpanded
                 baseUrl={baseUrl}
                 token={token}
                 awaitingApproval={awaitingApproval}

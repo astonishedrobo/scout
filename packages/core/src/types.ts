@@ -202,8 +202,13 @@ export interface ChatEvent {
     | "interrupted"
     | "approval_request"
     | "user_input_request"
-    | "session_title";
+    | "session_title"
+    | "steer_consumed"
+    | "steer_rejected";
   session_id?: string;
+  turn_id?: string;
+  steer_id?: string;
+  client_id?: string;
   name?: string;
   args?: Record<string, unknown>;
   output?: string;

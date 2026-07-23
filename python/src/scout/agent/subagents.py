@@ -65,6 +65,7 @@ TRAILHAND_TOOLS: frozenset[str] = frozenset({
 })
 MULTI_AGENT_TOOLS: frozenset[str] = frozenset({
     "spawn_subagent", "list_subagents", "get_subagent_result",
+    "get_subagent_transcript",
     "stop_subagent", "send_subagent_message",
 })
 AGENT_TYPE_TOOLS: dict[str, frozenset[str]] = {
@@ -134,6 +135,8 @@ _MAX_EVENT_TEXT = 8_000
 
 CompletionCallback = Callable[["SubAgentRecord"], Awaitable[None] | None]
 EventListener = Callable[[dict[str, Any]], Awaitable[None] | None]
+ResourceAcquire = Callable[[str], str | None]
+ResourceRelease = Callable[[str], None]
 
 
 @dataclass
@@ -174,6 +177,10 @@ class SubAgentRecord:
     events: deque = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS), repr=False)
     child: Any = field(default=None, repr=False)
     _turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    resource_reserved: bool = field(default=False, repr=False)
+    # A supervisor that invokes stop_subagent already receives the stop tool
+    # result in its active turn.  UI/user stops need a separate parent pickup.
+    stop_initiated_by_parent: bool = field(default=False, repr=False)
 
     def to_public_dict(self, *, include_result: bool = False, include_events: bool = False) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -228,6 +235,9 @@ class SubAgentNotification:
     summary: str
     result: str = ""
     error: str = ""
+    duration_ms: int | None = None
+    tool_use_count: int = 0
+    partial: bool = False
 
     def format_message(self) -> str:
         lines = [
@@ -240,9 +250,18 @@ class SubAgentNotification:
             body = self.result.strip()
             if len(body) > 6_000:
                 body = body[:5_500] + "\n… [result truncated for parent context]"
-            lines.append(f"<result>\n{body}\n</result>")
+            tag = "partial_result" if self.partial else "result"
+            lines.append(f"<{tag}>\n{body}\n</{tag}>")
         if self.error:
             lines.append(f"<error>{self.error}</error>")
+        if self.duration_ms is not None:
+            lines.append(f"<duration_ms>{self.duration_ms}</duration_ms>")
+        lines.append(f"<tool_uses>{self.tool_use_count}</tool_uses>")
+        lines.append(
+            "<activity_transcript>"
+            f"Available on demand with get_subagent_transcript(agent_id={self.agent_id!r})."
+            "</activity_transcript>"
+        )
         lines.append("</subagent-notification>")
         return "\n".join(lines)
 
@@ -269,6 +288,8 @@ class SubAgentManager:
         self._lock = asyncio.Lock()
         self._on_complete = on_complete
         self._on_event = on_event
+        self._resource_acquire: ResourceAcquire | None = None
+        self._resource_release: ResourceRelease | None = None
         self._parent_agent: Any = None
         self._color_i = 0
         self._evict_task: asyncio.Task | None = None
@@ -290,6 +311,14 @@ class SubAgentManager:
 
     def set_event_listener(self, cb: EventListener | None) -> None:
         self._on_event = cb
+
+    def set_resource_gate(
+        self,
+        acquire: ResourceAcquire | None,
+        release: ResourceRelease | None,
+    ) -> None:
+        self._resource_acquire = acquire
+        self._resource_release = release
 
     def running_count(self) -> int:
         return sum(1 for a in self._agents.values() if a.status in {"pending", "running"})
@@ -339,13 +368,11 @@ class SubAgentManager:
                     f"({self._config.max_concurrent}). Wait for one to finish, "
                     f"or stop one with stop_subagent."
                 )
-            if self._spawn_count >= self._config.max_total_per_session:
-                return (
-                    f"[SPAWN DENIED] Session sub-agent budget exhausted "
-                    f"({self._config.max_total_per_session})."
-                )
-
             agent_id = f"sa-{uuid.uuid4().hex[:10]}"
+            if self._resource_acquire is not None:
+                denial = self._resource_acquire(agent_id)
+                if denial:
+                    return f"[SPAWN DENIED] {denial}"
             color = AGENT_COLORS[self._color_i % len(AGENT_COLORS)]
             self._color_i += 1
             record = SubAgentRecord(
@@ -360,11 +387,17 @@ class SubAgentManager:
                 parent_session_id=self.parent_session_id,
                 parent_user_id=self.parent_user_id,
                 last_activity="Starting…",
+                resource_reserved=self._resource_acquire is not None,
             )
             self._agents[agent_id] = record
             self._spawn_count += 1
 
-        child = self._build_child(record)
+        try:
+            child = self._build_child(record)
+        except Exception:
+            self._release_resource(record)
+            self._agents.pop(agent_id, None)
+            raise
         record.child = child
         await record.inbox.put({"role": "system_task", "content": prompt, "source": "spawn"})
         await self._emit(record, "subagent_started", {
@@ -444,6 +477,11 @@ class SubAgentManager:
             record.task is None or record.task.done()
         )
         if was_terminal:
+            if self._resource_acquire is not None:
+                denial = self._resource_acquire(agent_id)
+                if denial:
+                    return f"[SEND FAILED] {denial}"
+                record.resource_reserved = True
             # A follow-up supersedes an undelivered completion. Otherwise the
             # parent can auto-integrate the old result while this turn runs.
             if record.task is not None and not record.task.done():
@@ -508,7 +546,7 @@ class SubAgentManager:
             lines.append(line)
         lines.append(
             f"\nRunning: {self.running_count()} / {self._config.max_concurrent}; "
-            f"live: {len(live)} / {self._config.max_total_per_session}; "
+            f"history shown: {len(live)}; "
             f"retain after done: {self.terminal_retain_seconds}s."
         )
         return "\n".join(lines)
@@ -536,9 +574,69 @@ class SubAgentManager:
             parts.append(f"error: {record.error}")
         if record.result:
             parts.append(f"result:\n{record.result}")
+        if record.finished_at:
+            parts.append(
+                f"duration_ms: {max(0, int((record.finished_at - record.created_at) * 1000))}"
+            )
+        parts.append(f"tool_uses: {record.tool_use_count}")
         return "\n".join(parts)
 
-    async def stop(self, agent_id: str) -> str:
+    def get_transcript(self, agent_id: str) -> str:
+        """Return the retained, bounded activity transcript for one worker."""
+        agent_id = (agent_id or "").strip()
+        record = self._agents.get(agent_id)
+        if record is None or record.status == "expired":
+            return f"[NOT FOUND] No retained sub-agent with id {agent_id!r}."
+        lines = [
+            f"agent_id: {record.agent_id}",
+            f"description: {record.description}",
+            f"status: {record.status}",
+            f"assigned_task:\n{record.prompt or '(unavailable after restart)'}",
+            "",
+            "activity:",
+        ]
+        for event in record.events:
+            payload = event.payload
+            if event.type == "subagent_user_message":
+                text = payload.get("content") or payload.get("preview") or ""
+            elif event.type == "subagent_thinking":
+                text = payload.get("content") or payload.get("title") or ""
+            elif event.type == "subagent_tool_call":
+                text = f"{payload.get('name') or 'tool'} {payload.get('args') or {}}"
+            elif event.type == "subagent_tool_result":
+                text = (
+                    f"{payload.get('name') or 'tool'}: "
+                    f"{payload.get('output') or ''}"
+                )
+            elif event.type == "subagent_text":
+                text = payload.get("content") or ""
+            else:
+                text = (
+                    payload.get("summary")
+                    or payload.get("last_activity")
+                    or payload.get("error")
+                    or ""
+                )
+            text = str(text).strip()
+            if text:
+                lines.append(
+                    f"- {time.strftime('%H:%M:%S', time.localtime(event.ts))} "
+                    f"{event.type}: {text}"
+                )
+        if record.result:
+            label = "partial_result" if record.status == "stopped" else "result"
+            lines.extend(["", f"{label}:", record.result])
+        output = "\n".join(lines)
+        if len(output) > 16_000:
+            output = output[:8_000] + "\n… [middle truncated] …\n" + output[-7_500:]
+        return output
+
+    async def stop(
+        self,
+        agent_id: str,
+        *,
+        initiated_by_parent: bool = False,
+    ) -> str:
         agent_id = (agent_id or "").strip()
         record = self._agents.get(agent_id)
         if record is None or record.status == "expired":
@@ -549,6 +647,7 @@ class SubAgentManager:
                 f"agent_id: {agent_id}\n"
                 "Agent is already finished."
             )
+        record.stop_initiated_by_parent = initiated_by_parent
         record.abort_event.set()
         # Unblock inbox wait
         try:
@@ -562,6 +661,20 @@ class SubAgentManager:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # A command may already have yielded a persistent process id before
+        # the model turn was cancelled. Closing this worker's dedicated
+        # execution session reaps that process tree as part of stop semantics.
+        child = record.child
+        if child is not None:
+            try:
+                await child.close()
+            except Exception:
+                logger.exception(
+                    "Failed to close execution session for stopped sub-agent %s",
+                    agent_id,
+                )
+            finally:
+                record.child = None
         if record.status in {"pending", "running"}:
             record.status = "stopped"
             record.error = record.error or "Stopped by parent"
@@ -624,6 +737,15 @@ class SubAgentManager:
             self.persist_snapshot()
         return notes
 
+    def discard_notification(self, agent_id: str) -> None:
+        """Acknowledge one notification handled deterministically by the server."""
+        before = len(self._notifications)
+        self._notifications = [
+            note for note in self._notifications if note.agent_id != agent_id
+        ]
+        if len(self._notifications) != before:
+            self.persist_snapshot()
+
     def persist_snapshot(self) -> None:
         """Write durable agent results so refresh/restart does not lose deliverables."""
         if self._persist_path is None:
@@ -640,6 +762,9 @@ class SubAgentManager:
                         "summary": note.summary,
                         "result": note.result,
                         "error": note.error,
+                        "duration_ms": note.duration_ms,
+                        "tool_use_count": note.tool_use_count,
+                        "partial": note.partial,
                     }
                     for note in self._notifications
                 ],
@@ -647,6 +772,7 @@ class SubAgentManager:
                     {
                         "agent_id": a.agent_id,
                         "description": a.description,
+                        "prompt": a.prompt,
                         "agent_type": a.agent_type,
                         "color": a.color,
                         "status": a.status,
@@ -701,7 +827,7 @@ class SubAgentManager:
             rec = SubAgentRecord(
                 agent_id=agent_id,
                 description=str(row.get("description") or agent_id),
-                prompt="",
+                prompt=str(row.get("prompt") or ""),
                 agent_type=normalize_agent_type(str(row.get("agent_type") or "trailhand")),
                 color=str(row.get("color") or "emerald"),
                 status=status,  # type: ignore[arg-type]
@@ -748,6 +874,12 @@ class SubAgentManager:
                         summary=str(row.get("summary") or status),
                         result=str(row.get("result") or ""),
                         error=str(row.get("error") or ""),
+                        duration_ms=(
+                            int(row["duration_ms"])
+                            if row.get("duration_ms") is not None else None
+                        ),
+                        tool_use_count=int(row.get("tool_use_count") or 0),
+                        partial=bool(row.get("partial", False)),
                     ))
                     known.add(agent_id)
             except Exception:
@@ -854,6 +986,12 @@ class SubAgentManager:
             retriever=getattr(parent, "_retriever", None),
             user_id=str(parent._user_id),
             session_id=str(parent._session_id),
+            # Shell processes are owned by this worker, not by the parent
+            # conversation. This lets stop() reap yielded background commands
+            # without touching sibling workers or the supervisor.
+            execution_session_id=(
+                f"{parent._session_id}:subagent:{record.agent_id}"
+            ),
             server_mode=getattr(parent, "_server_mode", False),
             shared_dir=shared_dir,
             grant_store=getattr(parent, "_grant_store", None),
@@ -1022,6 +1160,24 @@ class SubAgentManager:
                             "agent_id": record.agent_id,
                             "last_activity": "Composing…",
                         }, persist=False)
+                    elif et == "response_reset":
+                        # The provider streamed a planning preamble before its
+                        # tool-call JSON completed. Keep that useful progress
+                        # as an inline thinking step instead of letting the UI
+                        # show it briefly and then erase it.
+                        if final_text.strip():
+                            record.last_activity = "Thinking…"
+                            await self._emit(record, "subagent_thinking", {
+                                "agent_id": record.agent_id,
+                                "title": "",
+                                "content": _bound_text(final_text),
+                                "last_activity": record.last_activity,
+                            })
+                        await self._emit(record, "subagent_response_reset", {
+                            "agent_id": record.agent_id,
+                            "last_activity": record.last_activity,
+                        })
+                        final_text = ""
                     elif et == "response_delta":
                         text = ev.get("content") or ""
                         if text:
@@ -1048,18 +1204,24 @@ class SubAgentManager:
                     elif et == "error":
                         record.error = ev.get("message") or "error"
                 if record.abort_event.is_set():
+                    if final_text.strip():
+                        record.result = final_text.strip()
                     record.status = "stopped"
                     record.error = record.error or "Stopped"
                     record.summary = "Stopped"
+                    record.finished_at = record.finished_at or time.time()
                 else:
                     record.result = (final_text or record.result or "").strip()
                     if record.result and not record.summary:
                         first = record.result.split("\n", 1)[0].strip()
                         record.summary = first[:160] if first else "Completed"
             except asyncio.CancelledError:
+                if final_text.strip():
+                    record.result = final_text.strip()
                 record.status = "stopped"
                 record.error = "Cancelled"
                 record.summary = "Stopped"
+                record.finished_at = record.finished_at or time.time()
                 raise
             except Exception as exc:
                 record.status = "failed"
@@ -1093,6 +1255,7 @@ class SubAgentManager:
                 logger.debug("subagent event listener failed", exc_info=True)
 
     async def _enqueue_notification(self, record: SubAgentRecord) -> None:
+        self._release_resource(record)
         if record.notified_completion:
             return
         record.notified_completion = True
@@ -1107,14 +1270,30 @@ class SubAgentManager:
             description=record.description,
             status=record.status,
             summary=summary,
-            result=record.result if record.status == "completed" else "",
+            result=record.result if record.status in {"completed", "stopped"} else "",
             error=record.error,
+            duration_ms=(
+                max(0, int((record.finished_at - record.created_at) * 1000))
+                if record.finished_at is not None else None
+            ),
+            tool_use_count=record.tool_use_count,
+            partial=record.status == "stopped" and bool(record.result),
         )
         async with self._lock:
             self._notifications.append(note)
         # Completion pickup is durable. If the process restarts before the
         # parent drains this queue, hydration restores the undelivered result.
         self.persist_snapshot()
+
+    def _release_resource(self, record: SubAgentRecord) -> None:
+        if not record.resource_reserved:
+            return
+        record.resource_reserved = False
+        if self._resource_release is not None:
+            try:
+                self._resource_release(record.agent_id)
+            except Exception:
+                logger.debug("sub-agent resource release failed", exc_info=True)
 
     async def _fire_complete(self, record: SubAgentRecord) -> None:
         if self._on_complete is None:
@@ -1233,6 +1412,12 @@ def format_notifications_block(
         "",
         "Instructions for you (parent):",
         "- Integrate useful results into a natural reply for the user.",
+        "- Lifecycle status is authoritative. Never describe a `stopped`, "
+        "`failed`, or `cancelled` agent as completed, even if partial or "
+        "apparently complete files exist in the shared workspace.",
+        "- For a stopped-agent update, do not continue, reconstruct, verify, "
+        "or inspect its work unless the user explicitly requested recovery. "
+        "State briefly that it stopped and that any existing files may be partial.",
         "- Do not re-spawn the same work.",
         "- If the user's pending request asked YOU to save/write a file from the "
         "sub-agent's output (e.g. write the essay to test-cat-sub.md), do that now "

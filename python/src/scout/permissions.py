@@ -38,6 +38,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "skill_list", "skill_read",
             # Read-only parents may still spawn explore/plan sub-agents.
             "spawn_subagent", "list_subagents", "get_subagent_result",
+            "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
         }),
     ),
@@ -57,6 +58,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "skill_list", "skill_read", "request_permissions",
             "think", "ask_user_choice",
             "spawn_subagent", "list_subagents", "get_subagent_result",
+            "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
         }),
     ),
@@ -76,6 +78,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "skill_list", "skill_read", "request_permissions",
             "think", "ask_user_choice",
             "spawn_subagent", "list_subagents", "get_subagent_result",
+            "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
         }),
     ),

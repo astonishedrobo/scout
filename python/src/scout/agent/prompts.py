@@ -47,6 +47,7 @@ TOOL_DESCRIPTIONS = {
     "spawn_subagent": "**`spawn_subagent`** — Launch a Scout crew member for a concrete, independent subtask. Prefer `run_in_background=true`. Types: `snoop` (read-only search/rummage), `cartographer` (read-only plan), `trailhand` (multi-step work, edits, timer demos).",
     "list_subagents": "**`list_subagents`** — List sub-agents spawned in this session and their status.",
     "get_subagent_result": "**`get_subagent_result`** — Fetch a finished sub-agent's full result. Prefer automatic completion notifications over polling.",
+    "get_subagent_transcript": "**`get_subagent_transcript`** — Fetch a retained worker activity transcript (messages, tool activity, and available partial/final output) only when the user asks for details or debugging requires it. It is not private model reasoning.",
     "stop_subagent": "**`stop_subagent`** — Stop a running sub-agent when its direction is wrong or the work is no longer needed.",
     "send_subagent_message": "**`send_subagent_message`** — Send a follow-up to an existing sub-agent (same thread). Prefer this over spawning a new agent when context should continue.",
 }
@@ -130,16 +131,16 @@ def _build_multi_agent_section(enabled_tools: frozenset[str], multi_agent_cfg: o
     if "spawn_subagent" not in enabled_tools:
         return ""
     max_concurrent = 3
-    max_total = 12
     if multi_agent_cfg is not None:
         max_concurrent = int(getattr(multi_agent_cfg, "max_concurrent", max_concurrent))
-        max_total = int(getattr(multi_agent_cfg, "max_total_per_session", max_total))
     return f"""## Multi-Agent Delegation
 
 You can run specialist workers in the background while you keep talking with the user.
 The UI shows their progress in an Agents panel — you do not need to narrate tool noise.
 
-Limits: ≤{max_concurrent} running at once; ≤{max_total} per conversation; workers cannot spawn workers.
+Limits: ≤{max_concurrent} sub-agents running at once per conversation; active workers \
+also consume the user's/server's live thread capacity; workers cannot spawn workers. \
+Finished and stopped workers do not consume capacity.
 
 ### User-facing voice (critical)
 - Sound like a sharp colleague, not a task scheduler or API.
@@ -700,7 +701,8 @@ def build_system_prompt(
             t for t in enabled_tools
             if t not in {
                 "spawn_subagent", "list_subagents",
-                "get_subagent_result", "stop_subagent",
+                "get_subagent_result", "get_subagent_transcript",
+                "stop_subagent",
                 "send_subagent_message",
             }
         )

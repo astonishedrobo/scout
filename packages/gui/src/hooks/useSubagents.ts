@@ -113,12 +113,14 @@ interface UseSubagentsOptions {
   onParentAutoReply?: (content: string) => void;
   onParentAutoResponseStart?: () => void;
   onParentAutoResponseDelta?: (content: string) => void;
+  onParentAutoEvent?: (event: Record<string, unknown>) => void;
   /** Toast / inline notice when a worker finishes. */
   onAgentFinished?: (notice: AgentFinishedNotice) => void;
-  onParentAutoTurnStarted?: () => void;
+  onParentAutoTurnStarted?: (event: Record<string, unknown>) => void;
   onParentAutoTurnFinished?: () => void;
   /** Durable lifecycle event rendered inline in the parent conversation. */
   onTaskEvent?: (event: TaskEvent) => void;
+  onSteerEvent?: (event: Record<string, unknown>) => void;
 }
 
 export function useSubagents({
@@ -130,10 +132,12 @@ export function useSubagents({
   onParentAutoReply,
   onParentAutoResponseStart,
   onParentAutoResponseDelta,
+  onParentAutoEvent,
   onAgentFinished,
   onParentAutoTurnStarted,
   onParentAutoTurnFinished,
   onTaskEvent,
+  onSteerEvent,
 }: UseSubagentsOptions) {
   const [agents, setAgents] = useState<SubAgentInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -150,18 +154,22 @@ export function useSubagents({
   const onParentAutoReplyRef = useRef(onParentAutoReply);
   const onParentAutoResponseStartRef = useRef(onParentAutoResponseStart);
   const onParentAutoResponseDeltaRef = useRef(onParentAutoResponseDelta);
+  const onParentAutoEventRef = useRef(onParentAutoEvent);
   const onAgentFinishedRef = useRef(onAgentFinished);
   const onParentAutoTurnStartedRef = useRef(onParentAutoTurnStarted);
   const onParentAutoTurnFinishedRef = useRef(onParentAutoTurnFinished);
   const onTaskEventRef = useRef(onTaskEvent);
+  const onSteerEventRef = useRef(onSteerEvent);
   onApprovalRef.current = onApprovalEvent;
   onParentAutoReplyRef.current = onParentAutoReply;
   onParentAutoResponseStartRef.current = onParentAutoResponseStart;
   onParentAutoResponseDeltaRef.current = onParentAutoResponseDelta;
+  onParentAutoEventRef.current = onParentAutoEvent;
   onAgentFinishedRef.current = onAgentFinished;
   onParentAutoTurnStartedRef.current = onParentAutoTurnStarted;
   onParentAutoTurnFinishedRef.current = onParentAutoTurnFinished;
   onTaskEventRef.current = onTaskEvent;
+  onSteerEventRef.current = onSteerEvent;
 
   useEffect(() => {
     selectedIdRef.current = null;
@@ -271,7 +279,11 @@ export function useSubagents({
         if (!resp.ok) return;
         const data = await resp.json();
         const remote = data.subagent as SubAgentInfo;
+        // A slower request for the previously selected agent must never
+        // replace the detail after the user has already clicked another one.
+        if (selectedIdRef.current !== agentId) return;
         setDetail((prev) => {
+          if (selectedIdRef.current !== agentId) return prev;
           if (prev && prev.agent_id === agentId) {
             const events = mergeEvents(prev.events, remote.events);
             // Prefer whichever side has more timeline richness.
@@ -317,7 +329,7 @@ export function useSubagents({
           setDetail((d) =>
             d?.agent_id === agentId
               ? d
-              : { ...found, events: d?.events || found.events || [] },
+              : { ...found, events: found.events || [] },
           );
         }
         return prev;
@@ -487,6 +499,10 @@ export function useSubagents({
         onApprovalRef.current?.(event as Record<string, unknown>);
         return;
       }
+      if (type === "steer_consumed" || type === "steer_rejected") {
+        onSteerEventRef.current?.(event as Record<string, unknown>);
+        return;
+      }
       if (type === "parent_auto_reply" && event.content) {
         onParentAutoReplyRef.current?.(String(event.content));
         return;
@@ -499,8 +515,12 @@ export function useSubagents({
         onParentAutoResponseDeltaRef.current?.(String(event.content));
         return;
       }
+      if (type === "parent_auto_event" && event.event && typeof event.event === "object") {
+        onParentAutoEventRef.current?.(event.event as Record<string, unknown>);
+        return;
+      }
       if (type === "parent_auto_turn_started") {
-        onParentAutoTurnStartedRef.current?.();
+        onParentAutoTurnStartedRef.current?.(event as Record<string, unknown>);
         return;
       }
       if (type === "parent_auto_turn_finished") {

@@ -202,7 +202,10 @@ class MultiAgentConfig(BaseModel):
         12,
         ge=1,
         le=64,
-        description="Hard cap on total sub-agents spawned in one parent session.",
+        description=(
+            "Deprecated compatibility setting. Finished agents do not consume "
+            "spawn capacity; active workers use server live-session capacity."
+        ),
     )
     max_iterations: int = Field(
         10,

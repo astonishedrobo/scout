@@ -127,6 +127,15 @@ export function App() {
     isSessionLoading,
     clearSession,
     sendMessage,
+    sendSteer,
+    activateSteer,
+    cancelSteer,
+    receiveSteerEvent,
+    beginExternalTurn,
+    receiveExternalTurnEvent,
+    commitExternalTurn,
+    finishExternalTurn,
+    pendingSteers,
     stop,
     retryAt,
     reset,
@@ -170,10 +179,11 @@ export function App() {
 
   const isAdmin = !!user?.is_admin;
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "memories">("general");
+  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "memories" | "integrations">("general");
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState<"files" | "users" | "execution" | "mcp" | "config">("files");
   const [operationError, setOperationError] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
@@ -183,10 +193,33 @@ export function App() {
   const [autoStreamingText, setAutoStreamingText] = useState("");
   const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
 
-  const openMemories = useCallback(() => {
-    setSettingsTab("memories");
+  const chatRoute = useCallback(() => sessionRef.current ? `/#/c/${sessionRef.current}` : "/#/", []);
+  const openSettingsRoute = useCallback((tab: "general" | "models" | "memories" | "integrations" = "general") => {
+    setAdminOpen(false);
+    setSettingsTab(tab);
     setSettingsOpen(true);
+    window.history.pushState({}, "", `/settings?tab=${encodeURIComponent(tab)}`);
   }, []);
+  const openAdminRoute = useCallback((tab: "files" | "users" | "execution" | "mcp" | "config" = "files") => {
+    setSettingsOpen(false);
+    setAdminOpen(true);
+    setAdminTab(tab);
+    window.history.pushState({}, "", `/admin?tab=${encodeURIComponent(tab)}`);
+  }, []);
+  const closeSettingsRoute = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsTab("general");
+    window.history.pushState({}, "", chatRoute());
+  }, [chatRoute]);
+  const closeAdminRoute = useCallback(() => {
+    setAdminOpen(false);
+    setAdminTab("files");
+    window.history.pushState({}, "", chatRoute());
+  }, [chatRoute]);
+
+  const openMemories = useCallback(() => {
+    openSettingsRoute("memories");
+  }, [openSettingsRoute]);
 
   /** Right panel is multi-use: opening one mode replaces the previous. Width is preserved. */
   const openArtifact = useCallback((artifact: Artifact) => {
@@ -256,36 +289,32 @@ export function App() {
         clearApproval();
       }
     },
+    onSteerEvent: (event) => {
+      void receiveSteerEvent(event as Parameters<typeof receiveSteerEvent>[0], currentSessionId || "default");
+    },
     // Background completions are queued by the server and integrated by one
     // normal supervisor turn; stream that durable reply into the transcript.
     onParentAutoReply: (content) => {
+      commitExternalTurn(content, currentSessionId || "default");
       setIsAutoContinuing(false);
       setAutoStreamingText("");
       setAutoContinueStartedAt(null);
-      if (!content.trim()) return;
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant" && last.content === content) return prev;
-        return [
-          ...prev,
-          {
-            role: "assistant",
-            content,
-            steps: [],
-          },
-        ];
-      });
+    },
+    onParentAutoEvent: (event) => {
+      receiveExternalTurnEvent(event, currentSessionId || "default");
     },
     onParentAutoResponseStart: () => setAutoStreamingText(""),
     onParentAutoResponseDelta: (content) => {
       setAutoStreamingText((current) => current + content);
     },
-    onParentAutoTurnStarted: () => {
+    onParentAutoTurnStarted: (event) => {
+      beginExternalTurn(String(event.turn_id || ""), currentSessionId || "default");
       setAutoStreamingText("");
       setAutoContinueStartedAt(Date.now());
       setIsAutoContinuing(true);
     },
     onParentAutoTurnFinished: () => {
+      finishExternalTurn(currentSessionId || "default");
       setAutoStreamingText("");
       setAutoContinueStartedAt(null);
       setIsAutoContinuing(false);
@@ -360,13 +389,18 @@ export function App() {
 
   const handleSubmit = useCallback(
     async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, submittedAnnotations: ResponseAnnotation[] = []) => {
-      if (!isReady || chatBusy) return false;
+      if (!isReady) return false;
+      if (chatBusy) {
+        const accepted = await sendSteer(text, attachments, chatImages, submittedAnnotations);
+        if (accepted && submittedAnnotations.length) clearAnnotations();
+        return accepted;
+      }
       return sendMessage(text, attachments, chatImages, () => {
         if (submittedAnnotations.length) clearAnnotations();
         onAccepted?.();
       }, submittedAnnotations);
     },
-    [isReady, chatBusy, sendMessage, clearAnnotations],
+    [isReady, chatBusy, sendMessage, sendSteer, clearAnnotations],
   );
 
   const handleUserInputAnswer = useCallback(
@@ -437,6 +471,32 @@ export function App() {
   useEffect(() => {
     const handleHashChange = (): Promise<void> | void => {
       const hash = window.location.hash;
+      const isUtilityPath = window.location.pathname === "/admin" || window.location.pathname === "/settings";
+      const routeLocation = isUtilityPath
+        ? `${window.location.pathname}${window.location.search}`
+        : window.location.hash;
+      const [route, query = ""] = routeLocation.replace(/^#/, "").split("?");
+      const params = new URLSearchParams(query);
+      if (route === "/admin") {
+        setSettingsOpen(false);
+        setAdminOpen(true);
+        const adminRouteTab = params.get("tab");
+        if (["files", "users", "execution", "mcp", "config"].includes(adminRouteTab ?? "")) {
+          setAdminTab(adminRouteTab as "files" | "users" | "execution" | "mcp" | "config");
+        }
+        return;
+      }
+      if (route === "/settings") {
+        setAdminOpen(false);
+        setSettingsOpen(true);
+        const settingsRouteTab = params.get("tab");
+        if (["general", "models", "memories", "integrations"].includes(settingsRouteTab ?? "")) {
+          setSettingsTab(settingsRouteTab as "general" | "models" | "memories" | "integrations");
+        }
+        return;
+      }
+      setSettingsOpen(false);
+      setAdminOpen(false);
       const match = hash.match(/^#\/c\/(.+)$/);
       if (match) {
         const sid = match[1];
@@ -447,13 +507,17 @@ export function App() {
     };
 
     window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("popstate", handleHashChange);
     if (isReady && isMultiUser !== undefined && !initialSyncRef.current) {
       initialSyncRef.current = true;
       // Keep the boot screen up until the deep-linked session (if any) has
       // loaded — otherwise the home screen flashes before the chat appears.
       void Promise.resolve(handleHashChange()).finally(() => setRouteBooting(false));
     }
-    return () => window.removeEventListener("hashchange", handleHashChange);
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("popstate", handleHashChange);
+    };
   }, [isReady, isMultiUser, handleResumeSession, handleNewChat]);
 
   const handleFork = useCallback(
@@ -512,25 +576,23 @@ export function App() {
           handleNewChat();
           break;
         case "/settings":
-          setSettingsTab("general");
-          setSettingsOpen(true);
+          openSettingsRoute("general");
           break;
         case "/memory":
-          setSettingsTab("memories");
-          setSettingsOpen(true);
+          openSettingsRoute("memories");
           break;
         case "/init":
           setInitOpen(true);
           break;
         case "/model":
-          setSettingsOpen(true);
+          openSettingsRoute("general");
           break;
         case "/help":
           setHelpOpen(true);
           break;
       }
     },
-    [handleNewChat],
+    [handleNewChat, openSettingsRoute],
   );
 
   const { uploads, uploadFiles, dismiss: dismissUpload, activeCount, errorCount } = useUploads(
@@ -667,7 +729,7 @@ export function App() {
         sidebar={
           <Sidebar
             onNewChat={handleNewChat}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => openSettingsRoute("general")}
             onOpenInit={() => setInitOpen(true)}
             onOpenHelp={() => setHelpOpen(true)}
             isConnected={isReady}
@@ -683,7 +745,7 @@ export function App() {
             username={user?.username}
             isMultiUser={isMultiUser}
             isAdmin={isAdmin}
-            onOpenAdmin={() => setAdminOpen(true)}
+            onOpenAdmin={() => openAdminRoute("files")}
           />
         }
         artifactPanel={
@@ -823,14 +885,10 @@ export function App() {
               <ChatView
                 messages={messages}
                 streamingSteps={streamingSteps}
-                streamingText={isAutoContinuing ? autoStreamingText : streamingText}
+                streamingText={streamingText}
                 currentTool={currentTool}
-                statusMessage={
-                  isAutoContinuing ? "Understanding…" : statusMessage
-                }
-                activityStartedAt={
-                  isAutoContinuing ? autoContinueStartedAt : activityStartedAt
-                }
+                statusMessage={statusMessage}
+                activityStartedAt={activityStartedAt}
                 isLoading={chatBusy}
                 awaitingApproval={!!pendingApproval}
                 annotations={annotations}
@@ -869,7 +927,7 @@ export function App() {
                   onOpen={openAgentsPanel}
                 />
               )}
-              {!pendingUserInput && !pendingApproval && annotations.length === 0 && (
+              {!pendingUserInput && !pendingApproval && pendingSteers.length === 0 && annotations.length === 0 && (
                 <div className="relative z-10 mx-auto h-0 w-full max-w-[46rem] px-4">
                   <PixelPet working={chatBusy || activeSubagents.length > 0} />
                 </div>
@@ -898,7 +956,7 @@ export function App() {
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
                   onSlashCommand={handleSlashCommand}
-                  disabled={chatBusy || !isReady}
+                  disabled={!isReady}
                   isLoading={chatBusy}
                   onStop={stop}
                   models={models}
@@ -910,6 +968,10 @@ export function App() {
                   approvalMode={approvalMode}
                   onSelectApprovalMode={setApprovalMode}
                   approvalModeChanging={approvalModeChanging}
+                  modelDisabled={chatBusy}
+                  pendingSteers={pendingSteers}
+                  onActivateSteer={(steerId) => { void activateSteer(steerId); }}
+                  onCancelSteer={(steerId) => { void cancelSteer(steerId); }}
                   isMultiUser={isMultiUser}
                   token={token}
                   uploadingCount={activeCount}
@@ -930,9 +992,9 @@ export function App() {
         isMultiUser={isMultiUser}
         token={token}
         initialTab={settingsTab}
+        onTabChange={(tab) => { window.history.replaceState({}, "", `/settings?tab=${encodeURIComponent(tab)}`); }}
         onClose={() => {
-          setSettingsOpen(false);
-          setSettingsTab("general");
+          closeSettingsRoute();
           reloadConfig();
         }}
       />
@@ -943,9 +1005,11 @@ export function App() {
 
       <AdminPanel
         open={adminOpen}
-        onClose={() => setAdminOpen(false)}
+        onClose={closeAdminRoute}
         baseUrl={baseUrl}
         token={token}
+        initialTab={adminTab}
+        onTabChange={(tab) => { window.history.replaceState({}, "", `/admin?tab=${encodeURIComponent(tab)}`); }}
       />
     </>
   );

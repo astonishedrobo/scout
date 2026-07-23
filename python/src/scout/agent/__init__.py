@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -188,6 +190,7 @@ class ScoutAgent:
         retriever: "BM25Retriever | RetrieverProxy | None" = None,
         user_id: str = "default",
         session_id: str = "default",
+        execution_session_id: str | None = None,
         server_mode: bool = False,
         shared_dir: Path | None = None,
         grant_store: Any | None = None,
@@ -202,6 +205,7 @@ class ScoutAgent:
         self._guard = guard
         self._user_id = user_id
         self._session_id = session_id
+        self._execution_session_id = execution_session_id or session_id
         self._server_mode = server_mode
         self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
         self._is_subagent = is_subagent
@@ -261,7 +265,7 @@ class ScoutAgent:
                 personal_dir=personal_dir,
                 shared_dir=shared_dir,
                 user_id=str(user_id),
-                session_id=str(session_id),
+                session_id=str(self._execution_session_id),
                 server_mode=server_mode,
                 grant_store=grant_store,
                 capability_approval=capability_cb,
@@ -350,6 +354,11 @@ class ScoutAgent:
             },
         }
         self._messages: list = []
+        # User input submitted while a turn is active. LangGraph nodes run in
+        # worker threads, so keep this queue synchronous and lock-protected.
+        self._pending_steers: deque[dict[str, Any]] = deque()
+        self._inflight_steers: dict[str, dict[str, Any]] = {}
+        self._steer_lock = threading.Lock()
         # Durable background terminals use the same parent-turn handoff as
         # sub-agents, without pretending a shell is an agent.
         self._pending_task_notifications: list[str] = []
@@ -418,6 +427,80 @@ class ScoutAgent:
             shared_dir=self._shared_dir,
             server_mode=self._server_mode,
         )
+
+    def enqueue_steer(
+        self,
+        steer_id: str,
+        content: str,
+        attachments: list[str] | None = None,
+        *,
+        client_id: str | None = None,
+        display_content: str | None = None,
+    ) -> bool:
+        """Queue one user steer, rejecting duplicate client IDs."""
+        with self._steer_lock:
+            known = [*self._pending_steers, *self._inflight_steers.values()]
+            if client_id and any(item.get("client_id") == client_id for item in known):
+                return False
+            self._pending_steers.append({
+                "steer_id": steer_id,
+                "client_id": client_id,
+                "content": content,
+                "display_content": display_content if display_content is not None else content,
+                "attachments": list(attachments or []),
+            })
+        return True
+
+    def cancel_steer(self, steer_id: str) -> bool:
+        """Remove a steer only while it has not reached a model boundary."""
+        with self._steer_lock:
+            for item in self._pending_steers:
+                if item["steer_id"] == steer_id:
+                    self._pending_steers.remove(item)
+                    return True
+        return False
+
+    def pending_steers(self) -> list[dict[str, Any]]:
+        with self._steer_lock:
+            return [dict(item) for item in self._pending_steers]
+
+    def _drain_steers(self) -> list:
+        from .multimodal import build_human_message
+
+        with self._steer_lock:
+            pending = list(self._pending_steers)
+            self._pending_steers.clear()
+            self._inflight_steers.update(
+                (item["steer_id"], item) for item in pending
+            )
+        messages = []
+        for item in pending:
+            message = build_human_message(item["content"], item["attachments"])
+            message.additional_kwargs = {
+                **message.additional_kwargs,
+                "scout_steer_id": item["steer_id"],
+                "scout_client_id": item.get("client_id"),
+                "scout_display_content": item.get("display_content", item["content"]),
+            }
+            messages.append(message)
+        return messages
+
+    def _ack_steer(self, steer_id: str) -> None:
+        if not hasattr(self, "_steer_lock"):
+            return
+        with self._steer_lock:
+            self._inflight_steers.pop(steer_id, None)
+
+    def _restore_uncommitted_steers(self) -> None:
+        if not hasattr(self, "_steer_lock"):
+            return
+        with self._steer_lock:
+            if not self._inflight_steers:
+                return
+            restored = list(self._inflight_steers.values())
+            self._inflight_steers.clear()
+            for item in reversed(restored):
+                self._pending_steers.appendleft(item)
 
     def set_request_permissions_fn(self, fn) -> None:
         self._request_permissions_fn = fn
@@ -510,7 +593,17 @@ class ScoutAgent:
             return user_message
         if user_message.strip():
             return f"{block}\n\n---\n\n{user_message}"
-        # Auto-continue: drive completion of the pending request with the results.
+        # A cancellation is a lifecycle update, not permission to reconstruct
+        # or finish the cancelled worker's task.
+        if notes and not any(note.status == "completed" for note in notes):
+            return (
+                f"{block}\n\n---\n\n"
+                "Briefly acknowledge this background-agent lifecycle update. "
+                "Do not continue, reconstruct, inspect, or claim completion of "
+                "stopped or failed work unless the user explicitly asks."
+            )
+        # Auto-continue: drive completion of the pending request with successful
+        # results while the authoritative lifecycle rules above remain binding.
         return (
             f"{block}\n\n---\n\n"
             "The user is waiting. Using the sub-agent result(s) above, complete any "
@@ -725,6 +818,18 @@ class ScoutAgent:
                             "file_changes": msg.additional_kwargs.get("file_changes", []),
                             "tool_call_id": msg.tool_call_id,
                         })
+                    elif isinstance(msg, HumanMessage):
+                        steer_id = msg.additional_kwargs.get("scout_steer_id")
+                        if steer_id:
+                            self._ack_steer(str(steer_id))
+                            events.append({
+                                "type": "steer_consumed",
+                                "steer_id": str(steer_id),
+                                "client_id": msg.additional_kwargs.get("scout_client_id"),
+                                "content": msg.additional_kwargs.get(
+                                    "scout_display_content", _message_text(msg.content),
+                                ),
+                            })
             return events
 
         def _seal_pending_tools() -> None:
@@ -803,6 +908,7 @@ class ScoutAgent:
             # Drop the user turn that never got a model reply.
             discard_turn = True
             self._messages.pop()
+            self._restore_uncommitted_steers()
             raise
         except Exception:
             # Keep partial progress on tool/model errors (not rate-limit).
@@ -812,6 +918,7 @@ class ScoutAgent:
                     self._messages, new_messages, removed_message_ids
                 )
                 committed = True
+            self._restore_uncommitted_steers()
             if not response_emitted and tool_steps:
                 yield {"type": "response", "content": _build_tool_summary(tool_steps)}
             raise
@@ -828,6 +935,7 @@ class ScoutAgent:
                     self._messages, new_messages, removed_message_ids
                 )
                 committed = True
+            self._restore_uncommitted_steers()
 
     def reset(self) -> None:
         self._messages.clear()

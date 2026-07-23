@@ -152,6 +152,88 @@ async def test_spawn_background_runs_and_notifies(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_streamed_preamble_survives_response_reset_as_thinking(tmp_path, monkeypatch):
+    """A tool-call preamble must not flash briefly and then disappear."""
+    multi = MultiAgentConfig(
+        enabled=True,
+        terminal_retain_seconds=60,
+        auto_continue_on_complete=False,
+    )
+    mgr = _mgr()
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+
+    from scout import agent as agent_mod
+
+    class PreambleAgent:
+        def __init__(self, *args, **kwargs):
+            self._messages = []
+
+        async def stream(self, user_message, attachments=None):
+            yield {"type": "response_start"}
+            yield {
+                "type": "response_delta",
+                "content": "I’ll inspect the files before making the change.",
+            }
+            yield {"type": "response_reset"}
+            yield {
+                "type": "tool_call",
+                "name": "list_files",
+                "args": {"directory": "."},
+                "tool_call_id": "c1",
+            }
+            yield {
+                "type": "tool_result",
+                "name": "list_files",
+                "output": "file.txt",
+                "tool_call_id": "c1",
+            }
+            yield {"type": "response_start"}
+            yield {"type": "response_delta", "content": "Done."}
+            yield {"type": "response", "content": "Done."}
+
+        async def close(self):
+            return None
+
+        def set_request_permissions_fn(self, fn):
+            return None
+
+    monkeypatch.setattr(agent_mod, "ScoutAgent", PreambleAgent)
+    events: list[dict] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    mgr.set_event_listener(on_event)
+    result = await mgr.spawn(
+        description="Inspect files",
+        prompt="Inspect and report",
+        run_in_background=True,
+    )
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in result.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if mgr._agents[agent_id].status == "completed":
+            break
+        await asyncio.sleep(0.02)
+
+    event_types = [event["type"] for event in events]
+    thinking_index = event_types.index("subagent_thinking")
+    reset_index = event_types.index("subagent_response_reset")
+    tool_index = event_types.index("subagent_tool_call")
+    assert thinking_index < reset_index < tool_index
+    assert events[thinking_index]["content"] == (
+        "I’ll inspect the files before making the change."
+    )
+    assert any(
+        event["type"] == "subagent_text" and event["content"] == "Done."
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_background_result_always_queues_parent_pickup(tmp_path, monkeypatch):
     multi = MultiAgentConfig(
         enabled=True,
@@ -305,7 +387,7 @@ async def test_concurrent_limit(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_total_limit_does_not_reset_when_finished_agents_archive(tmp_path, monkeypatch):
+async def test_finished_agents_never_exhaust_future_spawn_capacity(tmp_path, monkeypatch):
     multi = MultiAgentConfig(
         enabled=True,
         max_concurrent=1,
@@ -321,7 +403,7 @@ async def test_total_limit_does_not_reset_when_finished_agents_archive(tmp_path,
     mgr.bind_parent(_FakeParent(tmp_path, multi))
     _patch_child_stream(monkeypatch, ["first", "second"])
 
-    for description in ("First", "Second"):
+    for description in ("First", "Second", "Third"):
         out = await mgr.spawn(
             description=description,
             prompt="finish quickly",
@@ -338,15 +420,47 @@ async def test_total_limit_does_not_reset_when_finished_agents_archive(tmp_path,
             await asyncio.sleep(0.02)
         await mgr._expire(mgr._agents[agent_id])
 
-    assert mgr.total_count() == 2
-    assert len(mgr.public_snapshot()) == 2
+    assert mgr.total_count() == 3
+    assert len(mgr.public_snapshot()) == 3
     assert all(a["can_message"] is False for a in mgr.public_snapshot())
-    denied = await mgr.spawn(
-        description="Third",
-        prompt="should not launch",
-        run_in_background=True,
+
+
+@pytest.mark.asyncio
+async def test_shared_resource_gate_counts_only_active_agents(tmp_path, monkeypatch):
+    multi = MultiAgentConfig(enabled=True, max_concurrent=2)
+    mgr = _mgr(max_concurrent=2)
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+    _patch_child_stream(monkeypatch, ["done", "done"])
+    reserved: set[str] = set()
+
+    def acquire(agent_id: str) -> str | None:
+        if reserved:
+            return "account active thread capacity reached"
+        reserved.add(agent_id)
+        return None
+
+    def release(agent_id: str) -> None:
+        reserved.discard(agent_id)
+
+    mgr.set_resource_gate(acquire, release)
+    first = await mgr.spawn(
+        description="First", prompt="finish", run_in_background=True,
     )
-    assert "budget exhausted" in denied
+    first_id = next(
+        line.split(":", 1)[1].strip()
+        for line in first.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if mgr._agents[first_id].status == "completed":
+            break
+        await asyncio.sleep(0.02)
+    assert reserved == set()
+
+    second = await mgr.spawn(
+        description="Second", prompt="finish", run_in_background=True,
+    )
+    assert "async_launched" in second
 
 
 @pytest.mark.asyncio
@@ -404,6 +518,7 @@ async def test_stop_running(tmp_path, monkeypatch):
     from scout import agent as agent_mod
 
     started = asyncio.Event()
+    child_closed = asyncio.Event()
 
     class HangAgent:
         def __init__(self, *a, **k):
@@ -412,11 +527,12 @@ async def test_stop_running(tmp_path, monkeypatch):
         async def stream(self, user_message, attachments=None):
             started.set()
             yield {"type": "status", "message": "Thinking"}
+            yield {"type": "response_delta", "content": "partial work"}
             await asyncio.sleep(30)
             yield {"type": "response", "content": "late"}
 
         async def close(self):
-            return None
+            child_closed.set()
 
     monkeypatch.setattr(agent_mod, "ScoutAgent", HangAgent)
     out = await mgr.spawn(description="Hang", prompt="sleep", run_in_background=True)
@@ -429,16 +545,66 @@ async def test_stop_running(tmp_path, monkeypatch):
     stop = await mgr.stop(agent_id)
     assert "stopped" in stop
     assert mgr._agents[agent_id].status == "stopped"
+    assert child_closed.is_set()
+    assert mgr._agents[agent_id].child is None
     assert completed == [agent_id]
     notes = mgr.drain_notifications()
     assert len(notes) == 1
     assert notes[0].status == "stopped"
+    assert notes[0].duration_ms is not None
+    assert notes[0].tool_use_count == 0
+    assert notes[0].partial is True
+    assert notes[0].result == "partial work"
+    assert "<partial_result>" in notes[0].format_message()
+    transcript = mgr.get_transcript(agent_id)
+    assert "assigned_task:" in transcript
+    assert "partial_result:" in transcript
+    assert "partial work" in transcript
     assert any(
         event["type"] == "subagent_stopped"
         and event["agent_id"] == agent_id
         and event["status"] == "stopped"
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_parent_initiated_stop_is_marked_for_duplicate_suppression(
+    tmp_path, monkeypatch,
+):
+    multi = MultiAgentConfig(enabled=True)
+    mgr = _mgr()
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+    from scout import agent as agent_mod
+
+    started = asyncio.Event()
+
+    class HangAgent:
+        def __init__(self, *a, **k):
+            self._messages = []
+
+        async def stream(self, user_message, attachments=None):
+            started.set()
+            yield {"type": "status", "message": "Thinking"}
+            await asyncio.sleep(30)
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(agent_mod, "ScoutAgent", HangAgent)
+    out = await mgr.spawn(description="Hang", prompt="sleep", run_in_background=True)
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in out.splitlines()
+        if line.startswith("agent_id:")
+    )
+    await asyncio.wait_for(started.wait(), timeout=2)
+    await mgr.stop(agent_id, initiated_by_parent=True)
+
+    assert mgr._agents[agent_id].stop_initiated_by_parent is True
+    notes = mgr.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].status == "stopped"
 
 
 def test_snoop_tools_read_only():
@@ -477,6 +643,33 @@ def test_multi_agent_prompt_describes_automatic_parent_pickup(tmp_path):
     assert "automatic follow-up" in prompt
     assert "only** workers whose `spawn_subagent`" in prompt
     assert "historical" in prompt
+
+
+def test_notification_prompt_makes_stopped_status_authoritative():
+    block = format_notifications_block([
+        SubAgentNotification(
+            agent_id="sa-stopped",
+            description="Worker 1",
+            status="stopped",
+            summary='Agent "Worker 1" was stopped',
+            error="Cancelled",
+        ),
+        SubAgentNotification(
+            agent_id="sa-complete",
+            description="Worker 2",
+            status="completed",
+            summary='Agent "Worker 2" completed',
+            result="finished normally",
+        ),
+    ])
+
+    assert "Lifecycle status is authoritative" in block
+    assert "Never describe a `stopped`" in block
+    assert "files may be partial" in block
+    assert "<status>stopped</status>" in block
+    assert "<status>completed</status>" in block
+    assert "<duration_ms>" not in block
+    assert "get_subagent_transcript" in block
 
 
 def test_profiles_include_send_message():

@@ -176,6 +176,10 @@ function buildAgentChat(detail: SubAgentInfo) {
       text = "";
       continue;
     }
+    if (type === "subagent_response_reset") {
+      text = "";
+      continue;
+    }
     if (type === "subagent_text_delta") {
       text += String(event.content || "");
       continue;

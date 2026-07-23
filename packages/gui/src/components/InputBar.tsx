@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import {
   ArrowUp,
   Plus,
@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   MessageSquare,
+  CornerDownRight,
   Trash2,
 } from "lucide-react";
 import { AnchoredPopover } from "./ui/AnchoredPopover";
@@ -58,6 +59,14 @@ interface InputBarProps {
   approvalMode: ApprovalMode;
   onSelectApprovalMode: (mode: ApprovalMode) => Promise<void> | void;
   approvalModeChanging?: boolean;
+  modelDisabled?: boolean;
+  pendingSteers?: Array<{
+    steerId: string;
+    content: string;
+    status: "sending" | "pending" | "steering";
+  }>;
+  onActivateSteer?: (steerId: string) => void;
+  onCancelSteer?: (steerId: string) => void;
   isMultiUser?: boolean;
   token?: string | null;
   uploadingCount?: number;
@@ -87,6 +96,10 @@ export function InputBar({
   approvalMode,
   onSelectApprovalMode,
   approvalModeChanging = false,
+  modelDisabled = false,
+  pendingSteers = [],
+  onActivateSteer,
+  onCancelSteer,
   token,
   uploadingCount = 0,
   onUpload,
@@ -199,14 +212,31 @@ export function InputBar({
   }, [value, baseUrl, token]);
 
   const minH = welcomeMode ? 76 : 44;
-  const maxH = welcomeMode ? 180 : 160;
-
-  useEffect(() => {
+  const resizeTextarea = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
+    // Grow naturally until roughly 30% of the viewport, with a comfortable
+    // desktop ceiling. Once capped, keep the prompt internally scrollable.
+    const viewportCap = Math.round(window.innerHeight * (welcomeMode ? 0.32 : 0.30));
+    const maxH = Math.min(240, Math.max(120, viewportCap));
     ta.style.height = "auto";
-    ta.style.height = Math.max(Math.min(ta.scrollHeight, maxH), minH) + "px";
-  }, [value, minH, maxH]);
+    const nextHeight = Math.max(Math.min(ta.scrollHeight, maxH), minH);
+    ta.style.height = `${nextHeight}px`;
+    const capped = ta.scrollHeight > maxH;
+    ta.style.overflowY = capped ? "auto" : "hidden";
+    // Browsers retain a stale scroll offset after shrinking/growing a textarea,
+    // which can hide its first line after the first newline.
+    if (!capped) ta.scrollTop = 0;
+  }, [minH, welcomeMode]);
+
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [value, resizeTextarea]);
+
+  useEffect(() => {
+    window.addEventListener("resize", resizeTextarea);
+    return () => window.removeEventListener("resize", resizeTextarea);
+  }, [resizeTextarea]);
 
   const acceptSlashCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -511,6 +541,51 @@ export function InputBar({
         </div>
       )}
 
+      {pendingSteers.length > 0 && (
+        <div className="relative z-10 mx-3 -mb-px overflow-hidden rounded-t-[14px] border border-b-0 border-scout-hairline-faint bg-scout-lift/90">
+          {pendingSteers.map((steer, index) => (
+            <div
+              key={steer.steerId}
+              className={`flex min-h-9 items-center gap-2 px-3 py-1.5 text-[12px] ${
+                index > 0 ? "border-t border-scout-hairline-faint" : ""
+              }`}
+            >
+              <CornerDownRight size={12} className="shrink-0 text-scout-muted/80" />
+              <span className="min-w-0 flex-1 truncate text-scout-text">
+                {steer.content || "Attachment"}
+              </span>
+              {steer.status === "pending" ? (
+                <button
+                  type="button"
+                  onClick={() => onActivateSteer?.(steer.steerId)}
+                  className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 font-medium text-scout-muted transition-colors hover:bg-scout-panel/70 hover:text-scout-text"
+                  aria-label="Steer current turn with this message"
+                >
+                  <CornerDownRight size={12} />
+                  Steer
+                </button>
+              ) : (
+                <span className="flex shrink-0 items-center gap-1.5 font-medium text-scout-muted">
+                  <Loader2 size={11} className="animate-spin" />
+                  {steer.status === "sending" ? "Queuing…" : "Steering…"}
+                </span>
+              )}
+              {steer.status === "pending" && (
+                <button
+                  type="button"
+                  onClick={() => onCancelSteer?.(steer.steerId)}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-scout-muted transition-colors hover:bg-scout-panel/70 hover:text-scout-text"
+                  aria-label="Cancel steer"
+                  title="Cancel steer"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
       className={`relative flex flex-col overflow-visible rounded-[26px] border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${disabled ? "opacity-60" : ""}`}
       >
@@ -586,12 +661,12 @@ export function InputBar({
                   : "How can I help you?"
           }
           rows={1}
-          className={`flex-1 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
+          className={`block w-full shrink-0 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
             welcomeMode ? "pt-3 pb-1" : "pt-4 pb-2"
           } ${
             welcomeMode ? "text-base" : "text-[15px]"
           }`}
-          style={{ minHeight: minH, maxHeight: maxH }}
+          style={{ minHeight: minH }}
         />
 
         <div className="flex items-center justify-between px-3 pb-3 pt-0">
@@ -611,7 +686,7 @@ export function InputBar({
               ref={approvalBtnRef}
               type="button"
               onClick={() => setShowApprovalMenu((open) => !open)}
-              disabled={approvalModeChanging || disabled}
+              disabled={approvalModeChanging}
               className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1.5 text-[13px] font-medium transition-colors hover:bg-scout-lift disabled:opacity-45 ${
                 approvalMode === "full_access"
                   ? "text-scout-warning"
@@ -642,34 +717,35 @@ export function InputBar({
             <button
               ref={modelBtnRef}
               onClick={() => setShowModelMenu((p) => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-bold text-scout-text/80 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent transition-all"
+              disabled={modelDisabled}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-bold text-scout-text/80 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent transition-all disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="truncate max-w-[160px]">{shortModel}</span>
               <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
             </button>
 
-            {isLoading ? (
+            {isLoading && (
               <button
                 onClick={onStop}
-                className={`${sendBtnClass} bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]`}
+                className={`${sendBtnClass} border border-scout-hairline bg-scout-lift/80 text-scout-muted transition-colors hover:border-scout-error/35 hover:bg-scout-error-muted hover:text-scout-error active:scale-[0.98]`}
                 aria-label="Stop execution"
+                title="Stop"
               >
-                <Square size={13} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                onClick={() => void handleSubmit()}
-                disabled={disabled || pastingImages || (!hasText && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || visionBlocked}
-                className={`${sendBtnClass} ${
-                  (hasText || fileAttachments.length > 0 || chatImages.length > 0 || annotations.length > 0) && !disabled && !visionBlocked
-                    ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
-                    : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
-                }`}
-                aria-label="Send message"
-              >
-                <ArrowUp size={18} strokeWidth={2.3} />
+                <Square size={11} fill="currentColor" />
               </button>
             )}
+            <button
+              onClick={() => void handleSubmit()}
+              disabled={disabled || pastingImages || (!hasText && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || visionBlocked}
+              className={`${sendBtnClass} ${
+                (hasText || fileAttachments.length > 0 || chatImages.length > 0 || annotations.length > 0) && !disabled && !visionBlocked
+                  ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
+                  : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
+              }`}
+              aria-label={isLoading ? "Steer current turn" : "Send message"}
+            >
+              <ArrowUp size={18} strokeWidth={2.3} />
+            </button>
           </div>
         </div>
       </div>
