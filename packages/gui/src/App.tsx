@@ -299,6 +299,9 @@ export function App() {
     },
   });
   const chatBusy = isLoading || isAutoContinuing;
+  const terminalTasks = messages
+    .filter((message) => message.role === "system" && message.task?.task_type === "terminal")
+    .map((message) => message.task!);
 
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
@@ -714,6 +717,7 @@ export function App() {
               }}
               baseUrl={baseUrl}
               token={token}
+              terminalTasks={terminalTasks}
             />
           ) : filesExplorerOpen ? (
             <FileExplorerPanel
