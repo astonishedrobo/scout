@@ -24,7 +24,9 @@ _ADMIN_USERS_ENV: set[str] = {
 
 security = HTTPBearer()
 
-SCOUT_HOME = Path.home() / ".config" / "scout"
+# Deployments and tests can isolate local auth state without mutating the
+# operator's real account database.  The default remains unchanged.
+SCOUT_HOME = Path(os.environ.get("SCOUT_HOME", "")).expanduser() if os.environ.get("SCOUT_HOME") else Path.home() / ".config" / "scout"
 DB_PATH = SCOUT_HOME / "scout_users.db"
 logger = logging.getLogger(__name__)
 
