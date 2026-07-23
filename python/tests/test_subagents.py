@@ -13,6 +13,7 @@ from scout.agent.subagents import (
     SubAgentManager,
     SubAgentNotification,
     format_notifications_block,
+    system_prefix_for_agent_type,
     tools_for_agent_type,
 )
 from scout.config import AppConfig, ExecutionConfig, MemoriesConfig, MultiAgentConfig
@@ -361,6 +362,14 @@ def test_trailhand_has_shell():
     assert "exec_command" in tools
     assert "write_file" in tools
     assert tools_for_agent_type("general-purpose") == tools
+
+
+def test_trailhand_prompt_respects_explicit_text_output():
+    prompt = system_prefix_for_agent_type("trailhand")
+
+    assert "Obey the assigned output form exactly" in prompt
+    assert "do not create a file" in prompt
+    assert "Write files only when the assignment explicitly requests" in prompt
 
 
 def test_profiles_include_send_message():
