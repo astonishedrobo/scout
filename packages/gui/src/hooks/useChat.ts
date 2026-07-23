@@ -27,6 +27,7 @@ interface ChatState {
   streamingText: string;
   currentTool?: string;
   statusMessage?: string;
+  activityStartedAt?: number | null;
   isLoading: boolean;
   error: string | null;
   pendingApproval: ApprovalRequest | null;
@@ -35,7 +36,7 @@ interface ChatState {
 
 const emptyState = (): ChatState => ({
   messages: [], streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
-  isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
+  activityStartedAt: null, isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
 });
 
 /** Normalize sandbox / relative paths so the same file maps to one card. */
@@ -260,7 +261,7 @@ export function useChat({
     // `accepted` event leaves a visible gap where the message exists nowhere.
     const optimisticUser: Message = { role: "user", content: text, attachments, chatImages, annotations };
     update(requestSessionId, (state) => ({
-      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", pendingUserInput: null,
+      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", activityStartedAt: Date.now(), pendingUserInput: null,
       messages: [...state.messages, optimisticUser],
     }));
 
@@ -325,6 +326,7 @@ export function useChat({
         streamingText: "",
         currentTool: undefined,
         statusMessage: undefined,
+        activityStartedAt: null,
         pendingApproval: opts.stopped ? null : state.pendingApproval,
       }));
       try {
@@ -424,6 +426,7 @@ export function useChat({
                 streamingText: "",
                 statusMessage: undefined,
                 isLoading: false,
+                activityStartedAt: null,
               }));
               if (pausedSteps.length > 0) {
                 try { await onAssistantMessage?.(requestSessionId, "", pausedSteps, [], []); } catch { /* best effort */ }
@@ -528,6 +531,7 @@ export function useChat({
         streamingText: "",
         currentTool: undefined,
         statusMessage: undefined,
+        activityStartedAt: null,
         pendingApproval: interrupted ? null : state.pendingApproval,
       }));
     }
@@ -578,7 +582,8 @@ export function useChat({
   return {
     messages: active.messages, setMessages, setMessagesForSession,
     streamingSteps: active.streamingSteps, currentTool: active.currentTool,
-    streamingText: active.streamingText, statusMessage: active.statusMessage, isLoading: active.isLoading,
+    streamingText: active.streamingText, statusMessage: active.statusMessage,
+    activityStartedAt: active.activityStartedAt, isLoading: active.isLoading,
     error: active.error, pendingApproval: active.pendingApproval, pendingUserInput: active.pendingUserInput,
     clearApproval, receiveApproval, clearUserInput, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
   };

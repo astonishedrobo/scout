@@ -6,6 +6,7 @@ interface StreamingIndicatorProps {
   text: string;
   statusMessage?: string;
   hasToolSteps?: boolean;
+  startedAt?: number | null;
 }
 
 function humanToolName(name: string) {
@@ -37,22 +38,23 @@ export function StreamingIndicator({
   text,
   statusMessage,
   hasToolSteps,
+  startedAt,
 }: StreamingIndicatorProps) {
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [fallbackStartedAt, setFallbackStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const activeKey = currentTool || statusMessage || "";
+  const active = !!(currentTool || statusMessage);
 
   useEffect(() => {
-    if (!activeKey) {
-      setStartedAt(null);
+    if (!active) {
+      setFallbackStartedAt(null);
       return;
     }
-    const started = Date.now();
-    setStartedAt(started);
-    setNow(started);
+    const current = Date.now();
+    setFallbackStartedAt((existing) => existing ?? current);
+    setNow(current);
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [activeKey]);
+  }, [active]);
 
   // Once prose is visibly streaming, the text itself is the progress signal.
   if (text && !currentTool) return null;
@@ -66,7 +68,10 @@ export function StreamingIndicator({
         : hasToolSteps
           ? "Preparing response"
           : "Starting";
-  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
+  const effectiveStartedAt = startedAt ?? fallbackStartedAt;
+  const elapsed = effectiveStartedAt
+    ? Math.max(0, Math.floor((now - effectiveStartedAt) / 1000))
+    : null;
   const label = elapsed === null
     ? `${rawLabel.replace(/[.…]+$/u, "")}…`
     : `${rawLabel.replace(/[.…]+$/u, "")} · ${elapsed}s`;

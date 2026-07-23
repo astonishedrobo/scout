@@ -13,6 +13,7 @@ interface ChatViewProps {
   streamingText: string;
   currentTool: string | undefined;
   statusMessage?: string;
+  activityStartedAt?: number | null;
   isLoading: boolean;
   awaitingApproval?: boolean;
   onSuggestionClick?: (text: string) => void;
@@ -200,6 +201,7 @@ export function ChatView({
   streamingText,
   currentTool,
   statusMessage,
+  activityStartedAt,
   isLoading,
   awaitingApproval = false,
   onRetry,
@@ -354,6 +356,7 @@ export function ChatView({
               text={streamingText}
               statusMessage={statusMessage}
               hasToolSteps={streamingSteps.length > 0}
+              startedAt={activityStartedAt}
             />
           </div>
         )}

@@ -116,6 +116,7 @@ export function App() {
     currentTool,
     streamingText,
     statusMessage,
+    activityStartedAt,
     isLoading,
     error: chatError,
     pendingApproval,
@@ -180,6 +181,7 @@ export function App() {
   const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
   const [isAutoContinuing, setIsAutoContinuing] = useState(false);
   const [autoStreamingText, setAutoStreamingText] = useState("");
+  const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
 
   const openMemories = useCallback(() => {
     setSettingsTab("memories");
@@ -259,6 +261,7 @@ export function App() {
     onParentAutoReply: (content) => {
       setIsAutoContinuing(false);
       setAutoStreamingText("");
+      setAutoContinueStartedAt(null);
       if (!content.trim()) return;
       setMessages((prev) => {
         const last = prev[prev.length - 1];
@@ -279,10 +282,12 @@ export function App() {
     },
     onParentAutoTurnStarted: () => {
       setAutoStreamingText("");
+      setAutoContinueStartedAt(Date.now());
       setIsAutoContinuing(true);
     },
     onParentAutoTurnFinished: () => {
       setAutoStreamingText("");
+      setAutoContinueStartedAt(null);
       setIsAutoContinuing(false);
     },
     onTaskEvent: (task: TaskEvent) => {
@@ -822,6 +827,9 @@ export function App() {
                 currentTool={currentTool}
                 statusMessage={
                   isAutoContinuing ? "Understanding…" : statusMessage
+                }
+                activityStartedAt={
+                  isAutoContinuing ? autoContinueStartedAt : activityStartedAt
                 }
                 isLoading={chatBusy}
                 awaitingApproval={!!pendingApproval}

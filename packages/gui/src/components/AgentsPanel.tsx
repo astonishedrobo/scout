@@ -423,6 +423,7 @@ export function AgentsPanel({
             streamingText={chat.streamingText}
             currentTool={chat.currentTool}
             statusMessage={detail.last_activity || "Working"}
+            activityStartedAt={detail.created_at ? detail.created_at * 1000 : null}
             isLoading={live}
             onOpenArtifact={onOpenArtifact}
             onOpenFileChanges={onOpenFileChanges}
