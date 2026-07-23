@@ -30,6 +30,32 @@ interface ChatViewProps {
   onRemoveAnnotation?: (id: string) => void;
 }
 
+/**
+ * Models sometimes repeat their pre-tool narration in the final response.
+ * Keep the interleaved copy in its correct chronological position and render
+ * only genuinely new trailing prose.
+ */
+function withoutRepeatedTimelinePrefix(
+  content: string,
+  steps: ToolStep[] | undefined,
+): string {
+  const current = content.trim();
+  if (!current) return "";
+  const prior = [...(steps ?? [])]
+    .reverse()
+    .find((step) => step.kind === "text")
+    ?.content?.trim();
+  if (!prior) return content;
+
+  // While the repeated sentence is still streaming, either side may only be
+  // a prefix of the other. Hide it until genuinely new text arrives.
+  if (prior.startsWith(current)) return "";
+  if (current.startsWith(prior)) {
+    return current.slice(prior.length).trimStart();
+  }
+  return content;
+}
+
 // Fixed vivid icon colors — theme tokens desaturate in the soft/dark themes
 // and wash these out to gray.
 const SUGGESTIONS: {
@@ -154,6 +180,10 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
+  const visibleStreamingText = withoutRepeatedTimelinePrefix(
+    streamingText,
+    streamingSteps,
+  );
   const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
 
   useEffect(() => {
@@ -168,16 +198,10 @@ export function ChatView({
       <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
         {messages.map((msg, i) => {
           const hasTimeline = msg.role === "assistant" && !!msg.steps?.length;
-          const timelineHasText = !!msg.steps?.some((step) => step.kind === "text");
-          // When mid-turn prose is already in the timeline, only show final
-          // content if it is not a duplicate of the last text block.
-          const lastText = [...(msg.steps ?? [])]
-            .reverse()
-            .find((step) => step.kind === "text");
-          const contentAlreadyInTimeline =
-            timelineHasText
-            && !!msg.content
-            && (lastText?.content ?? "").trim() === msg.content.trim();
+          const visibleContent =
+            msg.role === "assistant"
+              ? withoutRepeatedTimelinePrefix(msg.content, msg.steps)
+              : msg.content;
           // Always render the assistant shell when there is timeline or content
           // so copy/retry actions stay available even if prose lived in steps.
           const showBubble =
@@ -207,9 +231,9 @@ export function ChatView({
               {showBubble && (
                 <MessageBubble
                   message={
-                    contentAlreadyInTimeline
-                      ? { ...msg, content: "" }
-                      : msg
+                    visibleContent === msg.content
+                      ? msg
+                      : { ...msg, content: visibleContent }
                   }
                   onRetry={msg.role === "assistant" && onRetry ? () => onRetry(i) : undefined}
                   onFork={onFork ? () => onFork(i) : undefined}
@@ -248,10 +272,10 @@ export function ChatView({
                 onRemoveAnnotation={onRemoveAnnotation}
               />
             )}
-            {streamingText ? (
+            {visibleStreamingText ? (
               <div className="prose-scout text-[15px]">
                 <MessageBubble
-                  message={{ role: "assistant", content: streamingText }}
+                  message={{ role: "assistant", content: visibleStreamingText }}
                   baseUrl={baseUrl}
                   token={token}
                   sourceId="streaming-message"
