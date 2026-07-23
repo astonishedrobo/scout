@@ -1033,8 +1033,10 @@ def create_app(
                         session_id, user_id, reason, domains,
                     )
 
-                def _on_subagent_complete(_record: Any) -> None:
+                def _on_subagent_complete(record: Any) -> None:
                     # May run on the event loop thread from a sub-agent task.
+                    if not bool(getattr(record, "resume_parent_on_complete", False)):
+                        return
                     try:
                         _schedule_subagent_auto_continue(session_id, user_id)
                     except Exception:

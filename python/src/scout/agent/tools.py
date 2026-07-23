@@ -447,12 +447,16 @@ def make_tools(
         prompt: str,
         agent_type: str = "trailhand",
         run_in_background: bool = True,
+        resume_parent_on_complete: bool = False,
     ) -> str:
         """Launch a Scout sub-agent for a concrete, independent subtask.
 
         Prefer background mode so you can keep working; you will be notified
         when it finishes. Types: snoop (read-only search), cartographer
         (read-only plan), trailhand (multi-step work / timers / edits).
+        Set resume_parent_on_complete only when you must perform additional
+        supervisor work using the result. Leave it false when the worker's
+        returned result itself completes the user's request.
         """
         if is_subagent or subagent_manager is None:
             return (
@@ -464,6 +468,7 @@ def make_tools(
             prompt=prompt,
             agent_type=agent_type,
             run_in_background=run_in_background,
+            resume_parent_on_complete=resume_parent_on_complete,
         )
 
     @tool

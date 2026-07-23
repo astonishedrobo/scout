@@ -174,6 +174,10 @@ Limits: ≤{max_concurrent} running at once; ≤{max_total} per conversation; wo
 ### How to call workers
 1. `spawn_subagent` with a short human `description` (3–5 words) and a **self-contained** `prompt` \
    that matches the user's ask.
+   Leave `resume_parent_on_complete=false` when the worker's returned answer is the \
+   requested deliverable; the main chat will show one compact finished event and the \
+   full result remains available in task details. Set it to `true` only when you must \
+   use the result to perform additional supervisor work before the request is complete.
 2. For independent workers, batch every required `spawn_subagent` call in one turn.
    Prefer `run_in_background=true`. Keep helping the user; do not poll.
 3. When a worker finishes you receive a notification (and often an automatic \

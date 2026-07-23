@@ -124,6 +124,7 @@ async def test_spawn_background_runs_and_notifies(tmp_path, monkeypatch):
         prompt="Find the auth bug",
         agent_type="snoop",
         run_in_background=True,
+        resume_parent_on_complete=True,
     )
     assert "async_launched" in result
     assert "agent_id:" in result
@@ -148,6 +149,39 @@ async def test_spawn_background_runs_and_notifies(tmp_path, monkeypatch):
     notes = mgr.drain_notifications()
     assert len(notes) == 1
     assert notes[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_background_result_defaults_to_compact_notice_only(tmp_path, monkeypatch):
+    multi = MultiAgentConfig(
+        enabled=True,
+        terminal_retain_seconds=60,
+        auto_continue_on_complete=True,
+    )
+    mgr = _mgr(auto_continue_on_complete=True)
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+    _patch_child_stream(monkeypatch, ["final delegated answer"])
+    completed: list[str] = []
+    mgr.set_completion_callback(lambda record: completed.append(record.agent_id))
+
+    result = await mgr.spawn(
+        description="Direct answer",
+        prompt="Return only the answer",
+        run_in_background=True,
+    )
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in result.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if mgr._agents[agent_id].status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    assert mgr._agents[agent_id].result == "final delegated answer"
+    assert mgr.drain_notifications() == []
+    assert completed == [agent_id]
 
 
 @pytest.mark.asyncio
@@ -278,6 +312,7 @@ async def test_followup_supersedes_undelivered_completion(tmp_path, monkeypatch)
         description="Revise report",
         prompt="draft it",
         run_in_background=True,
+        resume_parent_on_complete=True,
     )
     agent_id = next(
         line.split(":", 1)[1].strip()
@@ -370,6 +405,18 @@ def test_trailhand_prompt_respects_explicit_text_output():
     assert "Obey the assigned output form exactly" in prompt
     assert "do not create a file" in prompt
     assert "Write files only when the assignment explicitly requests" in prompt
+
+
+def test_multi_agent_prompt_distinguishes_notify_from_parent_resume(tmp_path):
+    cfg = AppConfig(multi_agent=MultiAgentConfig(enabled=True))
+    prompt = build_system_prompt(
+        str(tmp_path),
+        config=cfg,
+        allowed_tools=resolve_profile("contributor").allowed_tools,
+    )
+
+    assert "resume_parent_on_complete=false" in prompt
+    assert "additional supervisor work" in prompt
 
 
 def test_profiles_include_send_message():

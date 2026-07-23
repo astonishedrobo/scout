@@ -160,6 +160,7 @@ class SubAgentRecord:
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     background: bool = True
+    resume_parent_on_complete: bool = False
     parent_session_id: str = ""
     parent_user_id: str = ""
     tool_use_count: int = 0
@@ -182,6 +183,7 @@ class SubAgentRecord:
             "color": self.color,
             "status": self.status,
             "background": self.background,
+            "resume_parent_on_complete": self.resume_parent_on_complete,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
             "tool_use_count": self.tool_use_count,
@@ -305,6 +307,7 @@ class SubAgentManager:
         prompt: str,
         agent_type: str = "trailhand",
         run_in_background: bool = True,
+        resume_parent_on_complete: bool = False,
     ) -> str:
         if not self._config.enabled:
             return "[SPAWN DENIED] Multi-agent spawning is disabled."
@@ -353,6 +356,7 @@ class SubAgentManager:
                 color=color,
                 status="pending",
                 background=run_in_background,
+                resume_parent_on_complete=resume_parent_on_complete,
                 parent_session_id=self.parent_session_id,
                 parent_user_id=self.parent_user_id,
                 last_activity="Starting…",
@@ -636,6 +640,7 @@ class SubAgentManager:
                         "error": a.error,
                         "created_at": a.created_at,
                         "finished_at": a.finished_at,
+                        "resume_parent_on_complete": a.resume_parent_on_complete,
                         "last_activity": a.last_activity,
                         "tool_use_count": a.tool_use_count,
                         "events": [e.to_dict() for e in list(a.events)[-80:]],
@@ -690,6 +695,7 @@ class SubAgentManager:
                 error=str(row.get("error") or ""),
                 created_at=float(row.get("created_at") or time.time()),
                 finished_at=row.get("finished_at"),
+                resume_parent_on_complete=bool(row.get("resume_parent_on_complete", False)),
                 last_activity=str(row.get("last_activity") or ""),
                 tool_use_count=int(row.get("tool_use_count") or 0),
                 notified_completion=True,
@@ -1047,6 +1053,11 @@ class SubAgentManager:
         if record.notified_completion:
             return
         record.notified_completion = True
+        # The durable task event already tells the user this worker finished.
+        # Only place the full result into the parent's model context when the
+        # supervisor explicitly declared that it still has dependent work.
+        if not record.resume_parent_on_complete:
+            return
         if record.status == "completed":
             summary = f'Agent "{record.description}" completed'
         elif record.status == "failed":

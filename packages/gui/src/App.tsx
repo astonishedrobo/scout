@@ -254,24 +254,8 @@ export function App() {
         clearApproval();
       }
     },
-    onAgentFinished: (notice) => {
-      setMessages((previous) => {
-        if (previous.some((message) => message.taskNotice?.task_id === notice.agent_id)) return previous;
-        return [...previous, {
-          role: "system",
-          content: "",
-          taskNotice: {
-            task_id: notice.agent_id,
-            title: notice.description,
-            status: notice.status === "failed" ? "failed" : "completed",
-            summary: notice.summary,
-            result_preview: notice.result_preview,
-          },
-        }];
-      });
-    },
-    // Claude/Codex-style: when a worker finishes and the parent integrates,
-    // push the reply into the open transcript. Server already persisted it.
+    // When dependent supervisor work was requested, push that completed parent
+    // turn into the open transcript. Ordinary worker results stay in task details.
     onParentAutoReply: (content) => {
       setIsAutoContinuing(false);
       setAutoStreamingText("");
