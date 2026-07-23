@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ActivityOrb, activityForTool } from "./ActivityOrb";
 
 interface StreamingIndicatorProps {
@@ -37,6 +38,21 @@ export function StreamingIndicator({
   statusMessage,
   hasToolSteps,
 }: StreamingIndicatorProps) {
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!currentTool) {
+      setStartedAt(null);
+      return;
+    }
+    const started = Date.now();
+    setStartedAt(started);
+    setNow(started);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [currentTool]);
+
   // Once prose is visibly streaming, the text itself is the progress signal.
   if (text && !currentTool) return null;
 
@@ -49,7 +65,10 @@ export function StreamingIndicator({
         : hasToolSteps
           ? "Preparing response"
           : "Starting";
-  const label = `${rawLabel.replace(/[.…]+$/u, "")}…`;
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
+  const label = elapsed === null
+    ? `${rawLabel.replace(/[.…]+$/u, "")}…`
+    : `${rawLabel.replace(/[.…]+$/u, "")} · ${elapsed}s`;
   const activity = text
     ? "composing"
     : currentTool
