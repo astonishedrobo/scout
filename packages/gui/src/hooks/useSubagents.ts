@@ -499,9 +499,6 @@ export function useSubagents({
         return;
       }
       if (type === "parent_auto_turn_started") {
-        // The live parent response replaces the temporary completion notice;
-        // keeping both makes the transcript look duplicated and unfinished.
-        setFinishedNotices([]);
         onParentAutoTurnStartedRef.current?.();
         return;
       }

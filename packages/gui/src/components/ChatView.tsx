@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from "react";
 import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, type LucideIcon } from "lucide-react";
-import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
+import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, TaskNotice, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
@@ -78,6 +78,20 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
     </div>
   );
   return onOpen ? <button type="button" onClick={onOpen} className="block w-full text-left">{content}</button> : content;
+}
+
+function TaskNoticeRow({ notice }: { notice: TaskNotice }) {
+  const failed = notice.status === "failed";
+  const stopped = notice.status === "cancelled" || notice.status === "interrupted";
+  const verb = failed ? "failed" : stopped ? "stopped" : "finished";
+  return (
+    <div className="flex items-center gap-2 px-1 text-[13px] text-scout-muted">
+      <span className={failed ? "text-scout-error" : stopped ? "text-scout-warning" : "text-scout-success"}>●</span>
+      <span className="font-medium text-scout-text">{notice.title}</span>
+      <span>{verb}</span>
+      {notice.summary && <span className="truncate">— {notice.summary}</span>}
+    </div>
+  );
 }
 
 // Fixed vivid icon colors — theme tokens desaturate in the soft/dark themes
@@ -233,6 +247,13 @@ export function ChatView({
             return (
               <div key={`task-${msg.task.task_id}`} className="animate-enter">
                 <TaskEventRow task={msg.task} onOpen={onOpenTask ? () => onOpenTask(msg.task!) : undefined} />
+              </div>
+            );
+          }
+          if (msg.role === "system" && msg.taskNotice) {
+            return (
+              <div key={`task-notice-${msg.taskNotice.task_id}-${i}`} className="animate-enter">
+                <TaskNoticeRow notice={msg.taskNotice} />
               </div>
             );
           }

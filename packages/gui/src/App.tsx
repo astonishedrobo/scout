@@ -254,6 +254,22 @@ export function App() {
         clearApproval();
       }
     },
+    onAgentFinished: (notice) => {
+      setMessages((previous) => {
+        if (previous.some((message) => message.taskNotice?.task_id === notice.agent_id)) return previous;
+        return [...previous, {
+          role: "system",
+          content: "",
+          taskNotice: {
+            task_id: notice.agent_id,
+            title: notice.description,
+            status: notice.status === "failed" ? "failed" : "completed",
+            summary: notice.summary,
+            result_preview: notice.result_preview,
+          },
+        }];
+      });
+    },
     // Claude/Codex-style: when a worker finishes and the parent integrates,
     // push the reply into the open transcript. Server already persisted it.
     onParentAutoReply: (content) => {
@@ -821,7 +837,7 @@ export function App() {
                 streamingText={isAutoContinuing ? autoStreamingText : streamingText}
                 currentTool={currentTool}
                 statusMessage={
-                  isAutoContinuing ? "Integrating a finished agent’s result…" : statusMessage
+                  isAutoContinuing ? "Understanding…" : statusMessage
                 }
                 isLoading={chatBusy}
                 awaitingApproval={!!pendingApproval}

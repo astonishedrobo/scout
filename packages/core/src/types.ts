@@ -56,11 +56,22 @@ export interface TaskEvent {
   error?: string;
 }
 
+/** Compact chronological completion signal, separate from a task's live card. */
+export interface TaskNotice {
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  summary?: string;
+  result_preview?: string;
+}
+
 export interface Message {
   role: "user" | "assistant" | "system";
   content: string;
   /** A durable background-work lifecycle row. */
   task?: TaskEvent;
+  /** Claude-style terminal notification when a background task ends. */
+  taskNotice?: TaskNotice;
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
   artifacts?: Artifact[];

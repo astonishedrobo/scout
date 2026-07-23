@@ -906,18 +906,6 @@ def create_app(
                 current.auto_continue_pending = False
                 return
             current.auto_continue_pending = False
-            # Claude/Codex-style surface: tell the UI an agent finished before the
-            # parent integrates the result into the main transcript.
-            for note in notes:
-                current.broadcast_event({
-                    "type": "subagent_finished_notice",
-                    "session_id": session_id,
-                    "agent_id": note.agent_id,
-                    "description": note.description,
-                    "status": note.status,
-                    "summary": note.summary,
-                    "result_preview": (note.result or "")[:400],
-                })
             turn_key = (str(user_id), session_id)
             with _state["session_registry_lock"]:
                 if turn_key in _state["pending_turns"] or current.abort_event is not None:
@@ -1011,6 +999,14 @@ def create_app(
                     "type": "parent_auto_turn_finished",
                     "session_id": session_id,
                 })
+                # A second worker may have completed while this parent turn
+                # was integrating the first.  The normal /chat finally-hook
+                # is not involved in an automatic turn, so explicitly start
+                # the next coalesced handoff instead of leaving stale prose
+                # such as “Timer 2 is still running”.
+                current.auto_continue_task = None
+                if current.auto_continue_pending:
+                    _schedule_subagent_auto_continue(session_id, user_id)
 
         try:
             loop = asyncio.get_running_loop()
@@ -1096,6 +1092,16 @@ def create_app(
                                     "task": task,
                                     "task_sequence": task_sequence,
                                 })
+                                if event_type in {"subagent_completed", "subagent_failed", "subagent_stopped"}:
+                                    state.broadcast_event({
+                                        "type": "subagent_finished_notice",
+                                        "session_id": session_id,
+                                        "agent_id": agent_id,
+                                        "description": task["title"],
+                                        "status": task["status"],
+                                        "summary": task.get("summary") or task["status"],
+                                        "result_preview": task.get("result_preview") or "",
+                                    })
 
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
