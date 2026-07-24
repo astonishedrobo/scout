@@ -4,6 +4,7 @@ export { HairlineDivider } from "./HairlineDivider";
 export { CenterModal } from "./CenterModal";
 export { RightDrawer } from "./RightDrawer";
 export { AnchoredPopover } from "./AnchoredPopover";
+export { Presence } from "./Presence";
 export {
   headerIconButtonClass,
   headerActionButtonClass,

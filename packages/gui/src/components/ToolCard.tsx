@@ -8,6 +8,8 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
+import { Presence } from "./ui/Presence";
+import { EXIT_MS } from "../motion";
 import type { ResponseAnnotation, ToolStep } from "scout-core";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { AnnotationRegion } from "./AnnotationRegion";
@@ -315,11 +317,19 @@ function ToolRow({
           )}
         </div>
       </button>
-      {expanded && hasOutput && (
+      {/* Fade rather than animating height: the <pre> is a scrollable
+          max-h-40 region with wrapped content, and animating its height
+          jitters as the content reflows. */}
+      <Presence
+        show={expanded && hasOutput}
+        enterClass="animate-enter"
+        exitClass="animate-fade-out"
+        exitMs={EXIT_MS.panel}
+      >
         <pre className="ml-8 max-h-40 overflow-auto rounded-btn border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
           {step.output}
         </pre>
-      )}
+      </Presence>
     </div>
   );
 }

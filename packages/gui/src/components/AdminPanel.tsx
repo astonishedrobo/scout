@@ -636,7 +636,7 @@ export function AdminPanel({ open, onClose, baseUrl, token, initialTab, onTabCha
                     {server.transport === "streamable_http" && (
                       <div className="flex gap-1.5">
                         <input type="password" value={mcpSharedDrafts[server.id] ?? ""} onChange={(e) => setMcpSharedDrafts((current) => ({ ...current, [server.id]: e.target.value }))} placeholder={server.has_shared_credential ? "Replace shared token" : "Shared token (optional)"} className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-scout-input-bg text-[11px] text-scout-text outline-none" />
-                        <Button variant="outline" onClick={() => saveMcpSharedCredential(server)} disabled={!mcpSharedDrafts[server.id]?.trim()}>Save</Button>
+                        <Button variant="outlined" onClick={() => saveMcpSharedCredential(server)} disabled={!mcpSharedDrafts[server.id]?.trim()}>Save</Button>
                       </div>
                     )}
                     {server.availability === "selected" && (

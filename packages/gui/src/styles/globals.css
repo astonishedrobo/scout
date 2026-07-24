@@ -52,6 +52,27 @@
    * mapped plainly in the config.
    */
 
+  /*
+   * Motion tokens — theme-independent, so they live in a plain :root and are
+   * never redeclared per theme. `--ease-swift` is the house easing (a soft
+   * overshoot-free decelerate); exits deliberately run shorter than their
+   * matching entrances, which reads as responsive rather than sluggish.
+   * Mirrored into Tailwind as `ease-swift` / `duration-fast|base|panel|…`.
+   */
+  :root {
+    --ease-swift: cubic-bezier(0.2, 0.8, 0.25, 1);
+    --dur-fast: 150ms;
+    --dur-base: 200ms;
+    --dur-panel: 240ms;
+    --dur-drawer: 260ms;
+    --dur-glide: 300ms;
+    /* Exit counterparts. */
+    --dur-panel-out: 180ms;
+    --dur-drawer-out: 220ms;
+    --dur-backdrop-out: 160ms;
+    --dur-collapse-out: 150ms;
+  }
+
   /* Light mode — an intentionally quiet neutral canvas. Borders only define
      genuine boundaries; they are not used as a substitute for hierarchy. */
   :root.light {
@@ -102,10 +123,6 @@
     --glass-border: rgba(24, 27, 32, 0.08);
     --glass-highlight: rgba(255, 255, 255, 0.9);
     --glass-card-bg: rgba(255, 255, 255, 0.45);
-    --ambient:
-      radial-gradient(1150px 750px at 10% -12%, rgba(172, 148, 250, 0.16), transparent 62%),
-      radial-gradient(1050px 700px at 94% 0%, rgba(240, 168, 104, 0.13), transparent 60%),
-      radial-gradient(950px 750px at 58% 115%, rgba(240, 193, 79, 0.1), transparent 62%);
     --shadow-pop:
       0 20px 56px rgba(25, 31, 42, 0.1),
       0 1px 4px rgba(25, 31, 42, 0.04);
@@ -115,7 +132,6 @@
     --radius-hero: 20px;
     --radius-card: 16px;
     --radius-btn: 10px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
     --text-body: 16px;
     --text-caption: 12px;
   }
@@ -171,11 +187,6 @@
     --glass-border: rgba(255, 255, 255, 0.1);
     --glass-highlight: rgba(255, 255, 255, 0.09);
     --glass-card-bg: rgba(255, 255, 255, 0.045);
-    --ambient:
-      radial-gradient(1150px 750px at 10% -12%, rgba(168, 142, 250, 0.17), transparent 62%),
-      radial-gradient(1050px 700px at 94% 0%, rgba(228, 148, 82, 0.13), transparent 60%),
-      radial-gradient(850px 620px at 50% 46%, rgba(178, 156, 247, 0.055), transparent 65%),
-      radial-gradient(950px 750px at 58% 115%, rgba(250, 204, 21, 0.07), transparent 62%);
     --shadow-pop:
       0 28px 80px rgba(0, 0, 0, 0.34),
       0 1px 0 rgba(255, 255, 255, 0.04) inset;
@@ -185,7 +196,6 @@
     --radius-hero: 20px;
     --radius-card: 16px;
     --radius-btn: 10px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
     --text-body: 16px;
     --text-caption: 12px;
   }
@@ -239,9 +249,6 @@
     --glass-border: rgba(255, 255, 255, 0.07);
     --glass-highlight: rgba(255, 255, 255, 0.045);
     --glass-card-bg: rgba(255, 255, 255, 0.03);
-    --ambient:
-      radial-gradient(1100px 700px at 12% -8%, rgba(195, 195, 202, 0.06), transparent 60%),
-      radial-gradient(1000px 650px at 92% 4%, rgba(205, 190, 174, 0.05), transparent 58%);
     --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.28);
     --shadow-card-hover: 0 12px 28px rgba(0, 0, 0, 0.2);
     --shadow-composer: 0 10px 28px rgba(0, 0, 0, 0.2);
@@ -249,7 +256,6 @@
     --radius-hero: 16px;
     --radius-card: 12px;
     --radius-btn: 8px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
     --text-body: 16px;
     --text-caption: 12px;
   }
@@ -306,13 +312,14 @@
 
 @layer components {
   /*
-   * Matte glass system. Two tiers, chosen by cost:
-   *  - .glass-chrome — real backdrop blur. Reserve for persistent chrome
-   *    (sidebar, header, composer, modals): few, large, mostly static layers.
-   *  - .glass-card — matte translucency + inner highlight, NO backdrop-filter.
-   *    Safe to use on any number of cards; costs nothing.
-   * Blur radius stays modest (14px) — matte frost, not liquid gloss, and far
-   * cheaper to composite than 30px+.
+   * Matte glass, for persistent chrome only (sidebar, header, composer,
+   * modals): few, large, mostly static layers. Blur radius stays modest
+   * (14px) — matte frost, not liquid gloss, and far cheaper to composite
+   * than 30px+.
+   * A second `.glass-card` tier (translucency without backdrop-filter, for
+   * cheap per-card use) was specified but never adopted by any component; it
+   * was removed rather than left as dead weight. The --glass-card-bg token is
+   * kept, since reviving that tier only needs the one rule back.
    */
   .glass-chrome {
     background: var(--glass-bg);
@@ -321,51 +328,30 @@
     box-shadow: inset 0 1px 0 var(--glass-highlight);
   }
 
-  .glass-chrome-strong {
-    background: var(--glass-bg-strong);
-    -webkit-backdrop-filter: blur(18px) saturate(1.5);
-    backdrop-filter: blur(18px) saturate(1.5);
-    box-shadow: inset 0 1px 0 var(--glass-highlight);
-  }
-
-  .glass-card {
-    background: var(--glass-card-bg);
-    border: 1px solid var(--glass-border);
-    box-shadow: inset 0 1px 0 var(--glass-highlight);
-  }
-
   /* No backdrop-filter support (or user opted out of transparency):
      fall back to solid panels so text never sits on unblurred noise. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .glass-chrome,
-    .glass-chrome-strong {
+    .glass-chrome {
       background: rgb(var(--scout-panel));
     }
   }
   @media (prefers-reduced-transparency: reduce) {
-    .glass-chrome,
-    .glass-chrome-strong {
+    .glass-chrome {
       background: rgb(var(--scout-panel));
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
-    .glass-card {
-      background: rgb(var(--scout-lift));
-    }
   }
 
+  /* The 620 weight is only renderable on a variable font — it used to sit on a
+     `ui-sans-serif` stack with no variable font loaded, so it silently snapped
+     to the nearest static weight (600/700). Now that Inter Variable's wght axis
+     is actually loaded, inherit the sans stack instead of overriding it. */
   .font-display {
-    font-family: ui-sans-serif, system-ui, sans-serif;
     font-weight: 620;
     letter-spacing: -0.04em;
     line-height: 1.05;
     text-wrap: balance;
-  }
-
-  .text-display {
-    font-size: var(--text-display);
-    line-height: 1.05;
-    letter-spacing: -0.04em;
   }
 
   .text-body {
@@ -523,7 +509,7 @@
 }
 
 .animate-enter {
-  animation: fade-in-up 200ms ease-out both;
+  animation: fade-in-up var(--dur-base) ease-out both;
 }
 
 /* Side panel entrance — final frame must be `transform: none` (see above). */
@@ -539,7 +525,26 @@
 }
 
 .animate-panel-in {
-  animation: panel-in 240ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  animation: panel-in var(--dur-panel) var(--ease-swift) both;
+}
+
+/* Exit mirrors. In every *-out keyframe the `from` frame is the SETTLED state
+   (`transform: none`), so the containing-block hazard described above cannot
+   apply — the element only acquires a transform on its way out, and it is
+   unmounted immediately afterwards. */
+@keyframes panel-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+.animate-panel-out {
+  animation: panel-out var(--dur-panel-out) var(--ease-swift) both;
 }
 
 /* Overlay drawer entrance — slides in from the right edge. */
@@ -553,7 +558,20 @@
 }
 
 .animate-drawer-in {
-  animation: drawer-in 260ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  animation: drawer-in var(--dur-drawer) var(--ease-swift) both;
+}
+
+@keyframes drawer-out {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.animate-drawer-out {
+  animation: drawer-out var(--dur-drawer-out) var(--ease-swift) both;
 }
 
 @keyframes backdrop-in {
@@ -566,7 +584,88 @@
 }
 
 .animate-backdrop-in {
-  animation: backdrop-in 200ms ease-out both;
+  animation: backdrop-in var(--dur-base) ease-out both;
+}
+
+@keyframes backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-backdrop-out {
+  animation: backdrop-out var(--dur-backdrop-out) ease-out both;
+}
+
+/* Centred modal: scale+fade. CenterModal previously had neither an entrance
+   nor an exit, so both of these are net-new. */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-modal-in {
+  animation: modal-in var(--dur-base) var(--ease-swift) both;
+}
+
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.animate-modal-out {
+  animation: modal-out var(--dur-panel-out) var(--ease-swift) both;
+}
+
+/* Full-bleed overlay exit (Settings). A horizontal slide reads wrong on a
+   page-sized surface, so this is just a fade with a small settle downward.
+   Its entrance is `.animate-enter`. */
+@keyframes fade-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.animate-fade-out {
+  animation: fade-out var(--dur-panel-out) ease-in both;
+}
+
+/* List-row removal. Opacity + a small rise only — animating height on these
+   rows would cost layout every frame for no perceptual gain, and siblings
+   reflowing after the fade completes reads fine at this duration. */
+@keyframes collapse-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.animate-collapse-out {
+  animation: collapse-out var(--dur-collapse-out) ease-out both;
 }
 
 /* Resizable panels are sized via flex-grow on the OUTER [data-panel] element
@@ -574,15 +673,76 @@
    is scoped through the Group. Applied only during the toggle so drags stay
    instant. */
 .panels-gliding > [data-panel] {
-  transition: flex-grow 300ms cubic-bezier(0.2, 0.8, 0.25, 1);
+  transition: flex-grow var(--dur-glide) var(--ease-swift);
+}
+
+/*
+ * Theme crossfade. Switching theme swaps a class on <html>, which repaints
+ * every token at once — a hard cut. This softens it by enabling a colour-only
+ * transition on everything for the duration of the swap.
+ *
+ * The `*` selector is genuinely expensive, which is why the class is applied
+ * ONLY while switching and removed immediately after (see useTheme's
+ * applyTheme). It must never be a permanent rule.
+ *
+ * Colour properties only: transitioning anything geometric here would fight
+ * every layout animation in the app. `no-preference` rather than a
+ * `reduce` override, so reduced-motion users get the instant swap and never
+ * pay the `*` cost at all.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before,
+  .theme-switching *::after {
+    transition:
+      background-color var(--dur-panel-out) ease,
+      border-color var(--dur-panel-out) ease,
+      color var(--dur-panel-out) ease,
+      fill var(--dur-panel-out) ease !important;
+  }
+}
+
+/* Loading placeholder. A sweeping highlight over a `lift`-toned block, for
+   waits whose shape is known ahead of time (list rows, file trees) — a spinner
+   there says "something is happening" where a skeleton says "a list is coming".
+   Under reduced motion the sweep stops but the block stays, so the layout
+   still communicates what is loading. */
+@keyframes skeleton-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton {
+  background-color: rgb(var(--scout-lift));
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(var(--scout-muted) / 0.13) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-btn);
+  animation: skeleton-sweep 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background-image: none;
+  }
 }
 
 /* Card hover lift — transform+shadow only, GPU-composited, cheap. */
 .lift-hover {
   transition:
-    transform 150ms ease,
-    box-shadow 150ms ease,
-    background-color 150ms ease;
+    transform var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease,
+    background-color var(--dur-fast) ease;
 }
 .lift-hover:hover {
   transform: translateY(-1.5px);
@@ -593,7 +753,16 @@
   .animate-enter,
   .animate-panel-in,
   .animate-drawer-in,
-  .animate-backdrop-in {
+  .animate-backdrop-in,
+  .animate-modal-in,
+  /* usePresence already unmounts instantly under reduced motion, so these
+     never normally render — belt and braces for any direct consumer. */
+  .animate-panel-out,
+  .animate-drawer-out,
+  .animate-backdrop-out,
+  .animate-modal-out,
+  .animate-fade-out,
+  .animate-collapse-out {
     animation: none;
   }
   .panels-gliding > [data-panel] {
@@ -604,51 +773,15 @@
     transform: none;
     transition: none;
   }
-}
 
-@keyframes pulse-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-    transform: scale(0.8);
+  /* Spinners are SLOWED, not stopped: a frozen spinner reads as a hung app,
+     so the liveness signal has to survive. Decorative pulses just stop. */
+  .animate-spin {
+    animation-duration: 1.6s;
   }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Streaming label: a color sweep travelling through the characters. */
-@keyframes text-shimmer {
-  from {
-    background-position: 200% center;
-  }
-  to {
-    background-position: -200% center;
-  }
-}
-.shimmer-text {
-  font-weight: 600;
-  background-image: linear-gradient(
-    90deg,
-    rgb(var(--scout-muted)) 0%,
-    rgb(var(--scout-muted)) 35%,
-    rgb(var(--scout-text)) 50%,
-    rgb(var(--scout-muted)) 65%,
-    rgb(var(--scout-muted)) 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .shimmer-text {
+  .animate-pulse {
     animation: none;
-    background: none;
-    color: rgb(var(--scout-muted));
+    opacity: 1;
   }
 }
 
@@ -950,14 +1083,4 @@
   .pet-flap-right {
     animation: none;
   }
-}
-
-.thinking-dot:nth-child(1) {
-  animation: pulse-dot 1.4s infinite 0s;
-}
-.thinking-dot:nth-child(2) {
-  animation: pulse-dot 1.4s infinite 0.2s;
-}
-.thinking-dot:nth-child(3) {
-  animation: pulse-dot 1.4s infinite 0.4s;
 }

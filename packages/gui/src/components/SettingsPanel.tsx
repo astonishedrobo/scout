@@ -4,6 +4,8 @@ import { useTheme, type Theme } from "../hooks/useTheme";
 import { Button } from "./ui/Button";
 import { APP_VERSION, SHORTCUTS } from "../appMeta";
 import { PixelBook } from "./PixelArt";
+import { usePresence } from "../hooks/usePresence";
+import { EXIT_MS } from "../motion";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -31,6 +33,7 @@ interface DesktopEnvOption {
 }
 
 export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, onTabChange, onClose }: SettingsPanelProps) {
+  const { mounted, state } = usePresence(open, EXIT_MS.panel);
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
   const [newMemory, setNewMemory] = useState("");
   const [memoryEntries, setMemoryEntries] = useState<string[]>([]);
@@ -277,10 +280,47 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
         { id: "memories", label: "Memories" },
       ];
 
-  if (!open) return null;
+  /**
+   * Arrow/Home/End navigation for the tablist. Required by the tab pattern:
+   * the tabs use a roving tabindex, so Tab alone can only reach the selected
+   * one. Both orientations are accepted because the nav is a horizontal strip
+   * on small screens and a vertical rail from `md` up.
+   */
+  const onTabKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    e.preventDefault();
+
+    const index = TABS.findIndex((t) => t.id === tab);
+    if (index === -1) return;
+
+    let nextIndex = index;
+    if (e.key === "Home") nextIndex = 0;
+    else if (e.key === "End") nextIndex = TABS.length - 1;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      nextIndex = (index - 1 + TABS.length) % TABS.length;
+    } else {
+      nextIndex = (index + 1) % TABS.length;
+    }
+
+    const next = TABS[nextIndex];
+    if (!next || next.id === tab) return;
+    setTab(next.id);
+    onTabChange?.(next.id);
+    // Selection follows focus, so move focus to the newly selected tab.
+    e.currentTarget
+      .querySelector<HTMLButtonElement>(`[data-tab-id="${next.id}"]`)
+      ?.focus();
+  };
+
+  if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-scout-canvas flex flex-col">
+    <div
+      className={`fixed inset-0 z-50 bg-scout-canvas flex flex-col ${
+        state === "exiting" ? "animate-fade-out pointer-events-none" : "animate-enter"
+      }`}
+    >
       <div className="flex items-center gap-3 px-4 sm:px-6 h-[52px] shrink-0 border-b border-scout-hairline-faint bg-scout-canvas">
         <button
           onClick={onClose}
@@ -295,10 +335,25 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
       </div>
 
       <div className="flex flex-1 flex-col md:flex-row overflow-hidden max-w-5xl mx-auto w-full px-3 sm:px-4 py-3 md:pb-6 gap-3 md:gap-4">
-        <nav className="flex w-full shrink-0 gap-1 overflow-x-auto px-1 md:w-48 md:block md:space-y-1 md:overflow-visible md:px-2 md:py-3">
+        <nav
+          role="tablist"
+          aria-label="Settings sections"
+          onKeyDown={onTabKeyDown}
+          className="flex w-full shrink-0 gap-1 overflow-x-auto px-1 md:w-48 md:block md:space-y-1 md:overflow-visible md:px-2 md:py-3"
+        >
           {TABS.map((t) => (
             <button
               key={t.id}
+              // Full tab pattern: roving tabindex, so Tab moves past the whole
+              // tablist and Arrow keys move between tabs (see onTabKeyDown).
+              // Announcing these as tabs without arrow support would leave a
+              // screen reader promising navigation that does not work.
+              role="tab"
+              id={`settings-tab-${t.id}`}
+              aria-selected={tab === t.id}
+              aria-controls={`settings-tabpanel-${t.id}`}
+              tabIndex={tab === t.id ? 0 : -1}
+              data-tab-id={t.id}
               onClick={() => { setTab(t.id); onTabChange?.(t.id); }}
               className={`shrink-0 md:w-full text-left px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-colors
                 ${tab === t.id
@@ -311,7 +366,13 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
           ))}
         </nav>
 
-        <div className="flex-1 overflow-y-auto bg-scout-panel/80 rounded-hero border border-scout-hairline-faint py-6 px-5 sm:py-7 sm:px-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+        <div
+          role="tabpanel"
+          id={`settings-tabpanel-${tab}`}
+          aria-labelledby={`settings-tab-${tab}`}
+          tabIndex={0}
+          className="flex-1 overflow-y-auto bg-scout-panel/80 rounded-hero border border-scout-hairline-faint py-6 px-5 sm:py-7 sm:px-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
+        >
           {tab === "general" && (
             <GeneralTab
               theme={theme}
@@ -408,7 +469,7 @@ export function SettingsPanel({ open, baseUrl, isMultiUser, token, initialTab, o
                 <div key={integration.id} className="rounded-xl border border-scout-hairline-faint px-3.5 py-3 space-y-2">
                   <div className="flex items-center gap-3"><div className="flex-1 min-w-0"><p className="text-sm font-medium text-scout-text">{integration.name}</p><p className="text-[11px] text-scout-muted truncate">{integration.transport === "container_stdio" ? "isolated container" : "remote"} · {integration.tools?.length ?? 0} tools · {integration.health?.status ?? "not connected"}{integration.has_credential ? " · credential saved" : ""}</p></div>
                   <button onClick={() => toggleIntegration(integration)} className={`w-9 h-5 rounded-full transition-colors ${integration.user_enabled ? "bg-scout-success" : "bg-scout-hairline"}`} aria-label={`${integration.user_enabled ? "Disable" : "Enable"} ${integration.name}`}><span className={`block w-4 h-4 rounded-full bg-white transition-transform ${integration.user_enabled ? "translate-x-4" : "translate-x-0.5"}`} /></button></div>
-                  {integration.transport !== "container_stdio" && <div className="flex gap-2"><input type="password" value={credentialDrafts[integration.id] ?? ""} onChange={(e) => setCredentialDrafts((items) => ({ ...items, [integration.id]: e.target.value }))} placeholder={integration.has_credential ? "Replace saved credential" : "API token (optional)"} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" /><Button variant="outline" onClick={() => saveIntegrationCredential(integration)} disabled={!credentialDrafts[integration.id]?.trim()}>Save token</Button></div>}
+                  {integration.transport !== "container_stdio" && <div className="flex gap-2"><input type="password" value={credentialDrafts[integration.id] ?? ""} onChange={(e) => setCredentialDrafts((items) => ({ ...items, [integration.id]: e.target.value }))} placeholder={integration.has_credential ? "Replace saved credential" : "API token (optional)"} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-scout-input-bg text-xs text-scout-text outline-none" /><Button variant="outlined" onClick={() => saveIntegrationCredential(integration)} disabled={!credentialDrafts[integration.id]?.trim()}>Save token</Button></div>}
                 </div>
               ))}
             </div>

@@ -86,7 +86,7 @@ export function ArtifactCards({
           <button
             key={artifact.id}
             onClick={() => onOpen(artifact)}
-            className="group lift-hover flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-lavender px-3.5 py-3 text-left hover:bg-scout-card-lavender-hover"
+            className="group lift-hover flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-lavender px-3.5 py-3 text-left transition-colors hover:bg-scout-card-lavender-hover"
           >
             <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-btn border border-scout-hairline-faint bg-scout-lavender-muted">
               {artifact.renderer === "image" ? (

@@ -53,7 +53,12 @@ export default {
         },
       },
       fontFamily: {
+        // "Inter Variable" is the family name the self-hosted variable build
+        // registers (see the @fontsource import in main.tsx) — it must come
+        // FIRST. Plain "Inter" stays next as a fallback for machines with a
+        // static Inter installed locally.
         sans: [
+          "Inter Variable",
           "Inter",
           "SF Pro Text",
           "system-ui",
@@ -63,6 +68,7 @@ export default {
           "sans-serif",
         ],
         display: [
+          "Inter Variable",
           "Inter",
           "SF Pro Display",
           "ui-sans-serif",
@@ -86,6 +92,18 @@ export default {
         pop: "var(--shadow-pop)",
         "card-hover": "var(--shadow-card-hover)",
         composer: "var(--shadow-composer)",
+      },
+      // Motion tokens. The easing was previously repeated as a literal
+      // cubic-bezier in three places; `ease-swift` is now the single name for it.
+      transitionTimingFunction: {
+        swift: "var(--ease-swift)",
+      },
+      transitionDuration: {
+        fast: "var(--dur-fast)",
+        base: "var(--dur-base)",
+        panel: "var(--dur-panel)",
+        drawer: "var(--dur-drawer)",
+        glide: "var(--dur-glide)",
       },
     },
   },

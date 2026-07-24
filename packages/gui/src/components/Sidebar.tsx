@@ -18,7 +18,10 @@ import type { Theme } from "../hooks/useTheme";
 import type { SessionMeta } from "../hooks/useSessions";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
+import { useExitingItems } from "../hooks/useExitingItems";
+import { EXIT_MS } from "../motion";
 import { PixelMap } from "./PixelArt";
+import { Skeleton } from "./ui/Skeleton";
 
 interface SidebarProps {
   onNewChat: () => void;
@@ -29,6 +32,7 @@ interface SidebarProps {
   theme: Theme;
   onToggleTheme: () => void;
   sessions: SessionMeta[];
+  sessionsLoading?: boolean;
   currentSessionId: string | null;
   onResumeSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => Promise<void>;
@@ -84,6 +88,7 @@ export function Sidebar({
   theme,
   onToggleTheme,
   sessions,
+  sessionsLoading,
   currentSessionId,
   onResumeSession,
   onRenameSession,
@@ -99,6 +104,20 @@ export function Sidebar({
   const [deleteTarget, setDeleteTarget] = useState<SessionMeta | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+
+  // Deleting a session is a server round-trip followed by a refetch, so the row
+  // is simply absent on the next render. Retain it briefly so it can fade out
+  // instead of blinking away. Grouping still runs over the merged list, so an
+  // exiting row stays under its original date heading.
+  const sessionRows = useExitingItems(
+    sessions,
+    (s) => s.sessionId,
+    EXIT_MS.collapse,
+  );
+  const exitingSessionIds = new Set(
+    sessionRows.filter((row) => row.exiting).map((row) => row.key),
+  );
+  const visibleSessions = sessionRows.map((row) => row.item);
 
   const saveTitle = async (session: SessionMeta) => {
     const title = editingTitle.trim();
@@ -155,7 +174,7 @@ export function Sidebar({
               <p className="text-xs font-medium text-scout-text">No LLM configured</p>
               <p className="text-caption text-scout-muted mt-0.5">
                 Open{" "}
-                <button onClick={onOpenSettings} className="underline hover:text-scout-text">
+                <button onClick={onOpenSettings} className="underline hover:text-scout-text transition-colors">
                   Settings
                 </button>{" "}
                 to add an API key.
@@ -166,7 +185,15 @@ export function Sidebar({
       )}
 
       <div className="flex-1 overflow-y-auto px-3 pt-1">
-        {sessions.length === 0 ? (
+        {/* Placeholders while the first fetch is in flight: an empty array is
+            otherwise indistinguishable from "no sessions", so the empty state
+            flashed before the real list arrived. */}
+        {sessionsLoading && visibleSessions.length === 0 ? (
+          <Skeleton.List rows={5} className="pt-1" />
+        ) : /* visibleSessions, not sessions: when the last row is deleted the
+              source list is already empty, and keying the empty state off it
+              would swap in the placeholder before the row could fade. */
+        visibleSessions.length === 0 ? (
           <div className="flex flex-col items-center gap-2.5 px-2 pt-10 text-center">
             <PixelMap size={40} />
             <p className="text-caption text-scout-muted leading-relaxed">
@@ -176,13 +203,13 @@ export function Sidebar({
             </p>
             <button
               onClick={onNewChat}
-              className="text-caption font-semibold text-scout-text underline underline-offset-2 hover:opacity-80"
+              className="text-caption font-semibold text-scout-text underline underline-offset-2 hover:opacity-80 transition-opacity"
             >
               Start your first chat
             </button>
           </div>
         ) : (
-          groupSessions(sessions).map((group) => (
+          groupSessions(visibleSessions).map((group) => (
           <div key={group.label} className="mb-1.5">
           <p className="px-1 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-scout-muted/65">
             {group.label}
@@ -195,6 +222,10 @@ export function Sidebar({
                   ${s.sessionId === currentSessionId
                     ? "bg-scout-lift"
                     : "hover:bg-scout-lift/65"
+                  }
+                  ${exitingSessionIds.has(s.sessionId)
+                    ? "animate-collapse-out pointer-events-none"
+                    : ""
                   }`}
                 onClick={() => onResumeSession(s.sessionId)}
               >
@@ -222,7 +253,7 @@ export function Sidebar({
                   {s.parentSessionId && (
                     <button
                       type="button"
-                      className="text-caption text-scout-muted hover:text-scout-text underline-offset-2 hover:underline"
+                      className="text-caption text-scout-muted hover:text-scout-text underline-offset-2 hover:underline transition-colors"
                       onClick={(e) => {
                         e.stopPropagation();
                         onResumeSession(s.parentSessionId!);
@@ -238,7 +269,7 @@ export function Sidebar({
                     setEditingId(s.sessionId);
                     setEditingTitle(s.title);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift"
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift transition-colors"
                   title="Edit title"
                 >
                   <Pencil size={13} />
@@ -248,7 +279,7 @@ export function Sidebar({
                     e.stopPropagation();
                     setDeleteTarget(s);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error hover:bg-scout-lift"
+                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error hover:bg-scout-lift transition-colors"
                   title="Delete session"
                 >
                   <Trash2 size={13} />

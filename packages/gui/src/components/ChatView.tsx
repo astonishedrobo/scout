@@ -184,7 +184,7 @@ export function SuggestionChips({
             key={s.prompt}
             onClick={() => onSuggestionClick(s.prompt)}
             title={s.description}
-            className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left hover:bg-scout-lift"
+            className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left transition-colors hover:bg-scout-lift"
           >
             <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center" style={{ color: s.iconColor }}>
               <Icon size={15} strokeWidth={1.8} />

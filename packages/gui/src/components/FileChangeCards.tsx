@@ -50,7 +50,7 @@ export function FileChangeCards({
               <button
                 type="button"
                 onClick={() => onReview(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift transition-colors"
               >
                 <GitCompareArrows size={13} />
                 Review
@@ -59,7 +59,7 @@ export function FileChangeCards({
                 type="button"
                 disabled={!reversible || !!changeSet.undone}
                 onClick={() => onUndo(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift transition-colors disabled:cursor-not-allowed disabled:opacity-45"
                 title={reversible ? "Undo these file edits" : "This change is too large or binary to undo safely"}
               >
                 {changeSet.undone ? <Check size={13} /> : <RotateCcw size={13} />}

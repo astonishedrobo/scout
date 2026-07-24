@@ -172,7 +172,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
             type="button"
             disabled={!!submitting}
             onClick={() => void respond("deny")}
-            className="rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text disabled:opacity-50"
+            className="rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors disabled:opacity-50"
           >
             Deny
           </button>
@@ -180,7 +180,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
             type="button"
             disabled={!!submitting}
             onClick={() => void respond("allow_session", undefined, saveExecpolicy)}
-            className="ml-auto rounded-full px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift disabled:opacity-50"
+            className="ml-auto rounded-full px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift transition-colors disabled:opacity-50"
           >
             Allow for session
           </button>
@@ -188,7 +188,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
             type="button"
             disabled={!!submitting}
             onClick={() => void respond("allow_once")}
-            className="inline-flex items-center gap-1.5 rounded-full bg-scout-text px-4 py-2 text-xs font-semibold text-scout-bg hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-scout-text px-4 py-2 text-xs font-semibold text-scout-bg hover:opacity-90 transition-colors disabled:opacity-50"
           >
             {submitting === "allow_once" ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
             Allow once
@@ -252,7 +252,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
                   type="button"
                   key={entry.path}
                   onClick={() => setActivePath(entry.path)}
-                  className={`max-w-52 shrink-0 truncate rounded-lg px-2.5 py-1.5 font-mono text-[11px] ${entry.path === activeDiff.path ? "bg-scout-lift text-scout-text" : "text-scout-muted hover:bg-scout-lift/60"}`}
+                  className={`max-w-52 shrink-0 truncate rounded-lg px-2.5 py-1.5 font-mono text-[11px] transition-colors ${entry.path === activeDiff.path ? "bg-scout-lift text-scout-text" : "text-scout-muted hover:bg-scout-lift/60"}`}
                 >
                   {entry.path}
                 </button>
@@ -291,7 +291,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
               rows={2}
               className="min-h-12 flex-1 resize-none bg-transparent px-2 py-1 text-sm text-scout-text outline-none placeholder:text-scout-muted"
             />
-            <button type="button" onClick={() => setSuggesting(false)} className="rounded-full p-2 text-scout-muted hover:bg-scout-lift" aria-label="Cancel suggestion"><X size={16} /></button>
+            <button type="button" onClick={() => setSuggesting(false)} className="rounded-full p-2 text-scout-muted transition-colors hover:bg-scout-lift" aria-label="Cancel suggestion"><X size={16} /></button>
             <button
               type="button"
               disabled={!feedback.trim() || !!submitting}
@@ -305,16 +305,16 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-1.5 px-3 py-3 sm:px-4">
-          <button type="button" disabled={!!submitting} onClick={() => void respond("no")} className="rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text disabled:opacity-50">
+          <button type="button" disabled={!!submitting} onClick={() => void respond("no")} className="rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors disabled:opacity-50">
             Reject
           </button>
           {!isPromotion && (
-            <button type="button" disabled={!!submitting} onClick={() => setSuggesting(true)} className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text disabled:opacity-50">
+            <button type="button" disabled={!!submitting} onClick={() => setSuggesting(true)} className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors disabled:opacity-50">
               <MessageSquare size={13} /> Suggest changes
             </button>
           )}
           {request.canShare && !isPromotion && (
-            <button type="button" disabled={!!submitting} onClick={() => void respond("shared")} className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-scout-cyan hover:bg-scout-lift disabled:opacity-50">
+            <button type="button" disabled={!!submitting} onClick={() => void respond("shared")} className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-scout-cyan hover:bg-scout-lift transition-colors disabled:opacity-50">
               <Share2 size={13} /> Approve &amp; share
             </button>
           )}
@@ -322,7 +322,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
             type="button"
             disabled={!!submitting}
             onClick={() => void respond("yes")}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-scout-text px-4 py-2 text-xs font-semibold text-scout-bg hover:opacity-90 disabled:opacity-50"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-scout-text px-4 py-2 text-xs font-semibold text-scout-bg hover:opacity-90 transition-colors disabled:opacity-50"
           >
             {submitting === "yes" ? <Loader2 size={14} className="animate-spin" /> : isPromotion ? <CheckCheck size={14} /> : <Check size={14} />}
             {isPromotion ? "Promote" : "Approve once"}

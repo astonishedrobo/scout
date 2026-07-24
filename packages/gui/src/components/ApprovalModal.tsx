@@ -12,7 +12,7 @@ interface ApprovalModalProps {
 }
 
 const actionBtn =
-  "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-transparent transition-all";
+  "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-transparent transition-colors";
 
 export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
   const [suggestMode, setSuggestMode] = useState(false);

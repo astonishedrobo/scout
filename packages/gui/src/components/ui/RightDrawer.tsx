@@ -1,6 +1,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { usePresence } from "../../hooks/usePresence";
+import { EXIT_MS } from "../../motion";
 
 interface RightDrawerProps {
   open: boolean;
@@ -18,7 +20,10 @@ export function RightDrawer({
   width = 440,
 }: RightDrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const { mounted, state } = usePresence(open, EXIT_MS.drawer);
 
+  // Keyed on `open`, not `mounted` — see the note in CenterModal: the scroll
+  // lock and focus restore must unwind when the exit starts, not when it ends.
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -39,10 +44,19 @@ export function RightDrawer({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
+
+  const exiting = state === "exiting";
+  // A closing drawer stays on screen for the animation; don't let it be clicked.
+  const backdropMotion = exiting
+    ? "animate-backdrop-out pointer-events-none"
+    : "animate-backdrop-in";
 
   return createPortal(
-    <div className="fixed inset-0 z-[50] flex justify-end bg-black/50 animate-backdrop-in" role="presentation">
+    <div
+      className={`fixed inset-0 z-[50] flex justify-end bg-black/50 ${backdropMotion}`}
+      role="presentation"
+    >
       <div
         className="absolute inset-0"
         onClick={onClose}
@@ -55,7 +69,9 @@ export function RightDrawer({
         aria-modal="true"
         aria-label={title}
         style={{ width: Math.min(width, window.innerWidth) }}
-        className="relative h-full bg-scout-panel border-l border-scout-hairline shadow-pop flex flex-col outline-none animate-drawer-in"
+        className={`relative h-full bg-scout-panel border-l border-scout-hairline shadow-pop flex flex-col outline-none ${
+          exiting ? "animate-drawer-out" : "animate-drawer-in"
+        }`}
       >
         <div className="flex items-center justify-between h-11 px-4 border-b border-scout-hairline shrink-0">
           {title ? (

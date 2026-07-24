@@ -27,6 +27,12 @@ export interface SessionMeta {
 
 interface UseSessionsReturn {
   sessions: SessionMeta[];
+  /**
+   * True until the first `/sessions` fetch settles. Distinguishes "still
+   * loading" from "genuinely no sessions", which an empty array alone cannot —
+   * without it the sidebar shows its empty state and then swaps in the list.
+   */
+  sessionsLoading: boolean;
   currentSessionId: string | null;
   createSession: (model?: string) => Promise<string>;
   loadSession: (id: string) => Promise<StoredMessage[]>;
@@ -45,6 +51,7 @@ interface UseSessionsReturn {
 
 export function useSessions(baseUrl: string, isReady: boolean, token: string | null, isMultiUser: boolean | undefined, onUnauthorized?: () => void): UseSessionsReturn {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval>>();
 
@@ -69,6 +76,10 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
       }
     } catch (err) {
       console.error("Failed to refresh sessions:", err);
+    } finally {
+      // Settled either way — a failed fetch must not leave the sidebar
+      // showing placeholders forever.
+      setSessionsLoading(false);
     }
   }, [baseUrl, token, isMultiUser, handleResponse]);
 
@@ -221,6 +232,7 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
 
   return {
     sessions,
+    sessionsLoading,
     currentSessionId,
     createSession,
     loadSession,

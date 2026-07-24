@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload, Loader2, Check, AlertCircle, X } from "lucide-react";
 import type { UploadItem } from "../hooks/useUploads";
+import { useExitingItems } from "../hooks/useExitingItems";
+import { EXIT_MS } from "../motion";
 
 interface UploadStatusProps {
   uploads: UploadItem[];
@@ -19,6 +21,9 @@ export function UploadStatus({
 }: UploadStatusProps) {
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Dismissing an upload drops it from the array immediately, so retain the row
+  // briefly to let it fade rather than blink out.
+  const uploadRows = useExitingItems(uploads, (u) => u.id, EXIT_MS.collapse);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Auto-open while uploads are active
@@ -79,7 +84,7 @@ export function UploadStatus({
         }}
       />
 
-      {open && uploads.length > 0 && (
+      {open && uploadRows.length > 0 && (
         <div
           className="absolute top-full right-0 mt-1 w-72 bg-scout-surface border border-scout-border
                      rounded-btn overflow-hidden z-50"
@@ -89,10 +94,12 @@ export function UploadStatus({
             Workspace uploads
           </div>
           <div className="max-h-64 overflow-y-auto">
-            {uploads.map((u) => (
+            {uploadRows.map(({ item: u, exiting }) => (
               <div
                 key={u.id}
-                className="flex items-center gap-2.5 px-3 py-2 text-sm border-b border-scout-border/40 last:border-0"
+                className={`flex items-center gap-2.5 px-3 py-2 text-sm border-b border-scout-border/40 last:border-0 ${
+                  exiting ? "animate-collapse-out pointer-events-none" : ""
+                }`}
               >
                 {u.status === "uploading" && (
                   <Loader2 size={14} className="text-scout-text animate-spin flex-shrink-0" />

@@ -112,11 +112,11 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
             accent="white"
             fullWidth
             size="hero"
-            disabled={loading}
+            loading={loading}
             className={!warm && day ? "!bg-[#202636] !text-white" : ""}
           >
             {loading ? (
-              <span className="w-5 h-5 border-2 border-scout-void/20 border-t-scout-void rounded-full animate-spin" />
+              isRegistering ? "Creating account…" : "Signing in…"
             ) : isRegistering ? (
               <>
                 <UserPlus size={16} />

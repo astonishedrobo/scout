@@ -3,6 +3,7 @@ import { Panel, Group, Separator } from "react-resizable-panels";
 import { PanelToggleIcon } from "./ui/PanelToggleIcon";
 import { headerIconButtonClass } from "./ui/headerControls";
 import { useMediaQuery } from "../hooks/usePanelPrefs";
+import { PANEL_GLIDE_MS, SETTLE_SLACK_MS } from "../motion";
 
 interface WorkspaceShellProps {
   sidebarCollapsed: boolean;
@@ -87,7 +88,10 @@ export function WorkspaceShell({
   }
   useEffect(() => {
     if (settled) return;
-    const timer = window.setTimeout(() => setSettled(true), 340);
+    const timer = window.setTimeout(
+      () => setSettled(true),
+      PANEL_GLIDE_MS + SETTLE_SLACK_MS,
+    );
     return () => window.clearTimeout(timer);
   }, [settled]);
   const pinArtifact = !artifactOpen || !settled;

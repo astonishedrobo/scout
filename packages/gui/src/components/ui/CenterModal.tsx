@@ -1,6 +1,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { usePresence } from "../../hooks/usePresence";
+import { EXIT_MS } from "../../motion";
 
 interface CenterModalProps {
   open: boolean;
@@ -30,7 +32,12 @@ export function CenterModal({
   showClose = true,
 }: CenterModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const { mounted, state } = usePresence(open, EXIT_MS.panel);
 
+  // Deliberately keyed on `open`, NOT `mounted`: the cleanup releases the body
+  // scroll lock and restores focus, and both must happen when the exit STARTS.
+  // Keyed on `mounted` the page would stay scroll-locked and focus would land
+  // ~180ms after the modal is already visually gone.
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -51,11 +58,18 @@ export function CenterModal({
     };
   }, [open, onClose, closeOnEscape]);
 
-  if (!open) return null;
+  if (!mounted) return null;
+
+  const exiting = state === "exiting";
+  // pointer-events-none while exiting: the dialog is still on screen for the
+  // length of the animation, and a closing modal must not be clickable.
+  const backdropMotion = exiting
+    ? "animate-backdrop-out pointer-events-none"
+    : "animate-backdrop-in";
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
+      className={`fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm ${backdropMotion}`}
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -64,7 +78,9 @@ export function CenterModal({
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
+        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden ${
+          exiting ? "animate-modal-out" : "animate-modal-in"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {(title || showClose) && (

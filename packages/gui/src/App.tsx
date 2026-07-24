@@ -48,6 +48,7 @@ export function App() {
 
   const {
     sessions,
+    sessionsLoading,
     currentSessionId,
     createSession,
     loadSession,
@@ -736,6 +737,7 @@ export function App() {
             theme={theme}
             onToggleTheme={toggleTheme}
             sessions={sessions}
+            sessionsLoading={sessionsLoading}
             currentSessionId={currentSessionId}
             onResumeSession={handleResumeSession}
             onRenameSession={renameSession}
