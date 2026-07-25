@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, GitCompareArrows } from "lucide-react";
 import type { FileChangeEntry, FileChangeSet } from "scout-core";
 import { DiffViewer } from "./DiffViewer";
-import { PanelHeader } from "./ui/PanelHeader";
+import { PanelBreadcrumb } from "./ui/PanelBreadcrumb";
 import { EmptyState } from "./ui/EmptyState";
 import { PathLabel } from "./PathLabel";
 
@@ -43,17 +43,7 @@ function diffStats(diff: string) {
   return { additions, deletions };
 }
 
-export function FileChangePanel({
-  changeSet,
-  onClose,
-  expanded = false,
-  onToggleExpand,
-}: {
-  changeSet: FileChangeSet;
-  onClose: () => void;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
-}) {
+export function FileChangePanel({ changeSet }: { changeSet: FileChangeSet }) {
   const undone = !!changeSet.undone;
   const [activePath, setActivePath] = useState(changeSet.entries[0]?.path ?? "");
 
@@ -82,24 +72,18 @@ export function FileChangePanel({
 
   return (
     <div className="flex h-full flex-col bg-scout-canvas">
-      <PanelHeader
-        icon={
-          undone
-            ? <CheckCircle2 size={16} className="text-scout-success" />
-            : <GitCompareArrows size={16} />
-        }
-        title={undone ? "Undo applied" : "Review"}
-        subtitle={
+      <PanelBreadcrumb
+        crumbs={[
+          { label: undone ? "Undo applied" : "Review" },
+          { label: undone ? "Workspace restored" : "Last turn" },
+        ]}
+        meta={
           <span className="flex items-center gap-1.5">
-            <span>{undone ? "Workspace restored" : "Last turn"}</span>
+            {undone && <CheckCircle2 size={12} className="text-scout-success" />}
             <span className="font-medium text-scout-success">+{stats.additions}</span>
             <span className="font-medium text-scout-error">-{stats.deletions}</span>
           </span>
         }
-        expanded={expanded}
-        onToggleExpand={onToggleExpand}
-        onClose={onClose}
-        closeLabel="Close review"
       />
       {changeSet.entries.length > 1 && (
         <div className="flex shrink-0 overflow-x-auto border-b border-scout-hairline-faint px-2 py-1.5">

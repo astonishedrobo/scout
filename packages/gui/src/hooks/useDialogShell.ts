@@ -28,6 +28,18 @@ function focusableWithin(root: HTMLElement): HTMLElement[] {
 const stack: RefObject<HTMLElement>[] = [];
 
 /**
+ * True while any modal shell is open.
+ *
+ * Global accelerators must stand down when a dialog owns the screen — opening a
+ * panel tab from behind the settings surface would leave you looking at the
+ * dialog while the app changed underneath it. Exported from here so there is one
+ * notion of "a dialog is open", not two that can disagree.
+ */
+export function hasOpenDialog(): boolean {
+  return stack.length > 0;
+}
+
+/**
  * Shared modal-shell behaviour: initial focus, body scroll lock, focus restore,
  * optional Escape, and — the part that was missing — Tab containment.
  *

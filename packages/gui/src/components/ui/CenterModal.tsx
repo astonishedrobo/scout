@@ -37,7 +37,7 @@ export function CenterModal({
   const { mounted, state } = usePresence(open, EXIT_MS.panel);
 
   // Initial focus, scroll lock, focus restore, Escape and Tab containment all
-  // live in useDialogShell so this shell and RightDrawer cannot diverge.
+  // live in useDialogShell so every modal shell behaves the same way.
   useDialogShell(open, panelRef, onClose, closeOnEscape);
 
   if (!mounted) return null;

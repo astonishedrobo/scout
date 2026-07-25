@@ -1,7 +1,8 @@
 import { Keyboard } from "lucide-react";
 import { CenterModal } from "./ui/CenterModal";
 import { ShortcutRow } from "./ui/ShortcutRow";
-import { APP_VERSION, SHORTCUTS } from "../appMeta";
+import { APP_VERSION } from "../appMeta";
+import { SHORTCUTS, shortcutKeys } from "../shortcuts";
 
 interface HelpDialogProps {
   open: boolean;
@@ -27,7 +28,7 @@ export function HelpDialog({ open, onClose }: HelpDialogProps) {
           </div>
           <div className="divide-y divide-scout-hairline-faint">
             {SHORTCUTS.map((s) => (
-              <ShortcutRow key={s.keys} keys={s.keys} desc={s.desc} />
+              <ShortcutRow key={s.id} keys={shortcutKeys(s)} desc={s.desc} />
             ))}
           </div>
         </section>

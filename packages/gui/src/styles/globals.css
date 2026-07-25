@@ -7,9 +7,9 @@
     position: absolute;
     pointer-events: none;
     z-index: 1;
-    border-radius: 2px;
-    background: rgb(var(--scout-cyan) / 0.28);
-    box-shadow: inset 0 -1px 0 rgb(var(--scout-cyan) / 0.78);
+    border-radius: 3px;
+    background: rgb(var(--scout-cyan) / 0.18);
+    box-shadow: inset 0 -1.5px 0 rgb(var(--scout-cyan) / 0.82);
   }
 
   .annotation-marker {
@@ -22,27 +22,35 @@
     min-width: 28px;
     align-items: center;
     justify-content: center;
-    border: 2px solid rgb(var(--scout-panel));
+    border: 1px solid rgb(var(--scout-hairline));
     border-radius: 9999px;
     /* Was a hardcoded rgb(37 136 238) that appears in no theme palette — the
        one element in the app that ignored theming entirely. It pairs with the
        cyan highlight above. */
-    background: rgb(var(--scout-cyan));
-    color: rgb(var(--scout-text-inverse));
+    background: rgb(var(--scout-panel));
+    color: rgb(var(--scout-cyan));
     font-size: 11px;
     font-weight: 700;
     line-height: 1;
-    box-shadow: 0 2px 7px rgb(0 0 0 / 0.24);
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.08),
+      0 2px 6px rgb(0 0 0 / 0.06);
+    transition: transform var(--dur-fast) var(--ease-swift), background-color var(--dur-fast) ease;
   }
 
-  .annotation-marker:hover { transform: scale(1.06); }
+  .annotation-marker:hover {
+    transform: translateY(-1px) scale(1.04);
+    background: rgb(var(--scout-lift));
+  }
 
   .annotation-selection-action {
     width: auto;
-    background: rgb(var(--scout-panel));
+    background: rgb(var(--scout-panel) / 0.98);
     color: rgb(var(--scout-text));
     border: 1px solid rgb(var(--scout-hairline));
     box-shadow: var(--shadow-pop);
+    backdrop-filter: blur(16px);
+    animation: fade-in-up var(--dur-fast) var(--ease-swift) both;
   }
 
   .annotation-selection-action:hover { background: rgb(var(--scout-lift)); }
@@ -470,6 +478,15 @@
     .hover-reveal {
       opacity: 1;
     }
+  }
+
+  /* The panel tab strip scrolls horizontally, and the global 6px scrollbar rule
+     would draw a bar across the bottom of a 46px chrome band. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
   .prose-scout pre {

@@ -18,7 +18,7 @@ import type {
   SubAgentInfo,
 } from "../hooks/useSubagents";
 import { ActivityOrb } from "./ActivityOrb";
-import { PanelHeader } from "./ui/PanelHeader";
+import { PanelBreadcrumb } from "./ui/PanelBreadcrumb";
 import { IconButton } from "./ui/IconButton";
 import { EmptyState } from "./ui/EmptyState";
 import { ChatView } from "./ChatView";
@@ -28,9 +28,6 @@ interface AgentsPanelProps {
   done: SubAgentInfo[];
   selectedId: string | null;
   detail: SubAgentInfo | null;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
-  onClose: () => void;
   onSelect: (id: string) => void;
   onBack: () => void;
   onStop: (id: string) => Promise<void>;
@@ -293,9 +290,6 @@ export function AgentsPanel({
   done,
   selectedId,
   detail,
-  expanded,
-  onToggleExpand,
-  onClose,
   onSelect,
   onBack,
   onStop,
@@ -345,20 +339,14 @@ export function AgentsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
-      <PanelHeader
-        icon={
-          inDetail ? (
-            <IconButton label="Back to agents" onClick={onBack} className="-ml-1">
-              <ArrowLeft size={16} />
-            </IconButton>
-          ) : (
-            <Bot size={16} />
-          )
+      <PanelBreadcrumb
+        // In detail view the first crumb navigates back, which is what the
+        // ArrowLeft button in the old header did.
+        crumbs={
+          inDetail
+            ? [{ label: "Agents", onClick: onBack }, { label: detail!.description }]
+            : [{ label: "Agents" }]
         }
-        title={inDetail ? detail!.description : "Tasks"}
-        expanded={expanded}
-        onToggleExpand={onToggleExpand}
-        onClose={onClose}
         actions={
           inDetail && live ? (
             <IconButton

@@ -1,24 +1,35 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { EmptyState, Kbd, SettingsGroup, SettingsRow } from "../ui";
-import { SHORTCUTS } from "../../appMeta";
+import { SHORTCUTS, shortcutKeys, type ShortcutDef } from "../../shortcuts";
 
 /**
  * Keyboard shortcuts.
  *
- * The list itself is `SHORTCUTS` in appMeta — the single source shared with
- * HelpDialog, so the two cannot drift. Rebinding needs a backend; the search and
- * the rows do not, so they ship now.
+ * The list comes from `shortcuts.ts`, which is also what registers the live
+ * accelerators — so what is documented here is what actually fires, formatted for
+ * the current platform. Rebinding needs a backend; the search does not, so it
+ * ships now.
  */
 export function ShortcutsSection() {
   const [query, setQuery] = useState("");
 
-  const matches = useMemo(() => {
+  const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return SHORTCUTS;
-    return SHORTCUTS.filter(
-      (s) => s.desc.toLowerCase().includes(q) || s.keys.toLowerCase().includes(q),
-    );
+    const matches = q
+      ? SHORTCUTS.filter(
+          (s) =>
+            s.desc.toLowerCase().includes(q) || shortcutKeys(s).toLowerCase().includes(q),
+        )
+      : SHORTCUTS;
+    // Preserve the registry's order rather than sorting group names.
+    const byGroup = new Map<string, ShortcutDef[]>();
+    for (const shortcut of matches) {
+      const bucket = byGroup.get(shortcut.group);
+      if (bucket) bucket.push(shortcut);
+      else byGroup.set(shortcut.group, [shortcut]);
+    }
+    return [...byGroup.entries()];
   }, [query]);
 
   return (
@@ -39,19 +50,24 @@ export function ShortcutsSection() {
         />
       </div>
 
-      <SettingsGroup label="Shortcuts" description="These are fixed for now.">
-        {matches.length === 0 ? (
+      {groups.length === 0 ? (
+        <SettingsGroup label="Shortcuts">
           <EmptyState size="sm" title="No matching shortcuts" body={`Nothing matches “${query}”.`} />
-        ) : (
-          matches.map((s) => (
-            <SettingsRow
-              key={s.keys}
-              label={s.desc}
-              control={<Kbd>{s.keys}</Kbd>}
-            />
-          ))
-        )}
-      </SettingsGroup>
+        </SettingsGroup>
+      ) : (
+        groups.map(([group, shortcuts], index) => (
+          <SettingsGroup
+            key={group}
+            label={group}
+            // Said once, not repeated above every group.
+            description={index === 0 ? "These are fixed for now." : undefined}
+          >
+            {shortcuts.map((s) => (
+              <SettingsRow key={s.id} label={s.desc} control={<Kbd>{shortcutKeys(s)}</Kbd>} />
+            ))}
+          </SettingsGroup>
+        ))
+      )}
     </>
   );
 }

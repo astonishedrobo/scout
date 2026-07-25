@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Artifact } from "scout-core";
-import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
+import { Check, Copy, Download, RefreshCw } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PixelDazed } from "./PixelArt";
 import { PixelPet } from "./PixelPet";
-import { PanelHeader } from "./ui/PanelHeader";
+import { PanelBreadcrumb, pathCrumbs } from "./ui/PanelBreadcrumb";
 import { IconButton } from "./ui/IconButton";
 import { Badge } from "./ui/Badge";
 
@@ -14,26 +14,27 @@ export function ArtifactPanel({
   artifact,
   baseUrl,
   token,
-  onClose,
   embedded = false,
   compact = false,
   scope = null,
   contentEndpoint = "/artifacts/content",
-  expanded = false,
-  onToggleExpand,
+  leadingActions,
 }: {
   artifact: Artifact;
   baseUrl: string;
   token: string | null;
-  onClose: () => void;
   embedded?: boolean;
   compact?: boolean;
   /** Disambiguates identical relative paths in personal and shared workspaces. */
   scope?: string | null;
   /** Content API used by chat artifacts or the workspace browser. */
   contentEndpoint?: string;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
+  /**
+   * Controls from the surface hosting this preview, placed first in the
+   * breadcrumb's action row. The workspace browser puts its tree toggle and
+   * refresh here so the nested preview does not need a second breadcrumb.
+   */
+  leadingActions?: React.ReactNode;
 }) {
   const artifactKey = `${scope ?? "workspace"}:${artifact.path}`;
   const [content, setContent] = useState("");
@@ -167,24 +168,26 @@ export function ArtifactPanel({
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <PanelHeader
-        title={
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate">{artifact.title}</span>
+      <PanelBreadcrumb
+        crumbs={[
+          ...(scope === "shared" ? [{ label: "Shared" }] : []),
+          ...pathCrumbs(artifact.path),
+        ]}
+        meta={
+          <span className="flex items-center gap-1.5">
             {!compact && (
               <Badge uppercase className="font-semibold">
                 {rendererLabel}
               </Badge>
             )}
+            {formatSize(artifact.size)}
           </span>
         }
-        subtitle={`${scope === "shared" ? "Shared / " : ""}${artifact.path} · ${formatSize(artifact.size)}`}
-        expanded={expanded}
-        onToggleExpand={onToggleExpand}
-        onClose={onClose}
-        closeLabel={compact ? "Close preview" : "Close"}
         actions={
           <>
+            {/* Actions belonging to the file itself. The pane's expand and close
+                controls live once in the tab strip above, not per surface. */}
+            {leadingActions}
             {canCopy && (
               <IconButton label="Copy artifact content" onClick={copyContent}>
                 {copied ? <Check size={15} /> : <Copy size={15} />}

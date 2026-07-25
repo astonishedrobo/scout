@@ -80,18 +80,25 @@ export function Tooltip({
       {open
         && createPortal(
           <div
-            id={id}
             ref={refs.setFloating}
             style={floatingStyles}
-            role="presentation"
             aria-hidden="true"
-            // Hidden until measured: the first frame is laid out at 0,0, which
-            // showed the tooltip flashing in the top-left corner.
-            className={`pointer-events-none z-[90] rounded-btn border border-scout-hairline bg-scout-panel px-2 py-1 text-micro font-medium text-scout-text shadow-pop ${
-              isPositioned ? (reducedMotion ? "" : "animate-enter") : "invisible"
-            }`}
+            className={`pointer-events-none z-[90] ${isPositioned ? "" : "invisible"}`}
           >
-            {label}
+            {/*
+              Floating UI owns the wrapper transform. Keep entrance motion on
+              the child or its keyframes overwrite the positioning translate
+              and flash the tooltip at the viewport origin.
+            */}
+            <div
+              id={id}
+              role="presentation"
+              className={`rounded-btn border border-scout-hairline bg-scout-panel px-2 py-1 text-micro font-medium text-scout-text shadow-pop ${
+                reducedMotion ? "" : "animate-enter"
+              }`}
+            >
+              {label}
+            </div>
           </div>,
           document.body,
         )}

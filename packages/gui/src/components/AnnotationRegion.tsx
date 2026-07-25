@@ -144,10 +144,10 @@ function selectionActionPosition(rect: DOMRect) {
 // Codex-style: the composer sits right next to the selection — just below it,
 // horizontally aligned with where the selection starts, always on-screen.
 /** Fallback until the editor has been measured once. */
-const EDITOR_HEIGHT_ESTIMATE = 170;
+const EDITOR_HEIGHT_ESTIMATE = 118;
 
 function editorPositionFor(rect: DOMRect, height: number) {
-  const width = Math.min(520, viewportWidth() - 24);
+  const width = Math.min(380, viewportWidth() - 24);
   const left = Math.max(12, Math.min(rect.left, viewportWidth() - width - 12));
   const below = rect.bottom + 10;
   const top = below + height <= window.innerHeight - 12
@@ -377,7 +377,7 @@ export function AnnotationRegion({
           data-no-annotation
           onMouseDown={(event) => event.preventDefault()}
           onClick={openNewEditor}
-          className="annotation-selection-action fixed z-[75] w-auto whitespace-nowrap rounded-btn px-3 py-1.5 text-caption font-bold"
+          className="annotation-selection-action fixed z-[75] inline-flex w-auto items-center whitespace-nowrap rounded-btn px-3 py-1.5 text-caption font-semibold"
           style={selectionActionPosition(selection.rect)}
         >
           Add note
@@ -390,9 +390,8 @@ export function AnnotationRegion({
           ref={editorRef}
           data-no-annotation
           role="dialog"
-          aria-modal="true"
           aria-label={editing.id === "new" ? "Add annotation" : "Edit annotation"}
-          className="annotation-editor fixed z-[80] flex flex-col rounded-card border border-scout-hairline-faint bg-scout-panel p-3.5 shadow-pop"
+          className="annotation-editor fixed z-[80] flex flex-col overflow-hidden rounded-[13px] border border-scout-hairline bg-scout-panel/95 p-2 shadow-pop backdrop-blur-xl transition-colors focus-within:border-scout-muted/60"
           style={editorPosition}
         >
           <textarea
@@ -406,11 +405,11 @@ export function AnnotationRegion({
                 save();
               }
             }}
-            placeholder="Add an optional comment…"
-            rows={3}
-            className="min-h-[72px] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1 text-prose leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
+            placeholder="Add a note…"
+            rows={2}
+            className="min-h-[48px] w-full flex-1 resize-none border-0 bg-transparent px-2 py-2 text-label leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/65"
           />
-          <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 border-t border-scout-hairline-faint px-1 pt-2">
             <button
               type="button"
               onClick={() => {
@@ -418,14 +417,14 @@ export function AnnotationRegion({
                 setEditing(null);
                 setSelection(null);
               }}
-              className="flex h-9 w-9 items-center justify-center rounded-full text-scout-muted hover:bg-scout-error-muted hover:text-scout-error"
+              className="flex h-7 w-7 items-center justify-center rounded-btn text-scout-muted transition-colors hover:bg-scout-error-muted hover:text-scout-error"
               aria-label={editing.id === "new" ? "Discard annotation" : "Delete annotation"}
             >
-              <Trash2 size={16} />
+              <Trash2 size={14} />
             </button>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => { setEditing(null); setSelection(null); }} className="rounded-full border border-scout-hairline-faint bg-scout-lift px-4 py-1.5 text-label font-medium text-scout-text hover:bg-scout-input-bg">Cancel</button>
-              <button type="button" onClick={save} className="rounded-full bg-scout-text px-4 py-1.5 text-label font-semibold text-scout-bg hover:opacity-90">Save</button>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => { setEditing(null); setSelection(null); }} className="rounded-btn px-3 py-1.5 text-caption font-medium text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text">Cancel</button>
+              <button type="button" onClick={save} className="rounded-btn bg-scout-text px-3.5 py-1.5 text-caption font-semibold text-scout-bg transition-opacity hover:opacity-90">Save</button>
             </div>
           </div>
         </div>,

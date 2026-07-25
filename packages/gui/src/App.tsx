@@ -1,11 +1,13 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { Bot, FolderTree } from "lucide-react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { Bot, FolderTree, GitCompareArrows } from "lucide-react";
 import { useServer } from "./hooks/useServer";
 import { useChat } from "./hooks/useChat";
 import { useConfig } from "./hooks/useConfig";
 import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
+import { useRightPanelTabs } from "./hooks/useRightPanelTabs";
+import { useShortcuts } from "./hooks/useShortcuts";
 import { useSubagents } from "./hooks/useSubagents";
 import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
@@ -25,21 +27,17 @@ import { useAuth } from "./hooks/useAuth";
 import { useUploads } from "./hooks/useUploads";
 import { Login } from "./components/Login";
 import { ArtifactPanel } from "./components/ArtifactPanel";
-import { UploadButton } from "./components/UploadButton";
 import { UserInputCard } from "./components/UserInputCard";
 import { FileChangePanel } from "./components/FileChangePanel";
 import { FileExplorerPanel } from "./components/FileExplorerPanel";
+import { RightPanel } from "./components/RightPanel";
+import type { LauncherItem } from "./components/PanelLauncher";
 import {
   AgentsPanel,
   SubagentStatusStrip,
 } from "./components/AgentsPanel";
 import { useApprovalMode } from "./hooks/useApprovalMode";
 import { useResponseAnnotations } from "./hooks/useResponseAnnotations";
-import {
-  headerActionActiveClass,
-  headerActionButtonClass,
-  headerActionIdleClass,
-} from "./components/ui/headerControls";
 
 /** Sections whose canonical URL is `/admin` rather than `/settings`. */
 const ADMIN_SECTIONS = new Set<SettingsSectionId>([
@@ -205,10 +203,7 @@ export function App() {
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
-  const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
-  const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
-  const [filesExplorerOpen, setFilesExplorerOpen] = useState(false);
-  const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
+  const panel = useRightPanelTabs();
   const [isAutoContinuing, setIsAutoContinuing] = useState(false);
   const [autoStreamingText, setAutoStreamingText] = useState("");
   const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
@@ -243,52 +238,34 @@ export function App() {
     openSettingsRoute("memories");
   }, [openSettingsRoute]);
 
-  /** Right panel is multi-use: opening one mode replaces the previous. Width is preserved. */
-  const openArtifact = useCallback((artifact: Artifact) => {
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(false);
-    setAgentsPanelOpen(false);
-    setActiveArtifact(artifact);
-  }, []);
+  /**
+   * The right panel holds several tabs at once. These keep the old signatures so
+   * every call site downstream is unchanged; what changed is that opening one
+   * surface no longer destroys the others.
+   */
+  const openArtifact = useCallback(
+    (artifact: Artifact) => panel.open({ kind: "artifact", artifact }),
+    [panel],
+  );
 
-  const openFileChanges = useCallback((changeSet: FileChangeSet) => {
-    setActiveArtifact(null);
-    setFilesExplorerOpen(false);
-    setAgentsPanelOpen(false);
-    setActiveFileChanges(changeSet);
-  }, []);
+  const openFileChanges = useCallback(
+    (changeSet: FileChangeSet) => panel.open({ kind: "review", changeSet }),
+    [panel],
+  );
 
-  const openFilesExplorer = useCallback(() => {
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
-    setAgentsPanelOpen(false);
-    setFilesExplorerOpen(true);
-  }, []);
+  const openFilesExplorer = useCallback(() => panel.open({ kind: "files" }), [panel]);
 
-  const openAgentsPanel = useCallback(() => {
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(false);
-    setAgentsPanelOpen(true);
-  }, []);
+  const openAgentsPanel = useCallback(() => panel.open({ kind: "agents" }), [panel]);
 
-  const closeRightPanel = useCallback(() => {
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(false);
-    setAgentsPanelOpen(false);
-  }, []);
 
-  const toggleFilesExplorer = useCallback(() => {
-    if (filesExplorerOpen) {
-      setFilesExplorerOpen(false);
-      return;
-    }
-    openFilesExplorer();
-  }, [filesExplorerOpen, openFilesExplorer]);
-
-  const rightPanelOpen =
-    !!activeArtifact || !!activeFileChanges || filesExplorerOpen || agentsPanelOpen;
+  const filesTabActive = panel.active?.tab.kind === "files";
+  const agentsTabActive = panel.active?.tab.kind === "agents";
+  /**
+   * The panel can be open with nothing in it, showing the launcher — that is how
+   * you discover what it holds. Tabs alone cannot express that, hence this flag.
+   */
+  const [panelPinned, setPanelPinned] = useState(false);
+  const rightPanelOpen = panel.tabs.length > 0 || panelPinned;
 
   const {
     active: activeSubagents,
@@ -359,29 +336,105 @@ export function App() {
     .filter((message) => message.role === "system" && message.task?.task_type === "terminal")
     .map((message) => message.task!);
 
+  /** Dismiss the panel entirely: no tabs, and not pinned open on the launcher. */
+  const closePanel = useCallback(() => {
+    setPanelPinned(false);
+    void clearSubagentSelection();
+    panel.closeAll();
+  }, [clearSubagentSelection, panel]);
+
+  /** The most recent change set in the transcript — what "Review" opens. */
+  const latestChangeSet = useMemo(
+    () =>
+      [...messages].reverse().flatMap((m) => m.fileChanges ?? [])[0] as
+        | FileChangeSet
+        | undefined,
+    [messages],
+  );
+
+  const launcherItems = useMemo<LauncherItem[]>(
+    () => [
+      {
+        id: "review",
+        label: "Review",
+        icon: <GitCompareArrows size={15} />,
+        shortcut: "panel.review",
+        disabled: !latestChangeSet,
+        hint: "No changes yet",
+        onSelect: () => {
+          if (latestChangeSet) openFileChanges(latestChangeSet);
+        },
+      },
+      {
+        id: "files",
+        label: "Files",
+        icon: <FolderTree size={15} />,
+        shortcut: "panel.files",
+        onSelect: openFilesExplorer,
+      },
+      {
+        id: "agents",
+        label: "Agents",
+        icon: <Bot size={15} />,
+        shortcut: "panel.agents",
+        badge:
+          activeSubagents.length > 0 ? (
+            <span className="shrink-0 text-micro font-semibold text-scout-accent-cta">
+              {activeSubagents.length}
+            </span>
+          ) : undefined,
+        onSelect: openAgentsPanel,
+      },
+    ],
+    [activeSubagents.length, latestChangeSet, openAgentsPanel, openFileChanges, openFilesExplorer],
+  );
+
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
   useEffect(() => {
     if (!rightPanelOpen) setRightPanelExpanded(false);
   }, [rightPanelOpen]);
 
-  useEffect(() => {
-    if (!activeArtifact) return;
-    const latest = [...messages]
-      .reverse()
-      .flatMap((m) => m.artifacts ?? [])
-      .find((artifact) => artifact.path === activeArtifact.path);
-    if (latest && latest.version !== activeArtifact.version) setActiveArtifact(latest);
-  }, [messages, activeArtifact]);
+  useShortcuts({
+    "panel.files": openFilesExplorer,
+    "panel.agents": openAgentsPanel,
+    "panel.review": () => {
+      if (latestChangeSet) openFileChanges(latestChangeSet);
+    },
+    // Reopens onto the launcher rather than guessing a surface for you.
+    "panel.toggle": () => {
+      if (rightPanelOpen) closePanel();
+      else setPanelPinned(true);
+    },
+    "panel.closeTab": () => {
+      if (panel.activeKey) panel.close(panel.activeKey);
+    },
+  });
 
+  // Keep open tabs current as the stream produces newer versions of what they
+  // show. `replace` rather than `open`, so refreshing a background tab does not
+  // yank the panel away from the one you are reading.
   useEffect(() => {
-    if (!activeFileChanges) return;
-    const latest = [...messages]
-      .reverse()
-      .flatMap((m) => m.fileChanges ?? [])
-      .find((changeSet) => changeSet.id === activeFileChanges.id);
-    if (latest && latest !== activeFileChanges) setActiveFileChanges(latest);
-  }, [messages, activeFileChanges]);
+    for (const open of panel.tabs) {
+      if (open.tab.kind === "artifact") {
+        const current = open.tab.artifact;
+        const latest = [...messages]
+          .reverse()
+          .flatMap((m) => m.artifacts ?? [])
+          .find((artifact) => artifact.path === current.path);
+        if (latest && latest.version !== current.version) {
+          panel.replace({ kind: "artifact", artifact: latest });
+        }
+      } else if (open.tab.kind === "review") {
+        const current = open.tab.changeSet;
+        const latest = [...messages]
+          .reverse()
+          .flatMap((m) => m.fileChanges ?? [])
+          .find((changeSet) => changeSet.id === current.id);
+        if (latest && latest !== current) panel.replace({ kind: "review", changeSet: latest });
+      }
+    }
+  }, [messages, panel]);
 
   const markChangeSetUndone = useCallback((changeSetId: string) => {
     setMessages((prev) => prev.map((message) => ({
@@ -390,9 +443,6 @@ export function App() {
         changeSet.id === changeSetId ? { ...changeSet, undone: true } : changeSet,
       ),
     })));
-    setActiveFileChanges((current) =>
-      current?.id === changeSetId ? { ...current, undone: true } : current,
-    );
   }, [setMessages]);
 
   const undoFileChanges = useCallback(async (changeSet: FileChangeSet) => {
@@ -440,27 +490,24 @@ export function App() {
     if (sessionRef.current) clearSession(sessionRef.current);
     sessionRef.current = null;
     setCurrentSessionId(null);
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
+    panel.closeKinds(["artifact", "review"]);
     logout();
-  }, [reset, clearSession, setCurrentSessionId, logout]);
+  }, [reset, clearSession, setCurrentSessionId, logout, panel]);
 
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
+    panel.closeKinds(["artifact", "review"]);
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
-  }, [setCurrentSessionId]);
+  }, [setCurrentSessionId, panel]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
       if (sessionId === sessionRef.current) return;
 
-      setActiveArtifact(null);
-      setActiveFileChanges(null);
+      panel.closeKinds(["artifact", "review"]);
       const oldSid = sessionRef.current;
       sessionRef.current = sessionId;
       if (window.location.hash !== `#/c/${sessionId}`) {
@@ -499,7 +546,7 @@ export function App() {
         }
       }
     },
-    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat],
+    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat, panel],
   );
 
   useEffect(() => {
@@ -585,12 +632,11 @@ export function App() {
       await deleteSession(sessionId);
       clearSession(sessionId);
       if (sessionRef.current === sessionId) {
-        setActiveArtifact(null);
-        setActiveFileChanges(null);
+        panel.closeKinds(["artifact", "review"]);
         sessionRef.current = null;
       }
     },
-    [clearSession, deleteSession],
+    [clearSession, deleteSession, panel],
   );
 
   const handleSlashCommand = useCallback(
@@ -619,7 +665,7 @@ export function App() {
     [handleNewChat, openSettingsRoute],
   );
 
-  const { uploads, uploadFiles, dismiss: dismissUpload, activeCount, errorCount } = useUploads(
+  const { uploadFiles, activeCount } = useUploads(
     baseUrl,
     token,
   );
@@ -690,63 +736,15 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         sessionTitle={sessionTitle}
-        headerActions={
-          <>
-            <button
-              type="button"
-              onClick={toggleFilesExplorer}
-              className={`${headerActionButtonClass} ${
-                filesExplorerOpen
-                  ? headerActionActiveClass
-                  : headerActionIdleClass
-              }`}
-              title={filesExplorerOpen ? "Close files" : "Browse workspace files"}
-              aria-label="Browse files"
-              aria-pressed={filesExplorerOpen}
-            >
-              <FolderTree size={15} />
-              <span className="hidden sm:inline">Files</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (agentsPanelOpen) {
-                  setAgentsPanelOpen(false);
-                  void clearSubagentSelection();
-                } else {
-                  openAgentsPanel();
-                }
-              }}
-              className={`${headerActionButtonClass} ${
-                agentsPanelOpen ? headerActionActiveClass : headerActionIdleClass
-              }`}
-              title={agentsPanelOpen ? "Close tasks" : "Tasks"}
-              aria-label="Tasks"
-              aria-pressed={agentsPanelOpen}
-            >
-              <Bot size={15} />
-              <span className="hidden sm:inline">Tasks</span>
-              {activeSubagents.length > 0 && (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-scout-accent-cta/20 px-1 text-micro font-semibold text-scout-accent-cta">
-                  {activeSubagents.length}
-                </span>
-              )}
-            </button>
-            {isMultiUser && (
-              <UploadButton
-                uploads={uploads}
-                activeCount={activeCount}
-                errorCount={errorCount}
-                onUpload={uploadFiles}
-                onDismiss={dismissUpload}
-              />
-            )}
-          </>
-        }
+        rightPanelOpen={rightPanelOpen}
+        onToggleRightPanel={() => {
+          if (rightPanelOpen) closePanel();
+          else setPanelPinned(true);
+        }}
         artifactOpen={rightPanelOpen}
         artifactExpanded={rightPanelExpanded}
-        artifactDefaultSize={filesExplorerOpen ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
-        artifactMinSize={filesExplorerOpen ? 42 : 20}
+        artifactDefaultSize={filesTabActive ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
+        artifactMinSize={filesTabActive ? 42 : 20}
         artifactMaxSize={70}
         onArtifactResize={setArtifactDefaultSize}
         banners={
@@ -779,18 +777,27 @@ export function App() {
           />
         }
         artifactPanel={
-          agentsPanelOpen ? (
+          <RightPanel
+            tabs={panel.tabs}
+            activeKey={panel.activeKey}
+            onActivate={panel.activate}
+            onCloseTab={(key) => {
+              // Leaving a selected agent behind would show its detail view again
+              // the next time the tab is opened.
+              if (key === "agents") void clearSubagentSelection();
+              panel.close(key);
+            }}
+            onCloseAll={closePanel}
+            launcherItems={launcherItems}
+            expanded={rightPanelExpanded}
+            onToggleExpand={toggleRightPanelExpanded}
+            renderSurface={(open) =>
+              open.tab.kind === "agents" ? (
             <AgentsPanel
               active={activeSubagents}
               done={doneSubagents}
               selectedId={selectedSubagentId}
               detail={subagentDetail}
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-              onClose={() => {
-                setAgentsPanelOpen(false);
-                void clearSubagentSelection();
-              }}
               onSelect={(id) => {
                 void selectAgent(id);
               }}
@@ -835,33 +842,25 @@ export function App() {
               token={token}
               terminalTasks={terminalTasks}
             />
-          ) : filesExplorerOpen ? (
-            <FileExplorerPanel
-              baseUrl={baseUrl}
-              token={token}
-              onClose={closeRightPanel}
-              refreshSignal={`${messages.length}:${chatBusy ? "running" : "idle"}`}
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-            />
-          ) : activeArtifact ? (
-            <ArtifactPanel
-              artifact={activeArtifact}
-              baseUrl={baseUrl}
-              token={token}
-              onClose={closeRightPanel}
-              embedded
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-            />
-          ) : activeFileChanges ? (
-            <FileChangePanel
-              changeSet={activeFileChanges}
-              onClose={closeRightPanel}
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-            />
-          ) : undefined
+              ) : open.tab.kind === "files" ? (
+                <FileExplorerPanel
+                  baseUrl={baseUrl}
+                  token={token}
+                  refreshSignal={`${messages.length}:${chatBusy ? "running" : "idle"}`}
+                  onTitleChange={(title) => panel.setTitle(open.key, title)}
+                />
+              ) : open.tab.kind === "artifact" ? (
+                <ArtifactPanel
+                  artifact={open.tab.artifact}
+                  baseUrl={baseUrl}
+                  token={token}
+                  embedded
+                />
+              ) : (
+                <FileChangePanel changeSet={open.tab.changeSet} />
+              )
+            }
+          />
         }
       >
         <div className="flex flex-col flex-1 min-h-0">
@@ -950,7 +949,7 @@ export function App() {
 
           {isReady && !isWelcome && (
             <div className="shrink-0 bg-scout-canvas/95">
-              {!agentsPanelOpen && activeSubagents.length > 0 && (
+              {!agentsTabActive && activeSubagents.length > 0 && (
                 <SubagentStatusStrip
                   active={activeSubagents}
                   onOpen={openAgentsPanel}

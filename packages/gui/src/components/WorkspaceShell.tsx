@@ -10,6 +10,8 @@ interface WorkspaceShellProps {
   onToggleSidebar: () => void;
   sidebar: ReactNode;
   headerActions?: ReactNode;
+  rightPanelOpen?: boolean;
+  onToggleRightPanel?: () => void;
   sessionTitle?: string;
   banners?: ReactNode;
   children: ReactNode;
@@ -28,7 +30,17 @@ function ShellHeader({
   onToggleSidebar,
   sessionTitle,
   headerActions,
-}: Pick<WorkspaceShellProps, "sidebarCollapsed" | "onToggleSidebar" | "sessionTitle" | "headerActions">) {
+  rightPanelOpen,
+  onToggleRightPanel,
+}: Pick<
+  WorkspaceShellProps,
+  | "sidebarCollapsed"
+  | "onToggleSidebar"
+  | "sessionTitle"
+  | "headerActions"
+  | "rightPanelOpen"
+  | "onToggleRightPanel"
+>) {
   return (
     <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-scout-hairline-faint bg-scout-canvas px-3.5">
       <IconButton
@@ -52,6 +64,16 @@ function ShellHeader({
       {headerActions && (
         <div className="flex items-center gap-1.5 shrink-0">{headerActions}</div>
       )}
+      {!rightPanelOpen && onToggleRightPanel && (
+        <IconButton
+          onClick={onToggleRightPanel}
+          label="Open side panel (Alt+P)"
+          aria-expanded={false}
+          className="ml-0.5"
+        >
+          <PanelToggleIcon open={false} side="right" size={16} />
+        </IconButton>
+      )}
     </header>
   );
 }
@@ -61,6 +83,8 @@ export function WorkspaceShell({
   onToggleSidebar,
   sidebar,
   headerActions,
+  rightPanelOpen,
+  onToggleRightPanel,
   sessionTitle,
   banners,
   children,
@@ -162,6 +186,8 @@ export function WorkspaceShell({
                   onToggleSidebar={onToggleSidebar}
                   sessionTitle={sessionTitle}
                   headerActions={headerActions}
+                  rightPanelOpen={rightPanelOpen}
+                  onToggleRightPanel={onToggleRightPanel}
                 />
                 {banners}
                 {children}
@@ -205,6 +231,8 @@ export function WorkspaceShell({
               onToggleSidebar={onToggleSidebar}
               sessionTitle={sessionTitle}
               headerActions={headerActions}
+              rightPanelOpen={rightPanelOpen}
+              onToggleRightPanel={onToggleRightPanel}
             />
             {banners}
             <div className="flex-1 flex flex-col min-h-0 relative bg-transparent">

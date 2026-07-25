@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, ArtifactRenderer } from "scout-core";
-import { PanelHeader } from "./ui/PanelHeader";
+import { PanelBreadcrumb } from "./ui/PanelBreadcrumb";
 import { IconButton } from "./ui/IconButton";
 import { Skeleton } from "./ui/Skeleton";
 import {
@@ -45,11 +45,13 @@ type FileSelection = {
 type FileExplorerPanelProps = {
   baseUrl: string;
   token: string | null;
-  onClose: () => void;
   /** Changes when an agent turn completes so generated files appear promptly. */
   refreshSignal?: string;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
+  /**
+   * Reports the open file so the panel's tab reads its name instead of a
+   * permanent "Files". `undefined` restores the default label.
+   */
+  onTitleChange?: (title: string | undefined) => void;
 };
 
 function nodeKey(node: FileTreeNode, scope: string): string {
@@ -258,10 +260,8 @@ function toArtifact(selection: FileSelection): Artifact | null {
 export function FileExplorerPanel({
   baseUrl,
   token,
-  onClose,
   refreshSignal,
-  expanded: panelExpanded = false,
-  onToggleExpand,
+  onTitleChange,
 }: FileExplorerPanelProps) {
   const [roots, setRoots] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -427,6 +427,12 @@ export function FileExplorerPanel({
     };
   }, [baseUrl, query, token, refreshSignal]);
 
+  // The tab label follows the open file. Reported from an effect rather than
+  // from selectFile so it also clears when a refresh drops the selection.
+  useEffect(() => {
+    onTitleChange?.(selection?.node.name);
+  }, [onTitleChange, selection]);
+
   const toggle = useCallback((node: FileTreeNode, scope: string, key: string) => {
     const opening = !expanded.has(key);
     setExpanded((prev) => {
@@ -460,37 +466,39 @@ export function FileExplorerPanel({
   const selectedKey = selection ? nodeKey(selection.node, selection.scope) : null;
   const artifact = selection ? toArtifact(selection) : null;
 
+  const explorerActions = (
+    <>
+      <IconButton
+        label={treeVisible ? "Hide file tree" : "Show file tree"}
+        onClick={() => setTreeVisible((visible) => !visible)}
+        aria-pressed={treeVisible}
+      >
+        <FolderToggleIcon open={treeVisible} size={16} />
+      </IconButton>
+      <IconButton label="Refresh files" onClick={() => void loadTree()} disabled={loading}>
+        <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+      </IconButton>
+    </>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
-      <PanelHeader
-        icon={<FolderTree size={16} />}
-        title="Files"
-        subtitle={
-          loading && roots.length === 0
-            ? "Loading files…"
-            : error
-              ? "Files unavailable"
-              : `${fileCount} loaded file${fileCount === 1 ? "" : "s"}`
-        }
-        expanded={panelExpanded}
-        onToggleExpand={onToggleExpand}
-        onClose={onClose}
-        closeLabel="Close workspace"
-        actions={
-          <>
-            <IconButton
-              label={treeVisible ? "Hide file tree" : "Show file tree"}
-              onClick={() => setTreeVisible((visible) => !visible)}
-              aria-pressed={treeVisible}
-            >
-              <FolderToggleIcon open={treeVisible} size={16} />
-            </IconButton>
-            <IconButton label="Refresh files" onClick={() => void loadTree()} disabled={loading}>
-              <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            </IconButton>
-          </>
-        }
-      />
+      {/* With a file open the nested preview draws the breadcrumb — including
+          this surface's own controls, passed down as `leadingActions` — so the
+          pane never stacks two breadcrumb rows. */}
+      {!(selection && artifact) && (
+        <PanelBreadcrumb
+          crumbs={[{ label: "Workspace" }]}
+          meta={
+            loading && roots.length === 0
+              ? "Loading files…"
+              : error
+                ? "Files unavailable"
+                : `${fileCount} file${fileCount === 1 ? "" : "s"}`
+          }
+          actions={explorerActions}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {treeVisible && (
@@ -565,10 +573,17 @@ export function FileExplorerPanel({
               scope={selection.scope}
               baseUrl={baseUrl}
               token={token}
-              onClose={closePreview}
               embedded
               compact
               contentEndpoint="/workspace/content"
+              leadingActions={
+                <>
+                  {explorerActions}
+                  <IconButton label="Clear selection" onClick={closePreview}>
+                    <X size={15} />
+                  </IconButton>
+                </>
+              }
             />
           ) : selection ? (
             <div className="flex h-full items-center justify-center px-8 text-center">
