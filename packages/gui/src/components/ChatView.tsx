@@ -5,7 +5,7 @@ import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
 import { PixelSparkle } from "./ScoutMark";
-import { useThreadAnchor } from "../hooks/useThreadAnchor";
+import { useThreadAnchor, FOLLOW_THRESHOLD } from "../hooks/useThreadAnchor";
 import type { Artifact } from "scout-core";
 
 interface ChatViewProps {
@@ -245,7 +245,16 @@ export function ChatView({
   // Sending a message pins it to the top and reserves room beneath it, instead of
   // jumping to the bottom. See the hook for why that is a different mechanism
   // rather than a different scroll target.
-  const { anchorIndex, anchorRef, contentRef, spacerRef, reservedHeight } = useThreadAnchor({
+  const {
+    anchorIndex,
+    anchorRef,
+    contentRef,
+    spacerRef,
+    reservedHeight,
+    anchoredRef,
+    endAnchor,
+    caughtUp,
+  } = useThreadAnchor({
     scrollRef,
     messages,
     isLoading,
@@ -261,17 +270,23 @@ export function ChatView({
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || !followsLatestRef.current) return;
+    // An anchored turn holds its position for the whole reply: the reader stays on
+    // the message they sent and the answer grows below, off the bottom of the
+    // window, until they choose to catch up. Following here instead would drag the
+    // view down the stream — the exact thing anchoring exists to stop.
+    if (anchoredRef.current) return;
     // Streaming should feel immediate and must never pull someone away from
     // an earlier result they are reading.  Browser smooth scrolling on every
     // token makes the interface visibly lag behind the model.
     element.scrollTop = element.scrollHeight;
-  }, [messages, streamingSteps, streamingText, isLoading]);
+  }, [messages, streamingSteps, streamingText, isLoading, anchoredRef]);
 
   const jumpToLatest = () => {
     const element = scrollRef.current;
     if (!element) return;
-    followsLatestRef.current = true;
-    setFollowsLatest(true);
+    // Pressing this is an explicit request to follow the stream, so it ends the
+    // anchor — otherwise the next token would pull the view back.
+    endAnchor();
     // Land on the end of the content, not inside reserved empty space.
     element.scrollTo({ top: element.scrollHeight - reservedHeight(), behavior: "smooth" });
   };
@@ -289,7 +304,10 @@ export function ChatView({
         // content is off-screen above.
         const distance =
           element.scrollHeight - reservedHeight() - element.scrollTop - element.clientHeight;
-        const follows = distance < 72;
+        // Scrolling down to the end of a streaming reply is how the reader opts back
+        // into following it for the rest of the turn.
+        if (caughtUp(distance)) endAnchor();
+        const follows = distance < FOLLOW_THRESHOLD;
         followsLatestRef.current = follows;
         setFollowsLatest((prev) => (prev === follows ? prev : follows));
       }}
@@ -450,7 +468,7 @@ export function ChatView({
           className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-pill border border-scout-hairline bg-scout-panel/95 px-3 py-1.5 text-caption font-medium text-scout-text shadow-pop backdrop-blur-sm transition-colors hover:bg-scout-lift"
         >
           <ArrowDown size={13} />
-          {isLoading ? "Jump to latest — still writing" : "Jump to latest"}
+          Jump to latest
         </button>
       )}
     </div>

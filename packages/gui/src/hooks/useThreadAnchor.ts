@@ -54,15 +54,29 @@ import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
  */
 
 /**
- * How far below the viewport's top edge the anchored message sits.
+ * How much of the conversation stays visible above the anchored message.
  *
- * Relative rather than fixed: on a short window a constant 32px is a large
- * fraction of the screen, and on a tall one it is invisible. Clamped at both ends
- * so it never collapses to nothing or grows absurd.
+ * Deliberately generous rather than a cosmetic gap. Leaving the tail of the
+ * previous reply on screen is what makes the jump read as the thread moving up,
+ * instead of the view being yanked somewhere unfamiliar — you can still see what
+ * you were replying to. Clamping the message flush against the top edge is what
+ * made the motion feel abrupt.
+ *
+ * Relative to the viewport, so a tall window shows more context and a short one is
+ * not swallowed by it, clamped at both ends so it neither disappears nor eats the
+ * screen.
  */
-function topGapFor(viewport: number): number {
-  return Math.max(12, Math.min(32, Math.round(viewport * 0.06)));
+function headroomFor(viewport: number): number {
+  return Math.max(56, Math.min(160, Math.round(viewport * 0.15)));
 }
+
+/**
+ * How close to the end of the content counts as "at the end", in px.
+ *
+ * Shared with the thread's own scroll handler so the two cannot disagree about
+ * whether the jump affordance should be showing.
+ */
+export const FOLLOW_THRESHOLD = 72;
 
 /**
  * Where the anchored message starts and where the thread ends, both in the scroll
@@ -110,6 +124,17 @@ export interface ThreadAnchor {
   /** Attach to the spacer element. Its height is written directly, not rendered. */
   spacerRef: (element: HTMLElement | null) => void;
   /**
+   * Whether auto-follow is suppressed for the current turn.
+   *
+   * A ref because the pin effect must read it synchronously without re-rendering
+   * per streamed token — the same reason `followsLatestRef` is one.
+   */
+  anchoredRef: React.MutableRefObject<boolean>;
+  /** Stop anchoring and resume following. For "caught up" and jump-to-latest. */
+  endAnchor: () => void;
+  /** Whether a given distance-to-content-end means the reader has caught up. */
+  caughtUp: (distance: number) => boolean;
+  /**
    * Reserved height in px right now, for scroll arithmetic. A getter rather than
    * state because nothing renders it — see the note on imperative sizing below.
    */
@@ -156,6 +181,28 @@ export function useThreadAnchor({
   loadingRef.current = isLoading;
 
   /**
+   * Auto-follow is suppressed for this turn.
+   *
+   * A separate lifetime from the reservation, and conflating the two was a real
+   * bug. The reservation only needs to live until the reply is tall enough to
+   * provide the scroll range on its own; this outlives it, until the reader catches
+   * up to the bottom themselves. Ending it when the reservation ran out is what
+   * made long replies start chasing the stream — the exact behaviour anchoring
+   * exists to prevent.
+   */
+  const anchoredRef = useRef(false);
+
+  /**
+   * Set by real input, so a programmatic scroll cannot masquerade as the reader
+   * acting. Load-bearing: the opening scroll to the anchor is smooth and therefore
+   * emits scroll events, and at the anchored position the distance to the content
+   * end is *negative* (the reservation lies below the content), so a bare
+   * "near the bottom" test is trivially true and would end the anchor on the very
+   * animation that establishes it.
+   */
+  const userDriven = useRef(false);
+
+  /**
    * The scroll offset the anchor is held at.
    *
    * Deliberately used in place of the live `scrollTop` when reconciling. The
@@ -186,33 +233,34 @@ export function useThreadAnchor({
   const clearAnchor = useCallback(() => {
     anchorIndexRef.current = null;
     anchorElement.current = null;
+    anchoredRef.current = false;
     setReserved(0);
     setAnchorIndex(null);
   }, [setReserved]);
 
   /**
-   * End anchoring and give following back to the normal stick-to-bottom.
+   * Stop anchoring and let the thread follow the stream again.
    *
-   * A one-way exit. It has to end the anchor outright rather than merely re-enable
-   * following: streamed content sometimes *shrinks* (a `response_reset` folds
-   * transient prose into a thinking step), and a still-live anchor would re-open a
-   * void mid-reply and then fight stick-to-bottom over it.
+   * Only ever the reader's decision — they scrolled to the end, or pressed jump to
+   * latest. Never triggered by the reply simply getting long, which is the mistake
+   * this replaced.
    */
-  const handBackToBottom = useCallback(() => {
+  const endAnchor = useCallback(() => {
     clearAnchor();
     followsLatestRef.current = true;
     setFollowsLatest(true);
   }, [clearAnchor, followsLatestRef, setFollowsLatest]);
 
   /**
-   * Keep the reservation valid. Monotone by design — see the flicker note at the
-   * top of this file for why it must never trim to track content growth.
+   * Keep the reservation valid, and keep the jump affordance honest.
    *
-   * The hand-back is seamless rather than merely tolerable. It fires exactly when
-   * the content has reached `targetTop + viewport`, and at that moment the bottom
-   * of the content is at the bottom of the viewport — so dropping the reservation
-   * cannot clamp `scrollTop`, and stick-to-bottom's first jump has zero distance to
-   * travel. The anchored position and the stuck-to-bottom position coincide.
+   * Monotone by design — see the flicker note at the top of this file for why it
+   * must never trim to track content growth.
+   *
+   * When the reservation is no longer needed it is dropped and *nothing else
+   * happens*: the view stays exactly where it is and the reply keeps growing below
+   * the fold. Dropping it cannot move anything, because it only becomes unnecessary
+   * once the content itself reaches the bottom of the viewport.
    */
   const reconcile = useCallback(() => {
     const scroll = scrollRef.current;
@@ -227,13 +275,20 @@ export function useThreadAnchor({
     const required = reservationFor(targetTop.current, viewport, contentEnd);
 
     if (required <= 0) {
-      handBackToBottom();
-      return;
+      // Surplus now, so drop it — this is what stops a long reply leaving an empty
+      // band at the bottom. Anchoring continues.
+      if (reserved.current !== 0) setReserved(0);
+    } else if (required > reserved.current) {
+      // Grow only. The viewport shrinking under us — the composer growing to
+      // several lines — is the case that needs this.
+      setReserved(Math.min(required, viewport));
     }
-    // Grow only. The viewport shrinking under us — the composer growing to several
-    // lines — is the case that needs this.
-    if (required > reserved.current) setReserved(Math.min(required, viewport));
-  }, [scrollRef, setReserved, handBackToBottom]);
+
+    // While anchored the content grows without any scroll event firing, so
+    // `onScroll` alone would never notice the reply running off the bottom and the
+    // jump affordance would stay hidden exactly when it is needed.
+    setFollowsLatest(contentEnd - (scroll.scrollTop + viewport) < FOLLOW_THRESHOLD);
+  }, [scrollRef, setReserved, setFollowsLatest]);
 
   const scheduleReconcile = useCallback(() => {
     if (frame.current !== null) return;
@@ -281,10 +336,13 @@ export function useThreadAnchor({
     const index = messages.length - 1;
     anchorIndexRef.current = index;
     setAnchorIndex(index);
-    // Suspend stick-to-bottom for the duration of the anchor.
-    followsLatestRef.current = false;
-    setFollowsLatest(false);
-  }, [messages, sessionId, clearAnchor, followsLatestRef, setFollowsLatest]);
+    // Suppress auto-follow for the turn. Note this does *not* touch
+    // `followsLatest`, which is now purely a description of where the viewport sits
+    // and drives only the jump affordance — forcing it false here is what used to
+    // show that button over a short reply that was entirely visible.
+    anchoredRef.current = true;
+    userDriven.current = false;
+  }, [messages, sessionId, clearAnchor]);
 
   /**
    * Once the anchor element exists, reserve the space and scroll to it — in that
@@ -301,7 +359,9 @@ export function useThreadAnchor({
 
     const viewport = scroll.clientHeight;
     const { anchorTop, contentEnd } = geometry(scroll, content, anchor);
-    const target = Math.max(0, anchorTop - topGapFor(viewport));
+    // `Math.max(0, …)` matters for the first message in a conversation: there is
+    // nothing above it to keep visible, so it simply sits at the natural top.
+    const target = Math.max(0, anchorTop - headroomFor(viewport));
     targetTop.current = target;
 
     const required = reservationFor(target, viewport, contentEnd);
@@ -314,10 +374,9 @@ export function useThreadAnchor({
       behavior: reduceMotion ? "auto" : "smooth",
     });
 
-    // A sent message already taller than the viewport needs no reservation at all,
-    // so there is nothing to anchor: the thread reverts to following the bottom.
-    if (required <= 0) handBackToBottom();
-  }, [anchorIndex, scrollRef, setReserved, handBackToBottom, reduceMotion]);
+    // A message already taller than the viewport needs no reservation, but it is
+    // still anchored: the reply grows below the fold and the view holds.
+  }, [anchorIndex, scrollRef, setReserved, reduceMotion]);
 
   /**
    * Watch for height changes.
@@ -375,9 +434,11 @@ export function useThreadAnchor({
     };
 
     const onWheel = (event: WheelEvent) => {
+      userDriven.current = true;
       if (event.deltaY < 0) release();
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      userDriven.current = true;
       if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") release();
     };
 
@@ -386,6 +447,7 @@ export function useThreadAnchor({
       touchY = event.touches[0]?.clientY ?? null;
     };
     const onTouchMove = (event: TouchEvent) => {
+      userDriven.current = true;
       const y = event.touches[0]?.clientY;
       if (touchY === null || y === undefined) return;
       // Dragging the finger down scrolls the content up.
@@ -431,5 +493,29 @@ export function useThreadAnchor({
 
   const reservedHeight = useCallback(() => reserved.current, []);
 
-  return { anchorIndex, anchorRef, contentRef, spacerRef, reservedHeight };
+  /**
+   * Whether the reader has just caught up to the end of the content by their own
+   * scrolling, which is the one condition that ends anchoring mid-turn.
+   *
+   * Gated on `userDriven` and on the reservation already being spent. Without the
+   * latter, sitting near the content end while a reservation is still open — the
+   * normal state during a short reply — would read as having caught up.
+   */
+  const caughtUp = useCallback(
+    (distance: number) =>
+      anchoredRef.current && userDriven.current && reserved.current === 0
+      && distance < FOLLOW_THRESHOLD,
+    [],
+  );
+
+  return {
+    anchorIndex,
+    anchorRef,
+    contentRef,
+    spacerRef,
+    reservedHeight,
+    anchoredRef,
+    endAnchor,
+    caughtUp,
+  };
 }
