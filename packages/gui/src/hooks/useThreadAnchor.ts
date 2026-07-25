@@ -12,21 +12,41 @@ import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
  * read it. Anchoring pins the start of the answer instead, so nothing under your
  * eyes moves.
  *
- * Two mechanisms, and the second is the one naive implementations miss:
+ * Two mechanisms:
  *
  *  1. On send, scroll the new user message so its top sits just under the top
  *     edge of the viewport.
- *  2. Reserve space below it. Step 1 is only *possible* if a viewport's worth of
+ *  2. Reserve empty space below it, **once**. Step 1 is only possible if enough
  *     scrollable space exists beneath the anchor — otherwise you reach the bottom
- *     of the container before the anchor reaches the top. So a spacer is sized to
- *     exactly that shortfall, and as the reply grows the spacer shrinks by the
- *     same amount. That is what holds the anchor still: not repeated scrolling,
- *     but a total height that does not change. Once the reply outgrows the
- *     viewport the spacer is 0 and ordinary stick-to-bottom resumes.
+ *     of the container before the anchor reaches the top. The reply then grows
+ *     into that space, and because the reservation never changes, the anchor holds
+ *     position through pure layout. No scrolling and no measuring per frame.
  *
- * The reserved space is *transient*. It is released on the first upward scroll
- * after the turn ends, which is why a finished short exchange ends up sitting
- * snugly above the composer rather than keeping a permanent void.
+ * The space is handed back the instant the reply has filled the viewport below the
+ * anchor, which is provably seamless — see `reconcile`. Otherwise it is released on
+ * the first upward scroll after the turn ends, which is why a finished short
+ * exchange ends up sitting snugly above the composer instead of keeping a void.
+ *
+ * ## Why the reservation is written once and never resized down
+ *
+ * The first version of this recomputed the reservation on every streamed frame,
+ * shrinking it by exactly the amount the content grew so the total height stayed
+ * constant. That is a tempting invariant and it flickered badly.
+ *
+ * The reason is that sizing the reservation to *exactly* the shortfall puts the
+ * anchored position at `scrollHeight - clientHeight` — the anchor sits precisely at
+ * the maximum scroll offset, the most fragile place in the range. Growth then
+ * arrived from two independent schedulers: React repainting taller content on its
+ * own animation frame, and a `ResizeObserver` shrinking the spacer on another. The
+ * order alternated frame to frame, and on every frame where the spacer shrank
+ * first, maximum scroll briefly fell below `scrollTop`, the browser clamped it, and
+ * the content lurched — recovering the next frame, then lurching again.
+ *
+ * Writing the reservation once removes the race outright. Content growth only ever
+ * *raises* the maximum scroll offset, so it can never clamp, so there is nothing to
+ * flicker. `reconcile` below is therefore monotone: it may grow the reservation
+ * when the viewport changes under it, and it may drop it entirely, but it never
+ * trims it to track the content.
  *
  * Rejected alternative, recorded because it looks identical at first: giving each
  * turn `min-height: 100dvh`. Same anchor effect with no measuring at all, but the
@@ -45,10 +65,11 @@ function topGapFor(viewport: number): number {
 }
 
 /**
- * Where the anchored message sits, and how much content follows it.
+ * Where the anchored message starts and where the thread ends, both in the scroll
+ * container's own coordinates.
  *
- * Deliberately layout offsets rather than `getBoundingClientRect`. Every message
- * wrapper carries `.animate-enter`, whose `fade-in-up` keyframes run
+ * The anchor's offset uses layout offsets rather than `getBoundingClientRect`.
+ * Every message wrapper carries `.animate-enter`, whose `fade-in-up` keyframes run
  * `translateY(5px) → none`, so a rect read during the entrance is 5px out. A
  * transform does not change layout size, so no `ResizeObserver` would fire to
  * correct it and the error would be *permanent* rather than transient. `offsetTop`
@@ -61,22 +82,22 @@ function topGapFor(viewport: number): number {
  *
  * `contentTop` does use rects, because `content.offsetTop` resolves against an
  * ancestor *outside* the scroll container and so is not in scroll coordinates. The
- * content element is never animated, so its rect is trustworthy.
+ * content element itself is never animated, so its rect is trustworthy.
  */
 function geometry(scroll: HTMLElement, content: HTMLElement, anchor: HTMLElement) {
-  const anchorWithinContent = anchor.offsetTop - content.offsetTop;
   const contentTop =
     content.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
   return {
-    /** The anchor's position in the scroll container's own coordinates. */
-    anchorTop: contentTop + anchorWithinContent,
-    /**
-     * Everything from the anchor's top to the end of the thread. `offsetHeight`
-     * includes `.thread-pad`'s bottom padding, which is real space below the last
-     * message and must count.
-     */
-    tail: content.offsetHeight - anchorWithinContent,
+    anchorTop: contentTop + (anchor.offsetTop - content.offsetTop),
+    // `offsetHeight` includes `.thread-pad`'s bottom padding, which is real space
+    // below the last message and must count as content.
+    contentEnd: contentTop + content.offsetHeight,
   };
+}
+
+/** Reservation needed for `target` to be a valid scroll offset. */
+function reservationFor(target: number, viewport: number, contentEnd: number): number {
+  return target + viewport - contentEnd;
 }
 
 export interface ThreadAnchor {
@@ -90,8 +111,7 @@ export interface ThreadAnchor {
   spacerRef: (element: HTMLElement | null) => void;
   /**
    * Reserved height in px right now, for scroll arithmetic. A getter rather than
-   * state because the value changes on every streamed frame and no render depends
-   * on it — see the note on imperative sizing in the hook body.
+   * state because nothing renders it — see the note on imperative sizing below.
    */
   reservedHeight: () => number;
 }
@@ -107,11 +127,15 @@ export function useThreadAnchor({
   scrollRef: React.RefObject<HTMLDivElement | null>;
   messages: Message[];
   isLoading: boolean;
+  /**
+   * Identifies the conversation. `null` disables anchoring entirely, for a
+   * transcript that is read but never sent into.
+   */
   sessionId: string | null;
   /**
    * The thread's existing stick-to-bottom flag. Anchoring has to suspend it —
    * otherwise the per-token `scrollTop = scrollHeight` immediately undoes the
-   * anchor — and hand it back once the reply outgrows the reserved space.
+   * anchor — and hand it back once the reply has filled the viewport.
    */
   followsLatestRef: React.MutableRefObject<boolean>;
   setFollowsLatest: (follows: boolean) => void;
@@ -124,12 +148,23 @@ export function useThreadAnchor({
 
   const [anchorIndex, setAnchorIndex] = useState<number | null>(null);
 
-  // Mirrored onto refs so `measure` can stay a stable callback and read current
-  // values without being re-created (and re-subscribed) on every render.
+  // Mirrored onto refs so the callbacks below stay stable and still read current
+  // values, rather than being re-created (and re-subscribed) every render.
   const anchorIndexRef = useRef<number | null>(null);
   const reserved = useRef(0);
   const loadingRef = useRef(isLoading);
   loadingRef.current = isLoading;
+
+  /**
+   * The scroll offset the anchor is held at.
+   *
+   * Deliberately used in place of the live `scrollTop` when reconciling. The
+   * initial scroll is smooth, so during that animation `scrollTop` is somewhere
+   * mid-flight; reconciling against it would size the reservation for a position
+   * we are only passing through and could hand the space back before the anchor
+   * ever arrived.
+   */
+  const targetTop = useRef(0);
 
   const frame = useRef<number | null>(null);
   const previousCount = useRef(messages.length);
@@ -138,11 +173,9 @@ export function useThreadAnchor({
   /**
    * Write the reserved height straight to the DOM rather than through state.
    *
-   * Two reasons, both load-bearing. It must take effect *within* the layout pass
-   * that then scrolls to the anchor — a `setState` would not reach the DOM until
-   * after, leaving the scroll target still out of range and silently clamped. And
-   * it changes on every streamed frame, which through state would re-render the
-   * whole thread for a number nothing renders.
+   * It must take effect *within* the layout pass that then scrolls to the anchor —
+   * a `setState` would not reach the DOM until after, leaving the scroll target
+   * still out of range and silently clamped.
    */
   const setReserved = useCallback((next: number) => {
     reserved.current = next;
@@ -160,11 +193,10 @@ export function useThreadAnchor({
   /**
    * End anchoring and give following back to the normal stick-to-bottom.
    *
-   * A one-way exit, taken once the reply is taller than the reserved space. It has
-   * to end the anchor outright, not merely re-enable following: streamed content
-   * also *shrinks* sometimes (a `response_reset` folds transient prose into a
-   * thinking step), and a still-live anchor would re-open a void mid-reply and
-   * then fight stick-to-bottom over it.
+   * A one-way exit. It has to end the anchor outright rather than merely re-enable
+   * following: streamed content sometimes *shrinks* (a `response_reset` folds
+   * transient prose into a thinking step), and a still-live anchor would re-open a
+   * void mid-reply and then fight stick-to-bottom over it.
    */
   const handBackToBottom = useCallback(() => {
     clearAnchor();
@@ -173,10 +205,16 @@ export function useThreadAnchor({
   }, [clearAnchor, followsLatestRef, setFollowsLatest]);
 
   /**
-   * Size the spacer to the shortfall between what the anchor needs in order to
-   * reach the top and what the content below it already provides.
+   * Keep the reservation valid. Monotone by design — see the flicker note at the
+   * top of this file for why it must never trim to track content growth.
+   *
+   * The hand-back is seamless rather than merely tolerable. It fires exactly when
+   * the content has reached `targetTop + viewport`, and at that moment the bottom
+   * of the content is at the bottom of the viewport — so dropping the reservation
+   * cannot clamp `scrollTop`, and stick-to-bottom's first jump has zero distance to
+   * travel. The anchored position and the stuck-to-bottom position coincide.
    */
-  const measure = useCallback(() => {
+  const reconcile = useCallback(() => {
     const scroll = scrollRef.current;
     const content = contentElement.current;
     const anchor = anchorElement.current;
@@ -185,32 +223,25 @@ export function useThreadAnchor({
     const viewport = scroll.clientHeight;
     if (viewport <= 0) return;
 
-    const { tail } = geometry(scroll, content, anchor);
+    const { contentEnd } = geometry(scroll, content, anchor);
+    const required = reservationFor(targetTop.current, viewport, contentEnd);
 
-    // Never reserve more than one screen: that is what keeps this honest on a
-    // short viewport instead of opening a void taller than the window.
-    const next = Math.max(0, Math.min(viewport - topGapFor(viewport) - tail, viewport));
-
-    // Checked before the unchanged-value shortcut below, or a turn that needs no
-    // reservation at all — a sent message already taller than the viewport — would
-    // sit anchored at zero with stick-to-bottom suspended, and the reply would
-    // stream by without ever following.
-    if (next === 0) {
+    if (required <= 0) {
       handBackToBottom();
       return;
     }
-
-    if (next === reserved.current) return;
-    setReserved(next);
+    // Grow only. The viewport shrinking under us — the composer growing to several
+    // lines — is the case that needs this.
+    if (required > reserved.current) setReserved(Math.min(required, viewport));
   }, [scrollRef, setReserved, handBackToBottom]);
 
-  const scheduleMeasure = useCallback(() => {
+  const scheduleReconcile = useCallback(() => {
     if (frame.current !== null) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
-      measure();
+      reconcile();
     });
-  }, [measure]);
+  }, [reconcile]);
 
   /**
    * Detect a send and set the anchor.
@@ -218,9 +249,6 @@ export function useThreadAnchor({
    * A send is exactly: the list grew, and the last message is the user's. Retry
    * sets `isLoading` without appending a user message, so this distinguishes the
    * two and keeps retry out of scope by construction rather than by a flag.
-   *
-   * `useLayoutEffect` because the spacer must exist before we scroll — the target
-   * position is not reachable until the space below it does.
    */
   useLayoutEffect(() => {
     const grew = messages.length > previousCount.current;
@@ -260,7 +288,9 @@ export function useThreadAnchor({
 
   /**
    * Once the anchor element exists, reserve the space and scroll to it — in that
-   * order, within one layout pass.
+   * order, within one layout pass, so the target is reachable when we ask for it.
+   *
+   * This is the only place the reservation is sized from scratch.
    */
   useLayoutEffect(() => {
     if (anchorIndex === null) return;
@@ -269,50 +299,55 @@ export function useThreadAnchor({
     const anchor = anchorElement.current;
     if (!scroll || !content || !anchor) return;
 
-    // Reserve first. `setReserved` writes the height straight to the DOM, so the
-    // target below is genuinely reachable by the time we scroll to it.
-    measure();
+    const viewport = scroll.clientHeight;
+    const { anchorTop, contentEnd } = geometry(scroll, content, anchor);
+    const target = Math.max(0, anchorTop - topGapFor(viewport));
+    targetTop.current = target;
 
-    const { anchorTop } = geometry(scroll, content, anchor);
+    const required = reservationFor(target, viewport, contentEnd);
+    setReserved(required > 0 ? Math.min(required, viewport) : 0);
+
     scroll.scrollTo({
-      top: Math.max(0, anchorTop - topGapFor(scroll.clientHeight)),
-      // Smooth is the point — it reads as the thread making room. But a motion
+      top: target,
+      // Smooth is the point — it reads as the thread making room. A motion
       // preference means a hard cut, not a slow one.
       behavior: reduceMotion ? "auto" : "smooth",
     });
-  }, [anchorIndex, scrollRef, measure, reduceMotion]);
+
+    // A sent message already taller than the viewport needs no reservation at all,
+    // so there is nothing to anchor: the thread reverts to following the bottom.
+    if (required <= 0) handBackToBottom();
+  }, [anchorIndex, scrollRef, setReserved, handBackToBottom, reduceMotion]);
 
   /**
-   * Re-measure on every height change, from one observer.
+   * Watch for height changes.
    *
-   * This covers streaming growth, ToolCard expand/collapse, image and Markdown
-   * reflow, window resize, live density changes (which alter heights, so they need
-   * no special handling despite the `data-density` stamp bypassing React), and —
-   * via the scroll container's own box — the composer growing to multiple lines
-   * and shrinking the space the thread has.
+   * During streaming this is almost always a no-op: content growth lowers the
+   * required reservation and `reconcile` never trims, so nothing is written. It
+   * earns its place on the cases that do matter — the composer growing to several
+   * lines, the window resizing, a live density change, a `ToolCard` expanding —
+   * and on spotting the moment the content has filled the viewport so the space can
+   * be handed back.
    *
    * No feedback loop: the spacer is a *sibling* of the observed content, so
-   * changing it alters the container's `scrollHeight` but not either observed
-   * content box.
+   * changing it alters the container's `scrollHeight` but neither observed box.
    */
   useEffect(() => {
     const scroll = scrollRef.current;
     const content = contentElement.current;
     if (!scroll || !content) return;
 
-    const observer = new ResizeObserver(scheduleMeasure);
+    const observer = new ResizeObserver(scheduleReconcile);
     observer.observe(scroll);
     observer.observe(content);
     return () => observer.disconnect();
-  }, [scrollRef, scheduleMeasure, anchorIndex]);
+  }, [scrollRef, scheduleReconcile, anchorIndex]);
 
   /**
-   * Release the reserved space on the first upward scroll after the turn ends.
+   * Release the reservation on the first upward scroll after the turn ends.
    *
    * Driven by input intent rather than the `scroll` event, which cannot tell our
-   * own programmatic scroll from a real one. Releasing only on an *upward* move
-   * is also what makes it jump-free: by then the space being removed is off-screen
-   * below, so nothing visible shifts.
+   * own programmatic scroll from a real one.
    */
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -327,7 +362,7 @@ export function useThreadAnchor({
      * sits at `scrollTop` 668, a position only the reservation makes reachable —
      * dropping it clamps to 300 and jumps the content nearly 370px.
      *
-     * So release is conditional on the scroll position already fitting without the
+     * So release waits until the scroll position already fits without the
      * reservation. Scrolling up reaches that point quickly, and until it does the
      * space simply stays, which is the behaviour we want anyway.
      */
@@ -380,27 +415,19 @@ export function useThreadAnchor({
   const anchorRef = useCallback(
     (element: HTMLElement | null) => {
       anchorElement.current = element;
-      if (element) scheduleMeasure();
-    },
-    [scheduleMeasure],
-  );
-
-  const contentRef = useCallback(
-    (element: HTMLElement | null) => {
-      contentElement.current = element;
-      if (element) scheduleMeasure();
-    },
-    [scheduleMeasure],
-  );
-
-  const spacerRef = useCallback(
-    (element: HTMLElement | null) => {
-      spacerElement.current = element;
-      // React never renders the height, so re-mounting the element would lose it.
-      if (element) element.style.height = `${reserved.current}px`;
     },
     [],
   );
+
+  const contentRef = useCallback((element: HTMLElement | null) => {
+    contentElement.current = element;
+  }, []);
+
+  const spacerRef = useCallback((element: HTMLElement | null) => {
+    spacerElement.current = element;
+    // React never renders the height, so a re-mount would otherwise lose it.
+    if (element) element.style.height = `${reserved.current}px`;
+  }, []);
 
   const reservedHeight = useCallback(() => reserved.current, []);
 
