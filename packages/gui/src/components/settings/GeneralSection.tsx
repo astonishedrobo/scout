@@ -15,9 +15,9 @@ const DEVICE_NOTE = "Remembered on this device.";
  * `App.tsx` reads them and acts on them; see `useLocalSetting`, whose writes
  * publish so a change here takes effect without a reload.
  *
- * "Response speed" is the exception and is still inert: making it real means
- * deciding how much the agent deliberates before answering, which is a feature,
- * not a config key.
+ * Every row rendered here works. One row — "Response speed" — is deliberately
+ * hidden rather than shipped inert; the commented block in the Interface group
+ * below records what it was for and the backend work it is waiting on.
  */
 export function GeneralSection({ isMultiUser }: SectionProps) {
   const [permissionDefault, setPermissionDefault] = useLocalSetting<ApprovalMode>(
@@ -29,7 +29,6 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
     "general.defaultPanel",
     "none",
   );
-  const [speed, setSpeed] = useLocalSetting<"standard" | "thorough">("general.speed", "standard");
 
   return (
     <>
@@ -92,21 +91,37 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
             <Switch checked={suggestions} onChange={setSuggestions} label="Suggested prompts" />
           }
         />
-        <SettingsRow
-          label="Response speed"
-          description="How much work Scout does before answering. Not in effect yet."
-          control={
-            <SettingsSelect
-              value={speed}
-              onChange={setSpeed}
-              label="Response speed"
-              options={[
-                { value: "standard", label: "Standard", description: "Answer as soon as it can" },
-                { value: "thorough", label: "Thorough", description: "Check its work first" },
-              ]}
-            />
-          }
-        />
+        {/*
+          Response speed — HIDDEN, not yet implemented. Do not re-enable this row
+          without the server side below; a control that silently does nothing is
+          worse than an absent one.
+
+          The intent is to let the user choose how much the agent deliberates
+          before answering (answer directly vs. check its own work first). That is
+          a feature, not a config key: it needs a real notion of extra
+          verification passes in the agent loop, so there is nothing to bind to
+          yet.
+
+          What it would take, in order:
+            1. Agent side — define what "thorough" actually does. Most likely a
+               verification step before the final answer, and/or a higher
+               `agent.max_iterations` (see `agent` in python/src/scout/config.py).
+            2. Storage — there is no per-user preference store. The precedent to
+               copy is `user_memory_preferences` in python/src/scout/server/auth.py:
+               a typed table with UPSERT accessors, NOT a generic key-value bag.
+            3. Endpoint — `GET/PUT /agent/preferences`, mirroring the memories pair
+               in python/src/scout/server/app.py, including its single-user
+               fallback of writing to the global config file.
+            4. Layering — apply the override in `_effective_config()` in app.py,
+               which is the existing seam where a user preference beats global
+               config. It currently overrides only `memories.*`.
+            5. This row — swap `useLocalSetting` for the fetch/PUT pair, following
+               MemoriesSection's load-and-roll-back-on-failure pattern.
+
+          Note `POST /config` is 403 in multi-user mode, which is why this cannot
+          reuse the path that ModelsSection uses; it needs its own per-user
+          endpoint to work on a server deployment at all.
+        */}
       </SettingsGroup>
 
       <SettingsGroup label="About">
