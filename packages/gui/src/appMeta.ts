@@ -1,5 +1,5 @@
 // Single source of truth for version + shortcuts, rendered by both
-// HelpDialog and SettingsPanel so the two never drift apart.
+// HelpDialog and the settings shortcuts section so the two never drift apart.
 export const APP_VERSION = "v0.1.0";
 
 export const SHORTCUTS = [

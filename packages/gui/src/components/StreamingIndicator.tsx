@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityOrb, activityForTool } from "./ActivityOrb";
+import { ActivityOrb } from "./ActivityOrb";
 
 interface StreamingIndicatorProps {
   currentTool: string | undefined;
@@ -75,18 +75,11 @@ export function StreamingIndicator({
   const label = elapsed === null
     ? `${rawLabel.replace(/[.…]+$/u, "")}…`
     : `${rawLabel.replace(/[.…]+$/u, "")} · ${elapsed}s`;
-  const activity = text
-    ? "composing"
-    : currentTool
-      ? activityForTool(currentTool)
-      : hasToolSteps
-        ? "solving"
-        : "listening";
 
   return (
     <div className="flex items-center gap-2 py-1.5">
-      <ActivityOrb activity={activity} label={label} />
-      <span className="text-[13px] text-scout-muted">{label}</span>
+      <ActivityOrb />
+      <span className="text-label text-scout-muted">{label}</span>
     </div>
   );
 }

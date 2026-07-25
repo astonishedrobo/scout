@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Artifact, ArtifactRenderer } from "scout-core";
-import { PanelExpandButton } from "./ui/PanelExpandButton";
+import { PanelHeader } from "./ui/PanelHeader";
+import { IconButton } from "./ui/IconButton";
+import { Skeleton } from "./ui/Skeleton";
 import {
   ChevronRight,
   File,
@@ -57,8 +59,8 @@ function nodeKey(node: FileTreeNode, scope: string): string {
 function FileKindIcon({ node }: { node: FileTreeNode }) {
   const renderer = node.renderer;
   const className = "shrink-0 text-scout-muted";
-  if (renderer === "image") return <Image size={15} className="shrink-0 text-[#a78bfa]" />;
-  if (renderer === "csv") return <Table2 size={15} className="shrink-0 text-[#5cb87a]" />;
+  if (renderer === "image") return <Image size={15} className="shrink-0 text-scout-lavender" />;
+  if (renderer === "csv") return <Table2 size={15} className="shrink-0 text-scout-success" />;
   if (renderer === "code" || renderer === "json") return <FileCode2 size={15} className={className} />;
   if (renderer === "markdown" || renderer === "text") return <FileText size={15} className={className} />;
   return <File size={15} className={className} />;
@@ -103,7 +105,7 @@ function TreeNodeRow({
           if (isDir) onToggle(node, scope, key);
           else onSelect({ node, scope });
         }}
-        className={`group flex w-full items-center gap-1.5 rounded-lg px-2 py-[5px] text-left text-[13px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-scout-muted/50 ${
+        className={`group flex w-full items-center gap-1.5 rounded-btn px-2 py-[5px] text-left text-label outline-none transition-colors focus-visible:ring-1 focus-visible:ring-scout-muted/50 ${
           isSelected
             ? "bg-scout-lift text-scout-text"
             : "text-scout-muted hover:bg-scout-lift/70 hover:text-scout-text"
@@ -134,7 +136,7 @@ function TreeNodeRow({
         )}
         <span className="min-w-0 truncate">{showFullPath && !isDir ? node.path : node.name}</span>
         {isDir && childrenLoaded && children.length > 0 && (
-          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-scout-muted/60">
+          <span className="ml-auto shrink-0 text-micro tabular-nums text-scout-muted/60">
             {children.length}
           </span>
         )}
@@ -160,7 +162,7 @@ function TreeNodeRow({
       )}
       {isDir && isOpen && childrenLoaded && children.length === 0 && !isLoading && (
         <div
-          className="px-2 py-1 text-[11px] italic text-scout-muted/55"
+          className="px-2 py-1 text-micro italic text-scout-muted/55"
           style={{ paddingLeft: 8 + (depth + 1) * 13 + 13 }}
         >
           Empty
@@ -168,7 +170,7 @@ function TreeNodeRow({
       )}
       {isDir && isOpen && node.truncated && (
         <div
-          className="px-2 py-1 text-[11px] text-scout-warning/80"
+          className="px-2 py-1 text-micro text-scout-warning/80"
           style={{ paddingLeft: 8 + (depth + 1) * 13 + 13 }}
         >
           More items are hidden
@@ -314,7 +316,9 @@ export function FileExplorerPanel({
       rootsRef.current = next;
       setRoots(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // Only a failed ROOT load means "files unavailable". A single expanded
+      // subfolder failing used to replace the whole tree with an error box.
+      if (!node.path) setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingKeys((current) => {
         const next = new Set(current);
@@ -458,67 +462,54 @@ export function FileExplorerPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
-      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-scout-hairline-faint bg-scout-canvas px-3">
-        <FolderTree size={16} className="shrink-0 text-scout-muted" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold tracking-[-0.01em] text-scout-text">Files</div>
-          <div className="truncate text-[11px] text-scout-muted">
-            {loading && roots.length === 0
-              ? "Loading files…"
-              : error
-                ? "Files unavailable"
-                : `${fileCount} loaded file${fileCount === 1 ? "" : "s"}`}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => setTreeVisible((visible) => !visible)}
-          className="rounded-lg p-2 text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
-          title={treeVisible ? "Hide file tree" : "Show file tree"}
-          aria-label={treeVisible ? "Hide file tree" : "Show file tree"}
-          aria-pressed={treeVisible}
-        >
-          <FolderToggleIcon open={treeVisible} size={16} />
-        </button>
-        <button
-          type="button"
-          onClick={() => void loadTree()}
-          className="rounded-lg p-2 text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
-          title="Refresh files"
-          aria-label="Refresh files"
-        >
-          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-        </button>
-        {onToggleExpand && <PanelExpandButton expanded={panelExpanded} onToggle={onToggleExpand} />}
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-2 text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
-          title="Close workspace"
-          aria-label="Close workspace"
-        >
-          <X size={17} />
-        </button>
-      </div>
+      <PanelHeader
+        icon={<FolderTree size={16} />}
+        title="Files"
+        subtitle={
+          loading && roots.length === 0
+            ? "Loading files…"
+            : error
+              ? "Files unavailable"
+              : `${fileCount} loaded file${fileCount === 1 ? "" : "s"}`
+        }
+        expanded={panelExpanded}
+        onToggleExpand={onToggleExpand}
+        onClose={onClose}
+        closeLabel="Close workspace"
+        actions={
+          <>
+            <IconButton
+              label={treeVisible ? "Hide file tree" : "Show file tree"}
+              onClick={() => setTreeVisible((visible) => !visible)}
+              aria-pressed={treeVisible}
+            >
+              <FolderToggleIcon open={treeVisible} size={16} />
+            </IconButton>
+            <IconButton label="Refresh files" onClick={() => void loadTree()} disabled={loading}>
+              <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            </IconButton>
+          </>
+        }
+      />
 
       <div className="flex min-h-0 flex-1">
         {treeVisible && (
           <aside className={`order-2 flex shrink-0 flex-col bg-scout-panel/70 ${isCompactViewport ? "w-full" : "w-[clamp(180px,32%,240px)] border-l border-scout-hairline-faint"}`}>
             <div className="shrink-0 p-2.5">
-              <label className="flex h-9 items-center gap-2 rounded-lg border border-scout-hairline-faint bg-scout-input-bg/75 px-2.5 text-scout-muted transition-colors focus-within:border-scout-muted/40 focus-within:bg-scout-input-bg">
+              <label className="flex h-9 items-center gap-2 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/75 px-2.5 text-scout-muted transition-colors focus-within:border-scout-muted/40 focus-within:bg-scout-input-bg">
                 <Search size={14} className="shrink-0" />
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Find a file"
                   aria-label="Find a workspace file"
-                  className="min-w-0 flex-1 bg-transparent text-xs text-scout-text outline-none placeholder:text-scout-muted/65"
+                  className="min-w-0 flex-1 bg-transparent text-caption text-scout-text outline-none placeholder:text-scout-muted/65"
                 />
                 {query && (
                   <button
                     type="button"
                     onClick={() => setQuery("")}
-                    className="rounded p-0.5 hover:bg-scout-lift hover:text-scout-text"
+                    className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-btn hover:bg-scout-lift hover:text-scout-text"
                     aria-label="Clear file search"
                   >
                     <X size={12} />
@@ -528,28 +519,23 @@ export function FileExplorerPanel({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
-              {loading && roots.length === 0 && (
-                <div className="flex items-center justify-center gap-2 py-10 text-xs text-scout-muted">
-                  <Loader2 size={15} className="animate-spin" />
-                  Loading…
-                </div>
-              )}
+              {loading && roots.length === 0 && <Skeleton.List rows={7} className="pt-1" />}
               {error && (
-                <div className="m-2 rounded-xl border border-scout-error/20 bg-scout-error-muted px-3 py-2 text-xs text-scout-error">
+                <div className="m-2 rounded-card border border-scout-error/20 bg-scout-error-muted px-3 py-2 text-caption text-scout-error">
                   {error}
                 </div>
               )}
               {!loading && !error && roots.length === 0 && (
                 <div className="px-3 py-10 text-center">
                   <div className="mb-3 flex justify-center"><PixelChest size={40} /></div>
-                  <p className="text-xs font-medium text-scout-text">The chest is empty</p>
-                  <p className="mt-1 text-xs leading-relaxed text-scout-muted">
+                  <p className="text-caption font-medium text-scout-text">The chest is empty</p>
+                  <p className="mt-1 text-caption leading-relaxed text-scout-muted">
                     Upload a file or ask Scout to create one — it will appear here.
                   </p>
                 </div>
               )}
               {!loading && !error && roots.length > 0 && visibleRoots.length === 0 && (
-                <div className="px-3 py-10 text-center text-xs text-scout-muted">
+                <div className="px-3 py-10 text-center text-caption text-scout-muted">
                   {searching ? "Searching…" : "No matching files"}
                 </div>
               )}
@@ -588,14 +574,14 @@ export function FileExplorerPanel({
             <div className="flex h-full items-center justify-center px-8 text-center">
               <div className="max-w-xs">
                 <div className="mb-4 flex justify-center"><PixelDazed size={72} /></div>
-                <p className="truncate text-sm font-medium text-scout-text">{selection.node.name}</p>
-                <p className="mt-1 text-xs leading-relaxed text-scout-muted">
+                <p className="truncate text-label font-medium text-scout-text">{selection.node.name}</p>
+                <p className="mt-1 text-caption leading-relaxed text-scout-muted">
                   This file type does not have an in-app preview yet.
                 </p>
                 <button
                   type="button"
                   onClick={closePreview}
-                  className="mt-4 rounded-xl border border-scout-hairline-faint bg-scout-input-bg px-3 py-2 text-xs font-medium text-scout-text transition-colors hover:bg-scout-lift"
+                  className="mt-4 rounded-card border border-scout-hairline-faint bg-scout-input-bg px-3 py-2 text-caption font-medium text-scout-text transition-colors hover:bg-scout-lift"
                 >
                   Clear selection
                 </button>
@@ -605,8 +591,8 @@ export function FileExplorerPanel({
             <div className="flex h-full items-center justify-center px-8 text-center">
               <div className="max-w-xs">
                 <FileText size={24} className="mx-auto mb-4 text-scout-muted/75" />
-                <p className="text-sm font-medium text-scout-text">Open a file</p>
-                <p className="mt-1 text-xs leading-relaxed text-scout-muted">
+                <p className="text-label font-medium text-scout-text">Open a file</p>
+                <p className="mt-1 text-caption leading-relaxed text-scout-muted">
                   Select a file from the browser on the right to preview it here.
                 </p>
               </div>

@@ -127,7 +127,12 @@ export interface Artifact {
 
 // ── Chat events (server → client via SSE) ────────────────────────
 
-export type ToolStepStatus = "executing" | "complete" | "interrupted";
+/**
+ * `failed` is derived on the client (see `toolFailed` in useChat): the server
+ * reports a failed tool as an ordinary result with the error text in `output`,
+ * so without this a failed exec_command was pixel-identical to a successful one.
+ */
+export type ToolStepStatus = "executing" | "complete" | "interrupted" | "failed";
 /** Chronological turn blocks. `reflection` is a legacy alias for `thinking`. */
 export type ActivityStepKind = "tool" | "thinking" | "text" | "reflection";
 

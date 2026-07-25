@@ -3,9 +3,8 @@
  * share the same height, radius, and weight.
  */
 
-/** Icon-only control (sidebar collapse). */
-export const headerIconButtonClass =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 transition-colors";
+// The icon-only class that used to live here is now `ui/IconButton` — a real
+// component, so the accessible name and the 32px box can't be forgotten.
 
 /**
  * Labeled action button base (Files, Upload). Pair with idle/active/status —

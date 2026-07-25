@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, type LucideIcon } from "lucide-react";
+import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, ArrowDown, type LucideIcon } from "lucide-react";
 import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, TaskNotice, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
@@ -62,20 +62,20 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
       ? "bg-scout-success"
       : task.status === "cancelled" || task.status === "interrupted"
         ? "bg-scout-muted"
-        : "bg-scout-accent";
+        : "bg-scout-accent-cta";
   const body = task.error || task.summary || task.result_preview;
   const content = (
-    <div className="flex min-w-0 items-start gap-2.5 rounded-xl border border-scout-hairline-faint bg-scout-panel/70 px-3 py-2.5 text-left transition-colors hover:bg-scout-lift/60">
+    <div className="flex min-w-0 items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel/70 px-3 py-2.5 text-left transition-colors hover:bg-scout-lift/60">
       <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${statusColor} ${active ? "animate-pulse" : ""}`} />
       <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5 text-[13px] text-scout-text">
+        <span className="flex items-center gap-1.5 text-label text-scout-text">
           <span className="truncate font-medium">{task.title}</span>
           <span className="shrink-0 text-scout-muted">{state}</span>
         </span>
-        {body && <span className="mt-0.5 block truncate text-[12px] text-scout-muted">{body}</span>}
+        {body && <span className="mt-0.5 block truncate text-caption text-scout-muted">{body}</span>}
       </span>
-      {elapsed && <span className="flex shrink-0 items-center gap-1 pt-0.5 text-[11px] tabular-nums text-scout-muted"><Clock3 size={12} />{elapsed}</span>}
+      {elapsed && <span className="flex shrink-0 items-center gap-1 pt-0.5 text-micro tabular-nums text-scout-muted"><Clock3 size={12} />{elapsed}</span>}
     </div>
   );
   return onOpen ? <button type="button" onClick={onOpen} className="block w-full text-left">{content}</button> : content;
@@ -91,7 +91,7 @@ function TaskNoticeRow({ notice }: { notice: TaskNotice }) {
       : "Finished:";
   const detail = notice.result_preview || notice.summary;
   return (
-    <div className="flex items-center gap-2 px-1 text-[13px] text-scout-muted">
+    <div className="flex items-center gap-2 px-1 text-label text-scout-muted">
       <span className={failed ? "text-scout-error" : stopped ? "text-scout-warning" : "text-scout-success"}>●</span>
       <span className="shrink-0 font-medium text-scout-text">{label}</span>
       {!failed && !stopped && <span className="min-w-0 truncate">{notice.title}</span>}
@@ -107,28 +107,28 @@ const SUGGESTIONS: {
   description: string;
   prompt: string;
   icon: LucideIcon;
-  iconColor: string;
+  iconClass: string;
 }[] = [
   {
     title: "Summarize workspace",
     description: "Get an overview of the files in your project",
     prompt: "Summarize the files in my workspace",
     icon: FileText,
-    iconColor: "#f0a058",
+    iconClass: "text-scout-peach",
   },
   {
     title: "Visualize data",
     description: "Create charts and plots from your datasets",
     prompt: "Create a chart from my data",
     icon: BarChart3,
-    iconColor: "#a78bfa",
+    iconClass: "text-scout-lavender",
   },
   {
     title: "Explore a dataset",
     description: "Investigate patterns, stats, and outliers",
     prompt: "Help me explore a dataset",
     icon: Compass,
-    iconColor: "#2cb8d8",
+    iconClass: "text-scout-cyan",
   },
 ];
 
@@ -186,12 +186,12 @@ export function SuggestionChips({
             title={s.description}
             className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left transition-colors hover:bg-scout-lift"
           >
-            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center" style={{ color: s.iconColor }}>
+            <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center ${s.iconClass}`}>
               <Icon size={15} strokeWidth={1.8} />
             </span>
             <span className="min-w-0">
-              <span className="block text-[13.5px] font-semibold text-scout-text/90">{s.title}</span>
-              <span className="mt-0.5 block text-[11px] leading-snug text-scout-muted/85">{s.description}</span>
+              <span className="block text-label font-semibold text-scout-text/90">{s.title}</span>
+              <span className="mt-0.5 block text-micro leading-snug text-scout-muted/85">{s.description}</span>
             </span>
           </button>
         );
@@ -225,6 +225,9 @@ export function ChatView({
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followsLatestRef = useRef(true);
+  // Mirrored into state purely so the "jump to latest" affordance can render.
+  // Auto-scroll itself stays on the ref: it must not re-render per token.
+  const [followsLatest, setFollowsLatest] = useState(true);
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
   const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
@@ -238,15 +241,26 @@ export function ChatView({
     element.scrollTop = element.scrollHeight;
   }, [messages, streamingSteps, streamingText, isLoading]);
 
+  const jumpToLatest = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    followsLatestRef.current = true;
+    setFollowsLatest(true);
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  };
+
   return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
     <div
       ref={scrollRef}
       onScroll={() => {
         const element = scrollRef.current;
         if (!element) return;
-        followsLatestRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+        const follows = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+        followsLatestRef.current = follows;
+        setFollowsLatest((prev) => (prev === follows ? prev : follows));
       }}
-      className="flex-1 min-h-0 overflow-y-auto"
+      className="min-h-0 flex-1 overflow-y-auto"
     >
       <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
         {messages.map((msg, i) => {
@@ -283,6 +297,18 @@ export function ChatView({
             || !!msg.artifacts?.length
             || !!msg.fileChanges?.length;
 
+          // Everything the user can actually see for this turn, in order: the
+          // timeline's prose steps plus `content` when it is not a duplicate of
+          // the last one. This is what copy must write.
+          const visibleProse = [
+            ...(msg.steps ?? [])
+              .filter((step) => step.kind === "text")
+              .map((step) => (step.content ?? "").trim()),
+            contentAlreadyInTimeline ? "" : (msg.content ?? "").trim(),
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+
           return (
             <div key={i} className="animate-enter">
               {/* Interleaved thinking / tools / mid-turn prose in event order. */}
@@ -304,6 +330,7 @@ export function ChatView({
                   message={
                     contentAlreadyInTimeline ? { ...msg, content: "" } : msg
                   }
+                  copyText={msg.role === "assistant" ? visibleProse : undefined}
                   onRetry={msg.role === "assistant" && onRetry ? () => onRetry(i) : undefined}
                   onFork={onFork ? () => onFork(i) : undefined}
                   onOpenArtifact={onOpenArtifact}
@@ -341,7 +368,9 @@ export function ChatView({
               />
             )}
             {streamingText ? (
-              <div className="prose-scout text-[15px]">
+              // No prose wrapper here: MessageBubble applies `prose-scout
+              // text-prose` itself, and nesting the scope duplicated it.
+              <div>
                 <MessageBubble
                   message={{ role: "assistant", content: streamingText }}
                   baseUrl={baseUrl}
@@ -365,6 +394,20 @@ export function ChatView({
           </div>
         )}
       </div>
+    </div>
+      {/* Auto-scroll deliberately detaches once you scroll up, which previously
+          had no UI signal at all — a streaming response just silently went by
+          off screen. */}
+      {!followsLatest && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-pill border border-scout-hairline bg-scout-panel/95 px-3 py-1.5 text-caption font-medium text-scout-text shadow-pop backdrop-blur-sm transition-colors hover:bg-scout-lift"
+        >
+          <ArrowDown size={13} />
+          {isLoading ? "Jump to latest — still writing" : "Jump to latest"}
+        </button>
+      )}
     </div>
   );
 }

@@ -13,7 +13,7 @@ export function PanelExpandButton({
     <button
       type="button"
       onClick={onToggle}
-      className="hidden lg:inline-flex rounded-lg p-2 text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
+      className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-btn text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text lg:inline-flex"
       title={expanded ? "Restore panel size" : "Expand panel"}
       aria-label={expanded ? "Restore panel size" : "Expand panel"}
       aria-pressed={expanded}

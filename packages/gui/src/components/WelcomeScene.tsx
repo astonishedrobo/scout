@@ -322,7 +322,7 @@ function PixelCity({ day }: { day: boolean }) {
       viewBox="0 0 400 100"
       preserveAspectRatio="none"
       shapeRendering="crispEdges"
-      className="absolute inset-x-0 bottom-[16vh] h-[30vh] w-full"
+      className="absolute inset-x-0 bottom-[max(102.4px,16vh)] h-[max(192.0px,30vh)] w-full"
       aria-hidden="true"
     >
       {CITY_BUILDINGS.map((b, i) => (
@@ -444,7 +444,8 @@ export function PixelDuskScene({
   const toggleDay = onToggleDay ?? (() => setInternalDay((d) => !d));
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+    <>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       {/* sky */}
       <div
         className="absolute inset-0 transition-colors duration-700"
@@ -454,17 +455,6 @@ export function PixelDuskScene({
             : "linear-gradient(180deg, #131218 0%, #1b1826 48%, #262038 78%, #201b2e 100%)",
         }}
       />
-      {/* moon / sun — click to flip day and night */}
-      <button
-        type="button"
-        onClick={toggleDay}
-        title={day ? "Switch to night" : "Switch to day"}
-        aria-label={day ? "Switch to night" : "Switch to day"}
-        className="absolute right-[12%] top-[10%] cursor-pointer border-0 bg-transparent p-1 transition-transform hover:scale-110 motion-reduce:transition-none motion-reduce:hover:scale-100"
-        style={{ pointerEvents: "auto" }}
-      >
-        {day ? <PixelSun /> : <PixelMoon />}
-      </button>
       {CLOUDS.slice(0, 6).map((cloud, i) => (
         <div
           key={`c${i}`}
@@ -501,11 +491,11 @@ export function PixelDuskScene({
 
       {/* two-lane road */}
       <div
-        className="absolute inset-x-0 bottom-[7vh] h-[9vh] transition-colors duration-700"
+        className="absolute inset-x-0 bottom-[max(44.8px,7vh)] h-[max(57.6px,9vh)] transition-colors duration-700"
         style={{ background: day ? "#4a4e59" : "#15131f" }}
       />
       <div
-        className="absolute inset-x-0 bottom-[11.3vh] h-[3px]"
+        className="absolute inset-x-0 bottom-[max(72.3px,11.3vh)] h-[3px]"
         style={{
           backgroundImage: `repeating-linear-gradient(90deg, ${
             day ? "rgba(255,255,255,0.55)" : "rgba(242,193,78,0.4)"
@@ -531,18 +521,18 @@ export function PixelDuskScene({
 
       {/* curb divider with street lamps between road and footpath */}
       <div
-        className="absolute inset-x-0 bottom-[6.4vh] h-[0.6vh] transition-colors duration-700"
+        className="absolute inset-x-0 bottom-[max(41.0px,6.4vh)] h-[max(3.8px,0.6vh)] transition-colors duration-700"
         style={{ background: day ? "#8f939c" : "#221f30" }}
       />
       {LAMP_POSITIONS.map((left, i) => (
-        <div key={`lamp${i}`} className="absolute bottom-[7vh]" style={{ left }}>
+        <div key={`lamp${i}`} className="absolute bottom-[max(44.8px,7vh)]" style={{ left }}>
           <StreetLamp day={day} />
         </div>
       ))}
 
       {/* stone footpath — the dude's turf */}
       <div
-        className="absolute inset-x-0 bottom-0 h-[6.4vh] transition-colors duration-700"
+        className="absolute inset-x-0 bottom-0 h-[max(41.0px,6.4vh)] transition-colors duration-700"
         style={{
           background: day ? "#b0b3ba" : "#1d1a28",
           backgroundImage: `repeating-linear-gradient(90deg, ${
@@ -555,15 +545,28 @@ export function PixelDuskScene({
       {/* legal line painted onto the pavement, road-marking style */}
       {roadText && (
         <p
-          className="absolute inset-x-0 bottom-[2.4vh] text-center font-mono text-[11px] font-semibold uppercase tracking-[0.28em] transition-colors duration-700"
+          className="absolute inset-x-0 bottom-[max(15.4px,2.4vh)] text-center font-mono text-[11px] font-semibold uppercase tracking-[0.28em] transition-colors duration-700"
           style={{ color: day ? "rgba(50, 52, 62, 0.5)" : "rgba(255, 255, 255, 0.17)" }}
         >
           {roadText}
         </p>
       )}
-      <div className="absolute inset-x-0 bottom-[0.6vh] h-0" style={{ pointerEvents: "auto" }}>
+      <div className="absolute inset-x-0 bottom-[max(3.8px,0.6vh)] h-0" style={{ pointerEvents: "auto" }}>
         <PixelPet working={false} size={56} idleStrollEveryMs={26_000} hopEveryMs={11_000} cap={day} />
       </div>
-    </div>
+      </div>
+      {/* Outside the aria-hidden art: this is a real, announced control. */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <button
+          type="button"
+          onClick={toggleDay}
+          aria-label={day ? "Switch to night" : "Switch to day"}
+          aria-pressed={day}
+          className="pointer-events-auto absolute right-[12%] top-[10%] cursor-pointer border-0 bg-transparent p-1 transition-transform hover:scale-110 motion-reduce:transition-none motion-reduce:hover:scale-100"
+        >
+          {day ? <PixelSun /> : <PixelMoon />}
+        </button>
+      </div>
+    </>
   );
 }

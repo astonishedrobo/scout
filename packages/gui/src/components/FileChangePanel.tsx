@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, GitCompareArrows, X } from "lucide-react";
+import { CheckCircle2, GitCompareArrows } from "lucide-react";
 import type { FileChangeEntry, FileChangeSet } from "scout-core";
 import { DiffViewer } from "./DiffViewer";
-import { PanelExpandButton } from "./ui/PanelExpandButton";
+import { PanelHeader } from "./ui/PanelHeader";
+import { EmptyState } from "./ui/EmptyState";
+import { PathLabel } from "./PathLabel";
 
 function reverseUnifiedDiff(diff: string) {
   return diff
@@ -80,26 +82,25 @@ export function FileChangePanel({
 
   return (
     <div className="flex h-full flex-col bg-scout-canvas">
-      <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b border-scout-hairline-faint px-3.5">
-        {undone ? <CheckCircle2 size={16} className="shrink-0 text-scout-success" /> : <GitCompareArrows size={16} className="shrink-0 text-scout-muted" />}
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-scout-text">{undone ? "Undo applied" : "Review"}</div>
-          <div className="flex items-center gap-1.5 text-[11px] text-scout-muted">
+      <PanelHeader
+        icon={
+          undone
+            ? <CheckCircle2 size={16} className="text-scout-success" />
+            : <GitCompareArrows size={16} />
+        }
+        title={undone ? "Undo applied" : "Review"}
+        subtitle={
+          <span className="flex items-center gap-1.5">
             <span>{undone ? "Workspace restored" : "Last turn"}</span>
             <span className="font-medium text-scout-success">+{stats.additions}</span>
-            <span className="font-medium text-scout-error">−{stats.deletions}</span>
-          </div>
-        </div>
-        {onToggleExpand && <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />}
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-2 text-scout-muted hover:bg-scout-lift hover:text-scout-text"
-          aria-label="Close review"
-        >
-          <X size={17} />
-        </button>
-      </div>
+            <span className="font-medium text-scout-error">-{stats.deletions}</span>
+          </span>
+        }
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+        onClose={onClose}
+        closeLabel="Close review"
+      />
       {changeSet.entries.length > 1 && (
         <div className="flex shrink-0 overflow-x-auto border-b border-scout-hairline-faint px-2 py-1.5">
           {changeSet.entries.map((entry) => (
@@ -107,26 +108,42 @@ export function FileChangePanel({
               type="button"
               key={entry.path}
               onClick={() => setActivePath(entry.path)}
-              className={`max-w-[14rem] truncate rounded-md px-2.5 py-1.5 font-mono text-[11px] transition-colors ${
+              title={entry.path}
+              className={`max-w-[14rem] shrink-0 rounded-btn px-2.5 py-1.5 font-mono text-micro transition-colors ${
                 entry.path === activeEntry?.path
                   ? "bg-scout-lift text-scout-text"
                   : "text-scout-muted hover:bg-scout-lift/60 hover:text-scout-text"
               }`}
             >
-              {entry.path}
+              <PathLabel path={entry.path} />
             </button>
           ))}
         </div>
       )}
+      {/* An empty change set is reachable (a turn that touched nothing), and
+          used to render the "+0 −0" header above a blank pane. */}
+      {!activeEntry && (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <EmptyState
+            icon={<GitCompareArrows size={20} />}
+            body={
+              undone
+                ? "Nothing left to review — the workspace was restored."
+                : "No file changes in the last turn."
+            }
+          />
+        </div>
+      )}
       {activeEntry && (
         <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-scout-code-bg/75">
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/45 px-3.5">
-            <span className={`text-[10px] font-semibold uppercase tracking-[0.08em] ${undone ? "text-scout-success" : "text-scout-muted"}`}>
+          <div className="sticky top-0 z-10 flex h-10 shrink-0 items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/95 px-3.5 backdrop-blur-sm">
+            <span className={`text-micro font-semibold uppercase tracking-[0.08em] ${undone ? "text-scout-success" : "text-scout-muted"}`}>
               {statusLabel(activeEntry, undone)}
             </span>
-            <span className="min-w-0 truncate font-mono text-xs text-scout-text">{activeEntry.path}</span>
+            <PathLabel path={activeEntry.path} className="min-w-0 font-mono text-caption text-scout-text" />
           </div>
           <DiffViewer
+            showFilenames={false}
             diff={undone ? reverseUnifiedDiff(activeEntry.diff) : activeEntry.diff}
             maxHeight="none"
             className="flex-1 bg-transparent"

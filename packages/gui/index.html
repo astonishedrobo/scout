@@ -2,8 +2,17 @@
 <html lang="en" class="soft">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is required for env(safe-area-inset-*) to report
+         non-zero values on notched iOS devices. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Scout — an AI data research agent that reads your workspace, runs code, and shows its work." />
     <title>Scout — AI Data Research Agent</title>
+    <!-- Inline SVG favicon: no public/ directory, and the CSP-safe data URI
+         keeps this self-contained. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23facc15'/%3E%3Cpath d='M10 21c3.5-2 4-4.5 4-7 0 3 1.5 5.5 4 7' stroke='%23131415' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='9' r='2.5' fill='%23131415'/%3E%3C/svg%3E"
+    />
     <script>
       // Avoid FOUC: apply saved theme before paint. Default for new users is soft gray.
       (function () {
@@ -11,6 +20,13 @@
         var theme = saved === "light" || saved === "soft" || saved === "dark" ? saved : "soft";
         document.documentElement.classList.remove("dark", "soft", "light");
         document.documentElement.classList.add(theme);
+        // color-scheme drives native form controls, scrollbars and the mobile
+        // browser chrome; theme-color tints the address bar to match the app.
+        document.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
+        var meta = document.createElement("meta");
+        meta.name = "theme-color";
+        meta.content = theme === "light" ? "#f9fafb" : theme === "soft" ? "#232426" : "#131415";
+        document.head.appendChild(meta);
       })();
     </script>
   </head>

@@ -4,12 +4,20 @@ import { Loader2 } from "lucide-react";
 type Variant = "filled" | "filledInverse" | "outlined" | "ghost";
 type Surface = "canvas" | "panel" | "void";
 type Accent = "void" | "white" | "peach" | "contrast" | "action";
+/**
+ * Semantic tone for consequential choices (approve / deny). Added because the
+ * approval surfaces hand-rolled tinted pills — the app's most consequential
+ * buttons were the ones not using the primitive.
+ */
+type Tone = "success" | "danger" | "info";
 type Size = "hero" | "default" | "compact";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   surface?: Surface;
   accent?: Accent;
+  /** Overrides variant colours; keeps the variant's geometry. */
+  tone?: Tone;
   size?: Size;
   fullWidth?: boolean;
   /** Shows a spinner and disables the button. Sets aria-busy. */
@@ -17,14 +25,13 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
 }
 
-// NOTE: `hero` and `default` hard-code rounded-xl rather than using the
-// --radius-* tokens, so the `soft` theme's tighter corners don't reach them.
-// Left as-is deliberately — switching to tokens changes the radius of every
-// button in the app (12px -> 16px), which is a visual decision, not a fix.
+// Radii come from the --radius-* tokens, so buttons follow the theme: 16/10 in
+// light and dark, 12/8 in `soft`. (These used to be fixed Tailwind radii, which
+// froze every button at one theme's value.)
 const sizeClasses: Record<Size, string> = {
-  hero: "px-6 py-3 text-[15px] rounded-xl",
-  default: "px-5 py-2.5 text-sm rounded-xl",
-  compact: "px-3 py-1.5 text-xs rounded-btn",
+  hero: "px-6 py-3 text-prose rounded-card",
+  default: "px-5 py-2.5 text-label rounded-card",
+  compact: "px-3 py-1.5 text-caption rounded-btn",
 };
 
 /*
@@ -84,12 +91,21 @@ const variants: Record<Variant, Record<Surface, string>> = {
   },
 };
 
+const tones: Record<Tone, string> = {
+  success:
+    "bg-scout-success-muted text-scout-success border border-scout-success/15 hover:border-scout-success/30",
+  danger:
+    "bg-scout-error-muted text-scout-error border border-scout-error/15 hover:border-scout-error/30",
+  info: "bg-scout-lift/80 text-scout-cyan border border-scout-hairline-faint hover:bg-scout-lift",
+};
+
 const spinnerSize: Record<Size, number> = { hero: 16, default: 14, compact: 12 };
 
 export function Button({
   variant = "filled",
   surface = "panel",
   accent,
+  tone,
   size = "default",
   fullWidth,
   loading = false,
@@ -98,8 +114,9 @@ export function Button({
   children,
   ...props
 }: ButtonProps) {
-  const variantClass =
-    variant === "filled" && accent
+  const variantClass = tone
+    ? tones[tone]
+    : variant === "filled" && accent
       ? accentFilled[accent]
       : // Fall back to the default rather than throwing on an unknown variant:
         // a typo used to crash the whole panel on `variants[variant][surface]`.

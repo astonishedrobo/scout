@@ -2,14 +2,7 @@
 // tokens desaturate in dark/soft modes and turn sprites gray); small object
 // icons keep theme tokens. All crispEdges SVG — no images, no runtime cost.
 
-const SPRITE = {
-  skin: "#f2a76b",
-  hair: "#f5c542",
-  shirt: "#8f78ef",
-  pants: "var(--sprite-pants)",
-  shoes: "var(--sprite-shoes)",
-  dark: "#17181c",
-};
+import { SPRITE } from "./spritePalette";
 
 export function PixelChest({ size = 42 }: { size?: number }) {
   return (

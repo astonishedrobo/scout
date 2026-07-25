@@ -4,7 +4,9 @@ import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PixelDazed } from "./PixelArt";
 import { PixelPet } from "./PixelPet";
-import { PanelExpandButton } from "./ui/PanelExpandButton";
+import { PanelHeader } from "./ui/PanelHeader";
+import { IconButton } from "./ui/IconButton";
+import { Badge } from "./ui/Badge";
 
 const artifactScrollPositions = new Map<string, number>();
 
@@ -165,56 +167,50 @@ export function ArtifactPanel({
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <div className={`h-[52px] ${compact ? "px-3" : "px-4"} flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas`}>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="truncate text-sm font-medium text-scout-text">{artifact.title}</div>
+      <PanelHeader
+        title={
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{artifact.title}</span>
             {!compact && (
-              <span className="rounded-md border border-scout-hairline-faint px-1.5 py-0.5 text-[10px] font-semibold text-scout-muted">
+              <Badge uppercase className="font-semibold">
                 {rendererLabel}
-              </span>
+              </Badge>
             )}
-          </div>
-          <div className="text-[10px] text-scout-muted truncate">
-            {scope === "shared" ? "Shared / " : ""}{artifact.path} · {formatSize(artifact.size)}
-          </div>
-        </div>
-        {canCopy && (
-          <button
-            onClick={copyContent}
-            className={`inline-flex items-center gap-1.5 rounded-xl bg-scout-input-bg/80 text-xs font-semibold text-scout-text hover:bg-scout-lift/80 transition-colors ${compact ? "p-2" : "px-3 py-2"}`}
-            title="Copy artifact content"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {!compact && "Copy"}
-          </button>
-        )}
-        {url && (
-          <a
-            href={url}
-            download={artifact.name}
-            className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-            title="Download"
-          >
-            <Download size={17} />
-          </a>
-        )}
-        <button
-          onClick={() => setRefresh((value) => value + 1)}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw size={17} className={isRefreshing ? "animate-spin" : ""} />
-        </button>
-        {onToggleExpand && <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />}
-        <button
-          onClick={onClose}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-          title={compact ? "Close preview" : "Close"}
-        >
-          <X size={18} />
-        </button>
-      </div>
+          </span>
+        }
+        subtitle={`${scope === "shared" ? "Shared / " : ""}${artifact.path} · ${formatSize(artifact.size)}`}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+        onClose={onClose}
+        closeLabel={compact ? "Close preview" : "Close"}
+        actions={
+          <>
+            {canCopy && (
+              <IconButton label="Copy artifact content" onClick={copyContent}>
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+              </IconButton>
+            )}
+            {url && (
+              <a
+                href={url}
+                download={artifact.name}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-btn text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
+                title="Download"
+                aria-label="Download artifact"
+              >
+                <Download size={16} />
+              </a>
+            )}
+            <IconButton
+              label="Refresh"
+              onClick={() => setRefresh((value) => value + 1)}
+              disabled={isRefreshing}
+            >
+              <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
+            </IconButton>
+          </>
+        }
+      />
       <div
         ref={scrollRef}
         onScroll={(event) => {
@@ -228,25 +224,25 @@ export function ArtifactPanel({
         }`}
       >
         {blocked && (
-          <p className="mb-3 rounded-2xl border border-scout-warning/25 bg-scout-warning-muted p-3 text-xs text-scout-warning">
+          <p className="mb-3 rounded-card border border-scout-warning/25 bg-scout-warning-muted p-3 text-caption text-scout-warning">
             External assets were blocked. HTML previews must be self-contained.
           </p>
         )}
         {error && (
           <div className="flex flex-col items-center gap-3 py-10 text-center">
             <PixelDazed size={72} />
-            <p className="text-sm text-scout-error">{error}</p>
+            <p className="text-label text-scout-error">{error}</p>
           </div>
         )}
         {!error && !url && (
           <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-4">
             <PixelPet working inline size={44} />
-            <p className="text-sm font-semibold text-scout-text">Loading artifact…</p>
+            <p className="text-label font-semibold text-scout-text">Loading artifact…</p>
           </div>
         )}
         {artifact.renderer === "image" && url && (
           <div className="flex min-h-full items-start justify-center">
-            <img src={url} alt={artifact.title} className="max-w-full rounded-2xl border border-scout-hairline-faint shadow-pop" />
+            <img src={url} alt={artifact.title} className="max-w-full rounded-card border border-scout-hairline-faint shadow-pop" />
           </div>
         )}
         {artifact.renderer === "html" && content && (
@@ -256,7 +252,7 @@ export function ArtifactPanel({
             title={artifact.title}
             srcDoc={sandboxHtml(content, artifact.path, baseUrl)}
             sandbox="allow-scripts"
-            className="w-full h-full min-h-[70vh] bg-white rounded-2xl border border-scout-hairline-faint"
+            className="w-full h-full min-h-[70vh] bg-white rounded-card border border-scout-hairline-faint"
           />
         )}
         {artifact.renderer === "markdown" && content && (
@@ -272,11 +268,11 @@ export function ArtifactPanel({
           </div>
         )}
         {artifact.renderer === "json" && content && (
-          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap">{formatJson(content)}</pre>
+          <pre className="rounded-card border border-scout-hairline-faint bg-scout-code-bg p-4 text-caption whitespace-pre-wrap">{formatJson(content)}</pre>
         )}
         {artifact.renderer === "csv" && content && <CsvPreview content={content} />}
         {(artifact.renderer === "code" || artifact.renderer === "text") && content && (
-          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap font-mono">{content}</pre>
+          <pre className="rounded-card border border-scout-hairline-faint bg-scout-code-bg p-4 text-caption whitespace-pre-wrap font-mono">{content}</pre>
         )}
       </div>
     </div>
@@ -362,15 +358,44 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const CSV_ROW_LIMIT = 50;
+
+/**
+ * Minimal RFC-4180 split: `line.split(",")` broke every quoted field that
+ * contained a comma, which is exactly why quoting exists.
+ */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cell += '"'; i++; }
+        else quoted = false;
+      } else cell += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") { cells.push(cell); cell = ""; }
+    else cell += ch;
+  }
+  cells.push(cell);
+  return cells;
+}
+
 function CsvPreview({ content }: { content: string }) {
-  const rows = content.trim().split("\n").slice(0, 50).map((line) => line.split(","));
+  const allLines = content.trim().split("\n");
+  const rows = allLines.slice(0, CSV_ROW_LIMIT).map(splitCsvLine);
+  const truncated = allLines.length > CSV_ROW_LIMIT;
   if (rows.length === 0) return null;
   const headers = rows[0] ?? [];
   const body = rows.slice(1);
   return (
-    <div className="overflow-x-auto rounded-2xl border border-scout-hairline-faint bg-scout-panel/70">
-      <table className="w-full text-xs border-collapse">
-        <thead>
+    <div className="overflow-x-auto rounded-card border border-scout-hairline-faint bg-scout-panel/70">
+      <table className="w-full text-caption border-collapse">
+        <thead className="sticky top-0 z-10">
           <tr>
             {headers.map((h, i) => (
               <th key={i} className="border-b border-r border-scout-hairline-faint bg-scout-input-bg px-2 py-1.5 text-left font-medium">
@@ -391,6 +416,12 @@ function CsvPreview({ content }: { content: string }) {
           ))}
         </tbody>
       </table>
+      {/* The row cap used to be silent, so a 10k-row file looked like a 50-row file. */}
+      {truncated && (
+        <p className="border-t border-scout-hairline-faint px-2 py-1.5 text-micro text-scout-muted">
+          Showing the first {CSV_ROW_LIMIT} of {allLines.length} rows.
+        </p>
+      )}
     </div>
   );
 }

@@ -1,7 +1,9 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { IconButton } from "./IconButton";
 import { usePresence } from "../../hooks/usePresence";
+import { useDialogShell } from "../../hooks/useDialogShell";
 import { EXIT_MS } from "../../motion";
 
 interface RightDrawerProps {
@@ -20,29 +22,19 @@ export function RightDrawer({
   width = 440,
 }: RightDrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? width : window.innerWidth,
+  );
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    onResize();
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const { mounted, state } = usePresence(open, EXIT_MS.drawer);
 
-  // Keyed on `open`, not `mounted` — see the note in CenterModal: the scroll
-  // lock and focus restore must unwind when the exit starts, not when it ends.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-      prev?.focus();
-    };
-  }, [open, onClose]);
+  useDialogShell(open, panelRef, onClose);
 
   if (!mounted) return null;
 
@@ -68,24 +60,20 @@ export function RightDrawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        style={{ width: Math.min(width, window.innerWidth) }}
+        style={{ width: Math.min(width, viewportWidth) }}
         className={`relative h-full bg-scout-panel border-l border-scout-hairline shadow-pop flex flex-col outline-none ${
           exiting ? "animate-drawer-out" : "animate-drawer-in"
         }`}
       >
         <div className="flex items-center justify-between h-11 px-4 border-b border-scout-hairline shrink-0">
           {title ? (
-            <h2 className="text-sm font-medium text-scout-text">{title}</h2>
+            <h2 className="text-label font-medium text-scout-text">{title}</h2>
           ) : (
             <span />
           )}
-          <button
-            onClick={onClose}
-            className="p-1 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift transition-colors"
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
+              <IconButton label="Close" onClick={onClose}>
+                <X size={18} />
+              </IconButton>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
       </aside>

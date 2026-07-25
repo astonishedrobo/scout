@@ -1,3 +1,4 @@
+import { BRAND } from "./spritePalette";
 // Scout logomark — a chunky pixel-art compass star (a little 8-bit personality
 // against the otherwise quiet UI). crispEdges keeps the pixels sharp at any size.
 export function ScoutMark({ size = 24 }: { size?: number }) {
@@ -10,13 +11,13 @@ export function ScoutMark({ size = 24 }: { size?: number }) {
       aria-hidden="true"
     >
       {/* arms */}
-      <rect x="5" y="0" width="2" height="3" fill="#a78bfa" />
-      <rect x="5" y="9" width="2" height="3" fill="#a78bfa" />
-      <rect x="0" y="5" width="3" height="2" fill="#f0a058" />
-      <rect x="9" y="5" width="3" height="2" fill="#f0a058" />
+      <rect x="5" y="0" width="2" height="3" fill={BRAND.lavender} />
+      <rect x="5" y="9" width="2" height="3" fill={BRAND.lavender} />
+      <rect x="0" y="5" width="3" height="2" fill={BRAND.peach} />
+      <rect x="9" y="5" width="3" height="2" fill={BRAND.peach} />
       {/* body */}
-      <rect x="3" y="3" width="6" height="6" fill="#a78bfa" fillOpacity="0.45" />
-      <rect x="4" y="4" width="4" height="4" fill="#f5c542" />
+      <rect x="3" y="3" width="6" height="6" fill={BRAND.lavender} fillOpacity="0.45" />
+      <rect x="4" y="4" width="4" height="4" fill={BRAND.amber} />
       {/* specular pixel */}
       <rect x="4" y="4" width="1" height="1" fill="white" fillOpacity="0.7" />
     </svg>

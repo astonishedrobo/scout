@@ -3,8 +3,6 @@ import {
   ArrowLeft,
   ArrowUp,
   Bot,
-  Maximize2,
-  Minimize2,
   Square,
   X,
 } from "lucide-react";
@@ -19,9 +17,11 @@ import type {
   SubAgentEvent,
   SubAgentInfo,
 } from "../hooks/useSubagents";
-import { ActivityOrb, activityForTool } from "./ActivityOrb";
+import { ActivityOrb } from "./ActivityOrb";
+import { PanelHeader } from "./ui/PanelHeader";
+import { IconButton } from "./ui/IconButton";
+import { EmptyState } from "./ui/EmptyState";
 import { ChatView } from "./ChatView";
-import { headerIconButtonClass } from "./ui/headerControls";
 
 interface AgentsPanelProps {
   active: SubAgentInfo[];
@@ -80,16 +80,10 @@ function AgentRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-scout-lift/60"
+      className="flex w-full items-start gap-2.5 rounded-card px-2.5 py-2 text-left transition-colors hover:bg-scout-lift/60"
     >
       {live ? (
-        <ActivityOrb
-          activity={activityForTool(
-            agent.last_activity?.toLowerCase().includes("search") ? "search_workspace" : undefined,
-          )}
-          label={`${agent.description} is working`}
-          className="-ml-1 -mt-0.5"
-        />
+        <ActivityOrb className="-ml-1 -mt-0.5" />
       ) : (
         <span
           className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
@@ -99,15 +93,15 @@ function AgentRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium text-scout-text">
+          <span className="truncate text-label font-medium text-scout-text">
             {agent.description}
           </span>
-          <span className="shrink-0 text-[11px] text-scout-muted">
+          <span className="shrink-0 text-micro text-scout-muted">
             {statusLabel(agent.status)}
           </span>
-          {elapsed && <span className="shrink-0 text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}
+          {elapsed && <span className="shrink-0 text-micro tabular-nums text-scout-muted">{elapsed}</span>}
         </div>
-        <div className="mt-0.5 line-clamp-2 text-[12px] text-scout-muted">
+        <div className="mt-0.5 line-clamp-2 text-caption text-scout-muted">
           {agent.summary || agent.last_activity || agent.status}
         </div>
       </div>
@@ -126,9 +120,36 @@ function TerminalTaskRow({ task, onStop }: { task: TaskEvent; onStop?: () => Pro
   const elapsed = elapsedLabel(task.started_at ?? task.created_at, task.finished_at, now);
   const [stopping, setStopping] = useState(false);
   return (
-    <div className="flex items-start gap-2.5 rounded-xl px-2.5 py-2">
-      {live ? <ActivityOrb activity="working" label={`${task.title} is running`} className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
-      <div className="min-w-0 flex-1"><div className="flex gap-2"><span className="truncate text-[13px] font-medium text-scout-text">{task.title}</span><span className="text-[11px] text-scout-muted">{live ? "running" : task.status}</span>{elapsed && <span className="ml-auto text-[11px] tabular-nums text-scout-muted">{elapsed}</span>}{live && onStop && <button type="button" className="rounded p-1 text-scout-muted hover:bg-scout-lift hover:text-scout-text disabled:opacity-50" title="Stop command" disabled={stopping} onClick={async () => { setStopping(true); try { await onStop(); } finally { setStopping(false); } }}><Square size={13} /></button>}</div><div className="line-clamp-2 text-[12px] text-scout-muted">{task.summary || task.result_preview || "Running command"}</div></div>
+    <div className="flex items-start gap-2.5 rounded-card px-2.5 py-2">
+      {live ? <ActivityOrb className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-label font-medium text-scout-text">{task.title}</span>
+          <span className="shrink-0 text-micro text-scout-muted">{live ? "running" : task.status}</span>
+          {elapsed && (
+            <span className="ml-auto shrink-0 text-micro tabular-nums text-scout-muted">{elapsed}</span>
+          )}
+          {live && onStop && (
+            <IconButton
+              label="Stop command"
+              disabled={stopping}
+              onClick={async () => {
+                setStopping(true);
+                try {
+                  await onStop();
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
+              <Square size={13} />
+            </IconButton>
+          )}
+        </div>
+        <div className="line-clamp-2 text-caption text-scout-muted">
+          {task.summary || task.result_preview || "Running command"}
+        </div>
+      </div>
     </div>
   );
 }
@@ -324,65 +345,43 @@ export function AgentsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
-      <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-scout-hairline-faint px-3">
-        {inDetail ? (
-          <button
-            type="button"
-            className={headerIconButtonClass}
-            onClick={onBack}
-            title="Back to agents"
-          >
-            <ArrowLeft size={16} />
-          </button>
-        ) : (
-          <Bot size={16} className="text-scout-muted" />
-        )}
-        <div className="min-w-0 flex-1">
-          <span className="truncate text-[13px] font-semibold text-scout-text">
-            {inDetail ? detail!.description : "Tasks"}
-          </span>
-        </div>
-        {inDetail && live && (
-          <button
-            type="button"
-            className={headerIconButtonClass}
-            title="Stop agent"
-            disabled={stopping}
-            onClick={async () => {
-              setStopping(true);
-              try {
-                await onStop(detail!.agent_id);
-              } finally {
-                setStopping(false);
-              }
-            }}
-          >
-            <Square size={14} />
-          </button>
-        )}
-        {onToggleExpand && (
-          <button
-            type="button"
-            className={headerIconButtonClass}
-            onClick={onToggleExpand}
-            title={expanded ? "Collapse" : "Expand"}
-          >
-            {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-          </button>
-        )}
-        <button
-          type="button"
-          className={headerIconButtonClass}
-          onClick={onClose}
-          title="Close"
-        >
-          <X size={16} />
-        </button>
-      </div>
+      <PanelHeader
+        icon={
+          inDetail ? (
+            <IconButton label="Back to agents" onClick={onBack} className="-ml-1">
+              <ArrowLeft size={16} />
+            </IconButton>
+          ) : (
+            <Bot size={16} />
+          )
+        }
+        title={inDetail ? detail!.description : "Tasks"}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
+        onClose={onClose}
+        actions={
+          inDetail && live ? (
+            <IconButton
+              label="Stop agent"
+              disabled={stopping}
+              onClick={async () => {
+                setStopping(true);
+                try {
+                  await onStop(detail!.agent_id);
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
+              <Square size={14} />
+            </IconButton>
+          ) : undefined
+        }
+      />
 
       {!inDetail && (
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
-          <div className="px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-scout-muted">
+          <div className="sticky top-0 z-10 px-2 pb-1.5 pt-1 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
             Active
           </div>
           {active.length ? (
@@ -394,12 +393,10 @@ export function AgentsPanel({
               />
             ))
           ) : (
-            <div className="px-2.5 py-2 text-[12px] text-scout-muted">
-              Nothing running
-            </div>
+            <EmptyState size="sm" body="Nothing running right now." />
           )}
           {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => <TerminalTaskRow key={task.task_id} task={task} onStop={onStopTerminal ? () => onStopTerminal(task.task_id) : undefined} />)}
-          <div className="mt-4 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-scout-muted">
+          <div className="sticky top-0 z-10 mt-4 px-2 pb-1.5 pt-1 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
             Done{done.length ? ` · ${done.length}` : ""}
           </div>
           {done.length ? (
@@ -411,9 +408,7 @@ export function AgentsPanel({
               />
             ))
           ) : (
-            <div className="px-2.5 py-2 text-[12px] text-scout-muted">
-              No finished agents yet
-            </div>
+            <EmptyState size="sm" body="No finished agents yet." />
           )}
           {terminalTasks.filter((task) => !["running", "queued"].includes(task.status)).map((task) => <TerminalTaskRow key={task.task_id} task={task} />)}
         </div>
@@ -437,21 +432,27 @@ export function AgentsPanel({
           />
           <div className="shrink-0 border-t border-scout-hairline-faint bg-scout-canvas/95 p-2.5">
             {error && (
-              <div className="mb-1.5 text-[12px] text-scout-error">{error}</div>
+              <div
+                className="mb-1.5 rounded-btn border border-scout-error/25 bg-scout-error-muted px-2.5 py-1.5 text-caption text-scout-error"
+                role="alert"
+              >
+                {error}
+              </div>
             )}
             {canMessage ? (
               <div
-                className={`relative flex flex-col overflow-hidden rounded-[20px] border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${
+                className={`relative flex flex-col overflow-hidden rounded-hero border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-2 focus-within:ring-scout-muted/35 ${
                   sending ? "opacity-70" : ""
                 }`}
               >
                 <textarea
                   ref={inputRef}
+                  aria-label={live ? "Redirect this agent" : "Follow up with this agent"}
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   rows={2}
                   placeholder={live ? "Redirect or add instructions…" : "Follow up with this agent…"}
-                  className="min-h-[44px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-[13px] leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
+                  className="min-h-[44px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-label leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -476,7 +477,7 @@ export function AgentsPanel({
                 </div>
               </div>
             ) : (
-              <div className="rounded-xl border border-scout-hairline-faint bg-scout-panel px-3 py-2 text-[12px] text-scout-muted">
+              <div className="rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2 text-caption text-scout-muted">
                 This agent’s context has expired.
               </div>
             )}
@@ -508,16 +509,16 @@ export function SubagentStatusStrip({
     <button
       type="button"
       onClick={onOpen}
-      className="mx-auto mb-1 flex w-full max-w-[46rem] items-center gap-2 px-4 text-left text-[12px] text-scout-muted hover:text-scout-text"
+      className="mx-auto mb-1 flex w-full max-w-[46rem] items-center gap-2 px-4 text-left text-caption text-scout-muted hover:text-scout-text"
     >
-      <ActivityOrb activity="working" label={label} />
+      <ActivityOrb />
       <span className="truncate">{label}</span>
       {active.length === 1 && (
         <span className="shrink-0 tabular-nums text-scout-muted">
           {elapsedLabel(active[0].created_at, undefined, now)}
         </span>
       )}
-      <span className="shrink-0 text-scout-accent">View</span>
+      <span className="shrink-0 text-scout-accent-cta">View</span>
     </button>
   );
 }

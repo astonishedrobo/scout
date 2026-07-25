@@ -97,23 +97,23 @@ export function ArtifactCards({
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <>
-                  <Icon size={18} style={{ color: "#a78bfa" }} className="relative" />
-                </>
+                // This hex was a hand-copied --scout-lavender, so it did not
+                // desaturate with the (default) soft theme.
+                <Icon size={18} className="relative text-scout-lavender" />
               )}
             </span>
             <span className="flex min-w-0 flex-1 items-center">
               <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-scout-text">
+                <span className="block truncate text-label font-semibold text-scout-text">
                   {artifact.title}
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-scout-muted">
+                <span className="mt-0.5 block truncate text-caption text-scout-muted">
                   {artifactKind(artifact)} · {formatSize(artifact.size)}
                 </span>
               </span>
             </span>
             <span className="flex shrink-0 items-center">
-              <span className="inline-flex rounded-btn px-2.5 py-1.5 text-xs font-semibold text-scout-muted transition-colors group-hover:bg-scout-lavender-muted group-hover:text-scout-text">
+              <span className="inline-flex rounded-btn px-2.5 py-1.5 text-caption font-semibold text-scout-muted transition-colors group-hover:bg-scout-lavender-muted group-hover:text-scout-text">
                 Open
               </span>
             </span>

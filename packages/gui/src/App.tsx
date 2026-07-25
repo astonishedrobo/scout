@@ -10,21 +10,20 @@ import { useSubagents } from "./hooks/useSubagents";
 import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent } from "scout-core";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { BootScreen } from "./components/BootScreen";
+import { ServerErrorScreen } from "./components/ServerErrorScreen";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView, WelcomeContent, SuggestionChips } from "./components/ChatView";
 import { InputBar } from "./components/InputBar";
 import { PixelPet } from "./components/PixelPet";
 import { WelcomeScene } from "./components/WelcomeScene";
 import { ApprovalDock } from "./components/ApprovalDock";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsSurface, type SettingsSectionId } from "./components/SettingsSurface";
 import { InitWizard } from "./components/InitWizard";
 import { HelpDialog } from "./components/HelpDialog";
-import { WarningBanner } from "./components/WarningBanner";
-import { ErrorBanner } from "./components/ErrorBanner";
+import { ErrorBanner, WarningBanner } from "./components/ui/Banner";
 import { useAuth } from "./hooks/useAuth";
 import { useUploads } from "./hooks/useUploads";
 import { Login } from "./components/Login";
-import { AdminPanel } from "./components/AdminPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { UploadButton } from "./components/UploadButton";
 import { UserInputCard } from "./components/UserInputCard";
@@ -41,6 +40,27 @@ import {
   headerActionButtonClass,
   headerActionIdleClass,
 } from "./components/ui/headerControls";
+
+/** Sections whose canonical URL is `/admin` rather than `/settings`. */
+const ADMIN_SECTIONS = new Set<SettingsSectionId>([
+  "files",
+  "users",
+  "execution",
+  "mcp",
+  "config",
+]);
+
+/** Allow-list for the `?tab=` deep link, across both route bases. */
+const SETTINGS_SECTION_IDS = new Set<string>([
+  "general",
+  "appearance",
+  "preferences",
+  "memories",
+  "shortcuts",
+  "connections",
+  "models",
+  ...ADMIN_SECTIONS,
+]);
 
 export function App() {
   const { baseUrl, isReady, isMultiUser, error: serverError, warnings: serverWarnings } = useServer();
@@ -179,12 +199,11 @@ export function App() {
   } = usePanelPrefs();
 
   const isAdmin = !!user?.is_admin;
+  // Settings and Admin are one surface now, so one open flag and one section.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "memories" | "integrations">("general");
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<"files" | "users" | "execution" | "mcp" | "config">("files");
   const [operationError, setOperationError] = useState<string | null>(null);
   const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
   const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
@@ -195,26 +214,28 @@ export function App() {
   const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
 
   const chatRoute = useCallback(() => sessionRef.current ? `/#/c/${sessionRef.current}` : "/#/", []);
-  const openSettingsRoute = useCallback((tab: "general" | "models" | "memories" | "integrations" = "general") => {
-    setAdminOpen(false);
-    setSettingsTab(tab);
-    setSettingsOpen(true);
-    window.history.pushState({}, "", `/settings?tab=${encodeURIComponent(tab)}`);
-  }, []);
-  const openAdminRoute = useCallback((tab: "files" | "users" | "execution" | "mcp" | "config" = "files") => {
-    setSettingsOpen(false);
-    setAdminOpen(true);
-    setAdminTab(tab);
-    window.history.pushState({}, "", `/admin?tab=${encodeURIComponent(tab)}`);
-  }, []);
+  // `/settings` and `/admin` both open the same surface; the base keeps matching
+  // the section so existing links and bookmarks still resolve.
+  const settingsUrl = useCallback(
+    (section: SettingsSectionId) =>
+      `${ADMIN_SECTIONS.has(section) ? "/admin" : "/settings"}?tab=${encodeURIComponent(section)}`,
+    [],
+  );
+  const openSettingsRoute = useCallback(
+    (section: SettingsSectionId = "general") => {
+      setSettingsSection(section);
+      setSettingsOpen(true);
+      window.history.pushState({}, "", settingsUrl(section));
+    },
+    [settingsUrl],
+  );
+  const openAdminRoute = useCallback(
+    (section: SettingsSectionId = "files") => openSettingsRoute(section),
+    [openSettingsRoute],
+  );
   const closeSettingsRoute = useCallback(() => {
     setSettingsOpen(false);
-    setSettingsTab("general");
-    window.history.pushState({}, "", chatRoute());
-  }, [chatRoute]);
-  const closeAdminRoute = useCallback(() => {
-    setAdminOpen(false);
-    setAdminTab("files");
+    setSettingsSection("general");
     window.history.pushState({}, "", chatRoute());
   }, [chatRoute]);
 
@@ -412,6 +433,18 @@ export function App() {
     [clearUserInput, handleSubmit],
   );
 
+  const handleLogout = useCallback(() => {
+    // Clear chat state BEFORE dropping the token: otherwise the next login
+    // briefly renders the previous user's transcript.
+    reset();
+    if (sessionRef.current) clearSession(sessionRef.current);
+    sessionRef.current = null;
+    setCurrentSessionId(null);
+    setActiveArtifact(null);
+    setActiveFileChanges(null);
+    logout();
+  }, [reset, clearSession, setCurrentSessionId, logout]);
+
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
@@ -478,26 +511,16 @@ export function App() {
         : window.location.hash;
       const [route, query = ""] = routeLocation.replace(/^#/, "").split("?");
       const params = new URLSearchParams(query);
-      if (route === "/admin") {
-        setSettingsOpen(false);
-        setAdminOpen(true);
-        const adminRouteTab = params.get("tab");
-        if (["files", "users", "execution", "mcp", "config"].includes(adminRouteTab ?? "")) {
-          setAdminTab(adminRouteTab as "files" | "users" | "execution" | "mcp" | "config");
-        }
-        return;
-      }
-      if (route === "/settings") {
-        setAdminOpen(false);
+      if (route === "/admin" || route === "/settings") {
         setSettingsOpen(true);
-        const settingsRouteTab = params.get("tab");
-        if (["general", "models", "memories", "integrations"].includes(settingsRouteTab ?? "")) {
-          setSettingsTab(settingsRouteTab as "general" | "models" | "memories" | "integrations");
-        }
+        const requested = params.get("tab") ?? "";
+        // `integrations` was the old id for the per-user connections tab; keep
+        // existing links working.
+        const section = requested === "integrations" ? "connections" : requested;
+        if (SETTINGS_SECTION_IDS.has(section)) setSettingsSection(section as SettingsSectionId);
         return;
       }
       setSettingsOpen(false);
-      setAdminOpen(false);
       const match = hash.match(/^#\/c\/(.+)$/);
       if (match) {
         const sid = match[1];
@@ -627,23 +650,28 @@ export function App() {
   );
 
   const displayError = serverError || chatError || operationError || approvalModeError;
-  const isWelcome = isReady && messages.length === 0 && !chatBusy;
+  const loadingCurrentSession = !!currentSessionId && isSessionLoading(currentSessionId);
+  const isWelcome = isReady && messages.length === 0 && !chatBusy && !loadingCurrentSession;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
   const sessionTitle =
     rawTitle && !["New chat", "New session"].includes(rawTitle)
       ? rawTitle
       : "New chat";
 
+  if (serverError) {
+    return <ServerErrorScreen error={serverError} />;
+  }
+
   // Blank boot screen while we don't yet know what to render — server still
   // connecting or auth state unknown. Prevents the chat shell flashing before
   // the login screen (or before a restored session).
-  if (!isReady && !serverError) {
+  if (!isReady) {
     return <BootScreen />;
   }
 
-  if (isReady && isMultiUser && !token && !serverError) {
+  if (isReady && isMultiUser && !token) {
     return (
-      <div className="flex h-screen flex-col">
+      <div className="flex h-dvh flex-col">
         <WarningBanner warnings={serverWarnings} />
         <Login onLogin={login} onRegister={register} error={authError || null} />
       </div>
@@ -652,7 +680,7 @@ export function App() {
 
   // Logged in (or single-user), but the initial route hasn't resolved yet —
   // keep the boot screen up instead of flashing the home screen.
-  if (routeBooting && !serverError) {
+  if (routeBooting) {
     return <BootScreen />;
   }
 
@@ -699,7 +727,7 @@ export function App() {
               <Bot size={15} />
               <span className="hidden sm:inline">Tasks</span>
               {activeSubagents.length > 0 && (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-scout-accent/20 px-1 text-[10px] font-semibold text-scout-accent">
+                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-scout-accent-cta/20 px-1 text-micro font-semibold text-scout-accent-cta">
                   {activeSubagents.length}
                 </span>
               )}
@@ -743,7 +771,7 @@ export function App() {
             onRenameSession={renameSession}
             onDeleteSession={handleDeleteSession}
             hasModels={models.length > 0}
-            onLogout={logout}
+            onLogout={handleLogout}
             username={user?.username}
             isMultiUser={isMultiUser}
             isAdmin={isAdmin}
@@ -864,7 +892,6 @@ export function App() {
                   approvalMode={approvalMode}
                   onSelectApprovalMode={setApprovalMode}
                   approvalModeChanging={approvalModeChanging}
-                  isMultiUser={isMultiUser}
                   token={token}
                   uploadingCount={activeCount}
                   onUpload={isMultiUser ? uploadFiles : undefined}
@@ -974,7 +1001,6 @@ export function App() {
                   pendingSteers={pendingSteers}
                   onActivateSteer={(steerId) => { void activateSteer(steerId); }}
                   onCancelSteer={(steerId) => { void cancelSteer(steerId); }}
-                  isMultiUser={isMultiUser}
                   token={token}
                   uploadingCount={activeCount}
                   onUpload={isMultiUser ? uploadFiles : undefined}
@@ -988,31 +1014,26 @@ export function App() {
         </div>
       </WorkspaceShell>
 
-      <SettingsPanel
+      <SettingsSurface
         open={settingsOpen}
         baseUrl={baseUrl}
         isMultiUser={isMultiUser}
+        isAdmin={isAdmin}
         token={token}
-        initialTab={settingsTab}
-        onTabChange={(tab) => { window.history.replaceState({}, "", `/settings?tab=${encodeURIComponent(tab)}`); }}
+        initialSection={settingsSection}
+        onSectionChange={(section) => {
+          setSettingsSection(section);
+          window.history.replaceState({}, "", settingsUrl(section));
+        }}
         onClose={() => {
           closeSettingsRoute();
           reloadConfig();
         }}
       />
 
-      <InitWizard open={initOpen} baseUrl={baseUrl} onClose={() => setInitOpen(false)} />
+      <InitWizard open={initOpen} baseUrl={baseUrl} token={token} onClose={() => setInitOpen(false)} />
 
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-
-      <AdminPanel
-        open={adminOpen}
-        onClose={closeAdminRoute}
-        baseUrl={baseUrl}
-        token={token}
-        initialTab={adminTab}
-        onTabChange={(tab) => { window.history.replaceState({}, "", `/admin?tab=${encodeURIComponent(tab)}`); }}
-      />
     </>
   );
 }

@@ -46,6 +46,10 @@ export function AnchoredPopover({
       if (!v) onClose();
     },
     placement,
+    // `fixed`, not the default `absolute`: this is portaled to <body>, so
+    // absolute coordinates resolve against the document and drift once the page
+    // behind it is scrolled. (Same bug the tooltip had.)
+    strategy: "fixed",
     whileElementsMounted: autoUpdate,
     middleware: [
       offset(6),

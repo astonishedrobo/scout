@@ -5,18 +5,26 @@ import { PixelPet } from "./PixelPet";
  *  should never flash a caption on their way past. */
 const CAPTION_DELAY_MS = 600;
 
+/** Past this, "Connecting…" stops being informative and starts looking hung. */
+const STALLED_MS = 10_000;
+
 /** Blank theme-aware screen for every in-between state (server connecting,
  * auth unknown, session restoring). Just the pet, front and center. */
 export function BootScreen() {
   const [showCaption, setShowCaption] = useState(false);
+  const [stalled, setStalled] = useState(false);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setShowCaption(true), CAPTION_DELAY_MS);
-    return () => window.clearTimeout(timer);
+    const caption = window.setTimeout(() => setShowCaption(true), CAPTION_DELAY_MS);
+    const stall = window.setTimeout(() => setStalled(true), STALLED_MS);
+    return () => {
+      window.clearTimeout(caption);
+      window.clearTimeout(stall);
+    };
   }, []);
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-3 bg-scout-canvas">
+    <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-scout-canvas">
       <PixelPet working inline size={76} hopEveryMs={2400} />
       {/* Reserve the row so the caption appearing does not shift the pet. */}
       <p
@@ -25,8 +33,18 @@ export function BootScreen() {
         }`}
         aria-live="polite"
       >
-        {showCaption ? "Connecting…" : ""}
+        {stalled ? "Still connecting…" : showCaption ? "Connecting…" : ""}
       </p>
+      {/* After ten seconds this is no longer a slow boot, it is probably stuck. */}
+      {stalled && (
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="text-caption font-semibold text-scout-text underline underline-offset-2 transition-opacity hover:opacity-80"
+        >
+          Reload
+        </button>
+      )}
     </div>
   );
 }

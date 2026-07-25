@@ -1,7 +1,9 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { IconButton } from "./IconButton";
 import { usePresence } from "../../hooks/usePresence";
+import { useDialogShell } from "../../hooks/useDialogShell";
 import { EXIT_MS } from "../../motion";
 
 interface CenterModalProps {
@@ -34,29 +36,9 @@ export function CenterModal({
   const panelRef = useRef<HTMLDivElement>(null);
   const { mounted, state } = usePresence(open, EXIT_MS.panel);
 
-  // Deliberately keyed on `open`, NOT `mounted`: the cleanup releases the body
-  // scroll lock and restores focus, and both must happen when the exit STARTS.
-  // Keyed on `mounted` the page would stay scroll-locked and focus would land
-  // ~180ms after the modal is already visually gone.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && closeOnEscape) {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-      prev?.focus();
-    };
-  }, [open, onClose, closeOnEscape]);
+  // Initial focus, scroll lock, focus restore, Escape and Tab containment all
+  // live in useDialogShell so this shell and RightDrawer cannot diverge.
+  useDialogShell(open, panelRef, onClose, closeOnEscape);
 
   if (!mounted) return null;
 
@@ -86,18 +68,14 @@ export function CenterModal({
         {(title || showClose) && (
           <div className="flex items-center justify-between px-5 py-3 border-b border-scout-hairline-faint shrink-0">
             {title ? (
-              <h2 className="text-sm font-medium text-scout-text">{title}</h2>
+              <h2 className="text-label font-medium text-scout-text">{title}</h2>
             ) : (
               <span />
             )}
             {showClose && (
-              <button
-                onClick={onClose}
-                className="p-1 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 transition-colors"
-                aria-label="Close"
-              >
+              <IconButton label="Close" onClick={onClose}>
                 <X size={18} />
-              </button>
+              </IconButton>
             )}
           </div>
         )}

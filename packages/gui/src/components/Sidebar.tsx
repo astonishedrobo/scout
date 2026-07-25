@@ -22,6 +22,7 @@ import { useExitingItems } from "../hooks/useExitingItems";
 import { EXIT_MS } from "../motion";
 import { PixelMap } from "./PixelArt";
 import { Skeleton } from "./ui/Skeleton";
+import { IconButton } from "./ui/IconButton";
 
 interface SidebarProps {
   onNewChat: () => void;
@@ -144,14 +145,13 @@ export function Sidebar({
     <div className="flex h-full w-[252px] flex-col overflow-hidden bg-transparent">
       <div className="px-3 pb-2.5">
         <div className="mb-2 flex h-12 items-center justify-between">
-          <div className="min-w-0 font-display text-[16px] font-semibold tracking-[-0.035em] text-scout-text">Scout</div>
-          <button
+          <div className="min-w-0 font-display text-body font-semibold tracking-[-0.035em] text-scout-text">Scout</div>
+          <IconButton
             onClick={onToggleTheme}
-            className="rounded-btn p-2 text-scout-muted transition-colors hover:bg-scout-lift/80 hover:text-scout-text"
-            title={theme === "light" ? "Return to your selected dark mode" : "Switch to light mode"}
+            label={theme === "light" ? "Return to your selected dark mode" : "Switch to light mode"}
           >
             {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
-          </button>
+          </IconButton>
         </div>
 
         <Button
@@ -171,7 +171,7 @@ export function Sidebar({
           <div className="flex items-start gap-2">
             <AlertTriangle size={14} className="text-scout-warning mt-0.5 shrink-0" />
             <div>
-              <p className="text-xs font-medium text-scout-text">No LLM configured</p>
+              <p className="text-caption font-medium text-scout-text">No LLM configured</p>
               <p className="text-caption text-scout-muted mt-0.5">
                 Open{" "}
                 <button onClick={onOpenSettings} className="underline hover:text-scout-text transition-colors">
@@ -211,14 +211,19 @@ export function Sidebar({
         ) : (
           groupSessions(visibleSessions).map((group) => (
           <div key={group.label} className="mb-1.5">
-          <p className="px-1 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-scout-muted/65">
+          <p className="sticky top-0 z-10 px-1 pb-1.5 pt-2.5 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
             {group.label}
           </p>
           <div className="space-y-0.5">
             {group.items.map((s) => (
+              /* The row's click target is an overlay <button> rather than an
+                 onClick on this container: the row contains its own edit/delete
+                 buttons, which cannot legally nest inside another button. The
+                 overlay sits behind the content, so it is keyboard-reachable
+                 and gets the global focus ring across the whole row. */
               <div
                 key={s.sessionId}
-                className={`group flex cursor-pointer items-center rounded-btn px-2.5 py-2 text-sm transition-colors
+                className={`group relative flex items-center rounded-btn px-2.5 py-2 text-label transition-colors
                   ${s.sessionId === currentSessionId
                     ? "bg-scout-lift"
                     : "hover:bg-scout-lift/65"
@@ -227,16 +232,22 @@ export function Sidebar({
                     ? "animate-collapse-out pointer-events-none"
                     : ""
                   }`}
-                onClick={() => onResumeSession(s.sessionId)}
               >
-                <div className="flex-1 min-w-0">
+                <button
+                  type="button"
+                  className="absolute inset-0 rounded-btn"
+                  aria-current={s.sessionId === currentSessionId ? "true" : undefined}
+                  aria-label={`Open conversation: ${s.title}`}
+                  onClick={() => onResumeSession(s.sessionId)}
+                />
+                <div className="pointer-events-none relative flex-1 min-w-0">
                   {editingId === s.sessionId ? (
                     <input
                       autoFocus
                       value={editingTitle}
                       maxLength={80}
                       aria-label="Conversation title"
-                      className="w-full rounded-md border border-scout-hairline bg-scout-bg px-1.5 py-0.5 text-[13px] font-medium text-scout-text outline-none focus:border-scout-muted"
+                      className="pointer-events-auto relative w-full rounded-btn border border-scout-hairline bg-scout-bg px-1.5 py-0.5 text-label font-medium text-scout-text outline-none focus:border-scout-muted"
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => setEditingTitle(e.target.value)}
                       onBlur={() => void saveTitle(s)}
@@ -247,13 +258,13 @@ export function Sidebar({
                       }}
                     />
                   ) : (
-                    <span className="block truncate text-[13px] font-medium text-scout-text/95">{s.title}</span>
+                    <span className="block truncate text-label font-medium text-scout-text/95">{s.title}</span>
                   )}
                   <span className="text-caption text-scout-muted">{timeAgo(s.updatedAt)}</span>
                   {s.parentSessionId && (
                     <button
                       type="button"
-                      className="text-caption text-scout-muted hover:text-scout-text underline-offset-2 hover:underline transition-colors"
+                      className="pointer-events-auto relative text-caption text-scout-muted hover:text-scout-text underline-offset-2 hover:underline transition-colors"
                       onClick={(e) => {
                         e.stopPropagation();
                         onResumeSession(s.parentSessionId!);
@@ -263,27 +274,28 @@ export function Sidebar({
                     </button>
                   )}
                 </div>
-                <button
+                <IconButton
+                  label="Edit title"
+                  className="hover-reveal relative"
                   onClick={(e) => {
                     e.stopPropagation();
                     setEditingId(s.sessionId);
                     setEditingTitle(s.title);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift transition-colors"
-                  title="Edit title"
                 >
                   <Pencil size={13} />
-                </button>
-                <button
+                </IconButton>
+                <IconButton
+                  label="Delete session"
+                  tone="danger"
+                  className="hover-reveal relative"
                   onClick={(e) => {
                     e.stopPropagation();
                     setDeleteTarget(s);
                   }}
-                  className="hover-reveal p-2 -m-0.5 rounded-btn text-scout-muted hover:text-scout-error hover:bg-scout-lift transition-colors"
-                  title="Delete session"
                 >
                   <Trash2 size={13} />
-                </button>
+                </IconButton>
               </div>
             ))}
           </div>
@@ -346,7 +358,7 @@ export function Sidebar({
 
         <button
           onClick={() => setBottomExpanded((p) => !p)}
-          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-btn text-sm text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
+          className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-btn text-label text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
           title="Account & app menu"
         >
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-pill border border-scout-hairline-faint bg-scout-input-bg">
@@ -358,7 +370,7 @@ export function Sidebar({
               <CircleUserRound size={13} className="text-scout-muted" />
             )}
           </div>
-          <span className="flex-1 text-left text-sm font-medium truncate capitalize">
+          <span className="flex-1 text-left text-label font-medium truncate capitalize">
             {username ?? "Account"}
           </span>
           <ChevronUp
@@ -375,7 +387,7 @@ export function Sidebar({
         maxWidth="sm"
       >
         <div className="px-5 py-4 space-y-4">
-          <p className="text-sm text-scout-muted">
+          <p className="text-label text-scout-muted">
             Delete &ldquo;{deleteTarget?.title}&rdquo;? This cannot be undone.
           </p>
           <div className="flex gap-2 justify-end">
@@ -404,7 +416,7 @@ function BottomNavItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-btn text-sm font-medium text-scout-text hover:bg-scout-lift/80 transition-colors"
+      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-btn text-label font-medium text-scout-text hover:bg-scout-lift/80 transition-colors"
     >
       {icon}
       {label}

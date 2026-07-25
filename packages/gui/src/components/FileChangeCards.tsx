@@ -1,3 +1,4 @@
+import { PathLabel } from "./PathLabel";
 import { Check, FilePenLine, RotateCcw, GitCompareArrows } from "lucide-react";
 import type { FileChangeSet } from "scout-core";
 
@@ -27,30 +28,46 @@ export function FileChangeCards({
         return (
           <div
             key={changeSet.id}
-            className="flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-peach px-3.5 py-3"
+            className={`flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint px-3.5 py-3 ${
+              changeSet.undone ? "bg-scout-success-muted" : "bg-scout-card-peach"
+            }`}
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-btn bg-[#f0a058]/15 text-[#f0a058]">
-              <FilePenLine size={17} />
+            <span
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-btn ${
+                changeSet.undone
+                  ? "bg-scout-success/15 text-scout-success"
+                  : "bg-scout-peach-muted text-scout-peach"
+              }`}
+            >
+              {changeSet.undone ? <Check size={17} /> : <FilePenLine size={17} />}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-scout-text">
+              <span className="block truncate text-label font-semibold text-scout-text">
                 {changeSet.undone ? "Undo applied" : `Edited ${count} file${count === 1 ? "" : "s"}`}
               </span>
-              <span className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-scout-muted">
+              <span className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-caption text-scout-muted">
                 {changeSet.entries.slice(0, 3).map((entry) => (
-                  <span key={entry.path} className="min-w-0 truncate">
-                    <span className={statusTone(entry.status)}>●</span> {entry.path}
+                  <span key={entry.path} className="flex min-w-0 items-baseline gap-1">
+                    <span className={`shrink-0 ${statusTone(entry.status)}`}>●</span>
+                    <PathLabel path={entry.path} />
                   </span>
                 ))}
-                {changeSet.entries.length > 3 && <span>+{changeSet.entries.length - 3} more</span>}
-                {changeSet.undone && <span className="font-medium text-scout-success">Workspace restored</span>}
+                {changeSet.entries.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => onReview(changeSet)}
+                    className="shrink-0 font-medium underline underline-offset-2 hover:text-scout-text"
+                  >
+                    +{changeSet.entries.length - 3} more
+                  </button>
+                )}
               </span>
             </span>
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => onReview(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-caption font-semibold text-scout-text hover:bg-scout-lift transition-colors"
               >
                 <GitCompareArrows size={13} />
                 Review
@@ -59,7 +76,7 @@ export function FileChangeCards({
                 type="button"
                 disabled={!reversible || !!changeSet.undone}
                 onClick={() => onUndo(changeSet)}
-                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-xs font-semibold text-scout-text hover:bg-scout-lift transition-colors disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex items-center gap-1.5 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/80 px-3 py-2 text-caption font-semibold text-scout-text hover:bg-scout-lift transition-colors disabled:cursor-not-allowed disabled:opacity-45"
                 title={reversible ? "Undo these file edits" : "This change is too large or binary to undo safely"}
               >
                 {changeSet.undone ? <Check size={13} /> : <RotateCcw size={13} />}

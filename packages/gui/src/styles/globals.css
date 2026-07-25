@@ -16,14 +16,19 @@
     position: absolute;
     z-index: 3;
     display: inline-flex;
-    height: 23px;
-    min-width: 23px;
+    /* 28px: the marker is the annotation's only hit target, and 23px was under
+       the minimum. */
+    height: 28px;
+    min-width: 28px;
     align-items: center;
     justify-content: center;
     border: 2px solid rgb(var(--scout-panel));
     border-radius: 9999px;
-    background: rgb(37 136 238);
-    color: white;
+    /* Was a hardcoded rgb(37 136 238) that appears in no theme palette — the
+       one element in the app that ignored theming entirely. It pairs with the
+       cyan highlight above. */
+    background: rgb(var(--scout-cyan));
+    color: rgb(var(--scout-text-inverse));
     font-size: 11px;
     font-weight: 700;
     line-height: 1;
@@ -41,6 +46,33 @@
   }
 
   .annotation-selection-action:hover { background: rgb(var(--scout-lift)); }
+}
+
+/*
+ * Theme swatches for the Appearance previews.
+ *
+ * A preview has to show a theme OTHER than the active one, so it cannot read
+ * the :root palette — which is why SettingsPanel hardcoded nine hex values that
+ * had already drifted from the real tokens (it showed a cream #faf5ec for a
+ * light canvas that is actually #f9fafb). These live here, beside the palettes
+ * they mirror, so the drift is visible in one file.
+ */
+@layer components {
+  .swatch-light {
+    --swatch-canvas: #f9fafb;
+    --swatch-panel: #ffffff;
+    --swatch-accent: #f5c518;
+  }
+  .swatch-dark {
+    --swatch-canvas: #131415;
+    --swatch-panel: #212224;
+    --swatch-accent: #facc15;
+  }
+  .swatch-soft {
+    --swatch-canvas: #232426;
+    --swatch-panel: #323336;
+    --swatch-accent: #c7c9cc;
+  }
 }
 
 @layer base {
@@ -111,13 +143,6 @@
     --scout-warning-muted: rgba(161, 98, 7, 0.12);
     --scout-cyan: 14 116 144;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-canvas);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(255, 255, 255, 0.55);
     --glass-bg-strong: rgba(255, 255, 255, 0.75);
     --glass-border: rgba(24, 27, 32, 0.08);
@@ -133,7 +158,23 @@
     --radius-card: 16px;
     --radius-btn: 10px;
     --text-body: 16px;
+    --text-prose: 15px;
+    --text-label: 13px;
     --text-caption: 12px;
+    --text-micro: 11px;
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Full-strength hues.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 120 127 138;
+    --scout-syn-keyword: 109 40 217;
+    --scout-syn-string: 21 128 61;
+    --scout-syn-number: 180 83 9;
+    --scout-syn-function: 29 78 216;
+    --scout-syn-type: 15 118 110;
+    --scout-syn-operator: 133 77 14;
+    --scout-syn-punctuation: 120 127 138;
   }
 
   /* Dark mode — neutral graphite with enough separation for navigation, but
@@ -175,13 +216,6 @@
     --scout-warning-muted: rgba(251, 191, 36, 0.12);
     --scout-cyan: 34 211 238;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-panel);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(22, 23, 26, 0.5);
     --glass-bg-strong: rgba(22, 23, 26, 0.72);
     --glass-border: rgba(255, 255, 255, 0.1);
@@ -197,7 +231,23 @@
     --radius-card: 16px;
     --radius-btn: 10px;
     --text-body: 16px;
+    --text-prose: 15px;
+    --text-label: 13px;
     --text-caption: 12px;
+    --text-micro: 11px;
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Full-strength hues.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 139 144 153;
+    --scout-syn-keyword: 196 164 255;
+    --scout-syn-string: 126 231 135;
+    --scout-syn-number: 255 171 112;
+    --scout-syn-function: 121 184 255;
+    --scout-syn-type: 110 231 221;
+    --scout-syn-operator: 246 196 118;
+    --scout-syn-punctuation: 143 148 157;
   }
 
   /* Soft gray — a neutral, low-contrast workspace for long sessions. */
@@ -237,13 +287,6 @@
     --scout-warning-muted: rgba(205, 194, 146, 0.14);
     --scout-cyan: 178 185 187;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-panel);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(40, 41, 43, 0.58);
     --glass-bg-strong: rgba(40, 41, 43, 0.76);
     --glass-border: rgba(255, 255, 255, 0.07);
@@ -257,7 +300,23 @@
     --radius-card: 12px;
     --radius-btn: 8px;
     --text-body: 16px;
+    --text-prose: 15px;
+    --text-label: 13px;
     --text-caption: 12px;
+    --text-micro: 11px;
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Held closer to neutral here to match the theme.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 143 146 150;
+    --scout-syn-keyword: 185 172 219;
+    --scout-syn-string: 162 197 162;
+    --scout-syn-number: 214 184 140;
+    --scout-syn-function: 160 186 212;
+    --scout-syn-type: 151 194 189;
+    --scout-syn-operator: 205 186 152;
+    --scout-syn-punctuation: 150 153 158;
   }
 
   * {
@@ -277,7 +336,7 @@
   }
 
   ::selection {
-    background: rgba(158, 158, 158, 0.25);
+    background: rgb(var(--scout-muted) / 0.28);
   }
 
   body {
@@ -288,7 +347,7 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     min-width: 320px;
-    min-height: 100vh;
+    min-height: 100dvh;
     overscroll-behavior: none;
   }
 
@@ -366,6 +425,27 @@
     letter-spacing: -0.02em;
   }
 
+  /* The rest of the scale. Before these existed, everything between caption and
+     body was an arbitrary `text-[Npx]` — 173 of them across seven sizes in the
+     10–16px band, plus text-xs/text-sm on top, so `text-[13px]` and `text-sm`
+     were each chosen ~60 times for visually identical results. */
+  .text-prose {
+    font-size: var(--text-prose);
+    line-height: 1.6;
+    letter-spacing: -0.01em;
+  }
+
+  .text-label {
+    font-size: var(--text-label);
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+  }
+
+  .text-micro {
+    font-size: var(--text-micro);
+    line-height: 1.4;
+  }
+
   /* Historically 300; light weights read as unfinished at UI sizes. */
   .font-light-ui {
     font-weight: 400;
@@ -376,6 +456,16 @@
   .hover-reveal {
     @apply opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity;
   }
+
+  /* Keeps the bottom-most surface clear of the iOS home bar / Android gesture
+     area. Adds to whatever padding the element already has. */
+  .safe-bottom {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  .safe-x {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
   @media (pointer: coarse) {
     .hover-reveal {
       opacity: 1;
@@ -383,7 +473,9 @@
   }
 
   .prose-scout pre {
-    @apply bg-scout-code-bg border border-scout-hairline-faint rounded-2xl p-4 overflow-x-auto;
+    /* Matches CodeBlock's shell (rounded-card + hairline) so a bare <pre> and a
+       fenced block are not two different treatments side by side. */
+    @apply bg-scout-code-bg border border-scout-hairline rounded-card p-4 overflow-x-auto;
   }
 
   /* CodeBlock shell already has border/radius — inner pre must stay flush with the header */
@@ -399,7 +491,7 @@
     @apply w-full border-collapse;
   }
   .prose-scout th {
-    @apply text-left font-medium border-b border-scout-border px-3 py-2 text-scout-text;
+    @apply text-left font-medium border-b border-scout-hairline px-3 py-2 text-scout-text;
   }
   .prose-scout td {
     @apply border-b px-3 py-2;
@@ -407,7 +499,7 @@
   }
 
   .prose-scout blockquote {
-    @apply border-l border-scout-border pl-4 italic text-scout-muted;
+    @apply border-l border-scout-hairline pl-4 italic text-scout-muted;
   }
 
   .prose-scout a {
@@ -443,7 +535,7 @@
     @apply my-1.5 leading-relaxed;
   }
   .prose-scout hr {
-    @apply border-scout-border my-4;
+    @apply border-scout-hairline my-4;
   }
 
   .artifact-document {

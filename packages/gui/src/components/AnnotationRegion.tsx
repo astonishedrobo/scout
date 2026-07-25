@@ -42,20 +42,67 @@ function textNodes(root: Node) {
   return nodes;
 }
 
+/**
+ * Collapsed-whitespace view of a string, plus a map from each normalized index
+ * back to the raw index it came from.
+ *
+ * Annotations are STORED whitespace-normalized (`captureSelection` collapses
+ * runs of whitespace), but the DOM text they must be found in is not — markdown
+ * rendering puts newlines and indentation inside the prose. Searching the raw
+ * text for a normalized quote therefore missed, and the miss was silent: the
+ * annotation disappeared from the transcript while still being listed in the
+ * composer's review panel.
+ */
+function normalizeWithMap(raw: string): { norm: string; map: number[] } {
+  let norm = "";
+  const map: number[] = [];
+  let inWhitespace = false;
+  for (let i = 0; i < raw.length; i++) {
+    if (/\s/.test(raw[i]!)) {
+      if (!inWhitespace && norm.length > 0) {
+        norm += " ";
+        map.push(i);
+      }
+      inWhitespace = true;
+      continue;
+    }
+    inWhitespace = false;
+    norm += raw[i];
+    map.push(i);
+  }
+  return { norm, map };
+}
+
 function makeRange(root: HTMLElement, quote: string, before = "", after = "") {
   const nodes = textNodes(root);
-  const text = nodes.map((node) => node.data).join("");
-  if (!quote || !text) return null;
-  let offset = -1;
-  if (before || after) {
-    const startAt = before ? Math.max(0, text.indexOf(before) + before.length) : 0;
-    const candidate = text.indexOf(quote, startAt);
-    if (candidate >= 0 && (!after || text.slice(candidate + quote.length).startsWith(after))) offset = candidate;
-  }
-  if (offset < 0) offset = text.indexOf(quote);
-  if (offset < 0) return null;
+  const raw = nodes.map((node) => node.data).join("");
+  if (!quote || !raw) return null;
 
-  const end = offset + quote.length;
+  const { norm, map } = normalizeWithMap(raw);
+  const needle = quote.replace(/\s+/g, " ").trim();
+  const normBefore = before.replace(/\s+/g, " ").trim();
+  const normAfter = after.replace(/\s+/g, " ").trim();
+  if (!needle) return null;
+
+  let normOffset = -1;
+  if (normBefore || normAfter) {
+    // Context anchoring first: a repeated phrase must be marked at the
+    // occurrence it was actually selected at, not at the first match.
+    const startAt = normBefore ? Math.max(0, norm.indexOf(normBefore) + normBefore.length) : 0;
+    const candidate = norm.indexOf(needle, startAt);
+    if (
+      candidate >= 0
+      && (!normAfter || norm.slice(candidate + needle.length).trimStart().startsWith(normAfter))
+    ) {
+      normOffset = candidate;
+    }
+  }
+  if (normOffset < 0) normOffset = norm.indexOf(needle);
+  if (normOffset < 0) return null;
+
+  const offset = map[normOffset]!;
+  const end = (map[normOffset + needle.length - 1] ?? map[map.length - 1]!) + 1;
+
   let cursor = 0;
   let startNode: Text | null = null;
   let startOffset = 0;
@@ -96,9 +143,11 @@ function selectionActionPosition(rect: DOMRect) {
 
 // Codex-style: the composer sits right next to the selection — just below it,
 // horizontally aligned with where the selection starts, always on-screen.
-function editorPositionFor(rect: DOMRect) {
+/** Fallback until the editor has been measured once. */
+const EDITOR_HEIGHT_ESTIMATE = 170;
+
+function editorPositionFor(rect: DOMRect, height: number) {
   const width = Math.min(520, viewportWidth() - 24);
-  const height = 170;
   const left = Math.max(12, Math.min(rect.left, viewportWidth() - width - 12));
   const below = rect.bottom + 10;
   const top = below + height <= window.innerHeight - 12
@@ -124,6 +173,11 @@ export function AnnotationRegion({
   const [comment, setComment] = useState("");
   const [markers, setMarkers] = useState<MarkerPosition[]>([]);
   const [editorAnchor, setEditorAnchor] = useState<DOMRect | null>(null);
+  // Measured, not assumed: the flip-above-the-selection decision used a
+  // hardcoded 170px guess at the editor's height, so a taller editor (a long
+  // comment) could be positioned off the bottom of the screen.
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [editorHeight, setEditorHeight] = useState(EDITOR_HEIGHT_ESTIMATE);
 
   const refreshMarkers = useCallback(() => {
     const root = rootRef.current;
@@ -139,14 +193,26 @@ export function AnnotationRegion({
 
   useLayoutEffect(() => {
     refreshMarkers();
-    const observer = new ResizeObserver(refreshMarkers);
+    // refreshMarkers rebuilds every Range and calls getClientRects() — far too
+    // expensive to run once per scroll event, which is what a bare listener on
+    // the capture phase did. Coalesce to one measurement per frame.
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        refreshMarkers();
+      });
+    };
+    const observer = new ResizeObserver(schedule);
     if (rootRef.current) observer.observe(rootRef.current);
-    window.addEventListener("resize", refreshMarkers);
-    window.addEventListener("scroll", refreshMarkers, true);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
     return () => {
+      if (frame) window.cancelAnimationFrame(frame);
       observer.disconnect();
-      window.removeEventListener("resize", refreshMarkers);
-      window.removeEventListener("scroll", refreshMarkers, true);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
     };
   }, [refreshMarkers]);
 
@@ -244,9 +310,27 @@ export function AnnotationRegion({
   }, [comment, editing, onAdd, onUpdate]);
 
   const editorPosition = useMemo(() => editing
-    ? editorPositionFor(editorAnchor ?? markers.find((item) => item.annotation.id === editing.id)?.marker ?? new DOMRect(16, 80, 0, 0))
+    ? editorPositionFor(
+      editorAnchor ?? markers.find((item) => item.annotation.id === editing.id)?.marker ?? new DOMRect(16, 80, 0, 0),
+      editorHeight,
+    )
     : null,
-  [editing, editorAnchor, markers]);
+  [editing, editorAnchor, markers, editorHeight]);
+
+  useLayoutEffect(() => {
+    if (!editing) {
+      setEditorHeight(EDITOR_HEIGHT_ESTIMATE);
+      return;
+    }
+    const element = editorRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const measured = element.getBoundingClientRect().height;
+      if (measured > 0) setEditorHeight((prev) => (Math.abs(prev - measured) < 1 ? prev : measured));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [editing]);
 
   const rootRect = rootRef.current?.getBoundingClientRect();
 
@@ -293,7 +377,7 @@ export function AnnotationRegion({
           data-no-annotation
           onMouseDown={(event) => event.preventDefault()}
           onClick={openNewEditor}
-          className="annotation-selection-action fixed z-[75] w-auto whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-bold"
+          className="annotation-selection-action fixed z-[75] w-auto whitespace-nowrap rounded-btn px-3 py-1.5 text-caption font-bold"
           style={selectionActionPosition(selection.rect)}
         >
           Add note
@@ -303,10 +387,12 @@ export function AnnotationRegion({
 
       {editing && editorPosition && createPortal(
         <div
+          ref={editorRef}
           data-no-annotation
           role="dialog"
+          aria-modal="true"
           aria-label={editing.id === "new" ? "Add annotation" : "Edit annotation"}
-          className="annotation-editor fixed z-[80] flex flex-col rounded-2xl border border-scout-hairline-faint bg-scout-panel p-3.5 shadow-pop"
+          className="annotation-editor fixed z-[80] flex flex-col rounded-card border border-scout-hairline-faint bg-scout-panel p-3.5 shadow-pop"
           style={editorPosition}
         >
           <textarea
@@ -322,7 +408,7 @@ export function AnnotationRegion({
             }}
             placeholder="Add an optional comment…"
             rows={3}
-            className="min-h-[72px] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1 text-[15px] leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
+            className="min-h-[72px] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1 text-prose leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
           />
           <div className="mt-2 flex items-center justify-between gap-2">
             <button
@@ -338,8 +424,8 @@ export function AnnotationRegion({
               <Trash2 size={16} />
             </button>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => { setEditing(null); setSelection(null); }} className="rounded-full border border-scout-hairline-faint bg-scout-lift px-4 py-1.5 text-sm font-medium text-scout-text hover:bg-scout-input-bg">Cancel</button>
-              <button type="button" onClick={save} className="rounded-full bg-scout-text px-4 py-1.5 text-sm font-semibold text-scout-bg hover:opacity-90">Save</button>
+              <button type="button" onClick={() => { setEditing(null); setSelection(null); }} className="rounded-full border border-scout-hairline-faint bg-scout-lift px-4 py-1.5 text-label font-medium text-scout-text hover:bg-scout-input-bg">Cancel</button>
+              <button type="button" onClick={save} className="rounded-full bg-scout-text px-4 py-1.5 text-label font-semibold text-scout-bg hover:opacity-90">Save</button>
             </div>
           </div>
         </div>,

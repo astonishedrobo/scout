@@ -9,7 +9,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -p tsconfig.cli.json",
+    "build": "node scripts/check-tokens.mjs && vite build && tsc -p tsconfig.cli.json",
+    "check:tokens": "node scripts/check-tokens.mjs",
     "preview": "vite preview",
     "start": "node dist/cli.js"
   },
@@ -24,6 +25,7 @@
     "lucide-react": "^0.468.0",
     "mermaid": "^11.16.0",
     "open": "^10.1.0",
+    "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",

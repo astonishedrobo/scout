@@ -51,6 +51,15 @@ function applyTheme(theme: Theme, animate = false) {
 
   root.classList.remove("dark", "soft", "light");
   root.classList.add(theme);
+  // Keep the native surfaces (form controls, scrollbars) and the mobile browser
+  // chrome in step with the app theme. index.html sets these pre-paint; without
+  // this they would stay on the *initial* theme after a toggle.
+  root.style.colorScheme = theme === "light" ? "light" : "dark";
+  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (themeColor) {
+    themeColor.content =
+      theme === "light" ? "#f9fafb" : theme === "soft" ? "#232426" : "#131415";
+  }
   localStorage.setItem("scout-theme", theme);
 }
 

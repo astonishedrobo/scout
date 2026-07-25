@@ -106,6 +106,25 @@ function sealSteps(steps: ToolStep[]): ToolStep[] {
   );
 }
 
+/**
+ * Whether a tool result represents a failure.
+ *
+ * The server has no error flag on `tool_result` — a tool that failed returns an
+ * ordinary result whose `output` carries the error — so this recognises the
+ * conventions the Python tools actually use (`python/src/scout/agent/tools.py`):
+ * a leading bracketed `[Error …]` / `[Access denied: …]` / `[File not found: …]`
+ * / `[… error: …]` marker, or an explicit `[REQUEST DENIED]`.
+ *
+ * Deliberately anchored to the start and to the bracket form: matching "error"
+ * anywhere would flag every successful grep for the word, and every test run
+ * that prints a passing assertion about errors.
+ */
+function toolFailed(output: string | undefined): boolean {
+  if (!output) return false;
+  const head = output.trimStart().slice(0, 200);
+  return /^\[(?:REQUEST DENIED|Access denied|File not found|Error\b|[A-Za-z ]*error:)/i.test(head);
+}
+
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
   if (event.type === "thinking") {
     const content = (event.content ?? "").trim();
@@ -173,7 +192,12 @@ function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
     const updated = [...steps];
     for (let i = updated.length - 1; i >= 0; i--) {
       if (updated[i].status === "executing" && updated[i].name === (event.name || updated[i].name)) {
-        updated[i] = { ...updated[i], status: "complete", output: event.output || updated[i].output };
+        const output = event.output || updated[i].output;
+        updated[i] = {
+          ...updated[i],
+          status: toolFailed(output) ? "failed" : "complete",
+          output,
+        };
         break;
       }
     }

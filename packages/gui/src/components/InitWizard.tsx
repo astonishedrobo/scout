@@ -2,21 +2,32 @@ import { useState, useCallback, useEffect } from "react";
 import { Loader2, Check, RotateCcw, Pencil, Eye, Save } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { CenterModal } from "./ui/CenterModal";
+import { ConfirmDialog, type ConfirmRequest } from "./ui/ConfirmDialog";
+import { Button } from "./ui/Button";
+import { Select, Textarea } from "./ui/Input";
 
 interface InitWizardProps {
   open: boolean;
   baseUrl: string;
+  /** Bearer token. Required in multi-user, where these routes are protected —
+   *  without it every call here 401s and the mount-time catch masks it. */
+  token?: string | null;
   onClose: () => void;
 }
 
 type Step = "loading" | "env" | "generating" | "preview" | "editing" | "saving" | "done" | "error";
 
-export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
+export function InitWizard({ open, baseUrl, token, onClose }: InitWizardProps) {
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
   const isDesktopMode =
     typeof navigator !== "undefined" &&
     navigator.userAgent.toLowerCase().includes("electron");
 
   const [step, setStep] = useState<Step>("loading");
+  const [applyingEnv, setApplyingEnv] = useState(false);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [content, setContent] = useState("");
   const [editContent, setEditContent] = useState("");
   const [error, setError] = useState("");
@@ -65,7 +76,7 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(`${baseUrl}/init-status`);
+        const resp = await fetch(`${baseUrl}/init-status`, { headers: authHeaders });
         if (!resp.ok) throw new Error("Failed to check status");
         const data = await resp.json();
         if (cancelled) return;
@@ -154,9 +165,27 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
     const res = await window.scoutDesktop.selectPythonEnv(env);
     if (showStatus) setDesktopEnvStatus(res.message);
     if (!res.ok) return false;
-    await fetch(`${baseUrl}/config/reload`, { method: "POST" }).catch(() => {});
+    await fetch(`${baseUrl}/config/reload`, { method: "POST", headers: authHeaders }).catch(() => {});
     return true;
   }, [selectedDesktopEnv, baseUrl, isDesktopMode]);
+
+  /**
+   * Regenerating replaces the skill from scratch, discarding any edits — it
+   * used to do that silently.
+   */
+  const confirmRegenerate = () => {
+    const edited = editContent.trim() && editContent.trim() !== content.trim();
+    if (!edited) {
+      void generate();
+      return;
+    }
+    setConfirmRequest({
+      title: "Regenerate the workspace skill?",
+      body: "Your unsaved edits are discarded and the skill is written again from scratch.",
+      confirmLabel: "Regenerate",
+      onConfirm: () => generate(),
+    });
+  };
 
   const generate = useCallback(async () => {
     setStep("generating");
@@ -168,7 +197,7 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
       }
       const resp = await fetch(`${baseUrl}/init-skill`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ directory_summary: "" }),
       });
       if (!resp.ok) {
@@ -228,7 +257,7 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
       const finalContent = withPythonEnvSection(text, selectedDesktopEnv);
       const resp = await fetch(`${baseUrl}/init-save`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ content: finalContent }),
       });
       if (!resp.ok) {
@@ -260,45 +289,55 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
         <div className="px-5 py-4">
           {isDesktopMode && (
             <div className="mb-4 p-3 rounded-btn border border-scout-hairline bg-scout-canvas/40">
-              <p className="text-xs text-scout-muted mb-2">
+              <p className="text-caption text-scout-muted mb-2">
                 Python runtime for this workspace
               </p>
               <div className="flex items-center gap-2">
-                <select
+                <Select
+                  size="md"
+                  aria-label="Python runtime for this workspace"
                   value={selectedDesktopEnv}
                   onChange={(e) => setSelectedDesktopEnv(e.target.value)}
-                  className="flex-1 bg-scout-input-bg border border-scout-hairline rounded-btn px-3 py-2
-                             text-sm text-scout-text outline-none focus:border-scout-text"
+                  className="flex-1"
                 >
                   {desktopEnvs.map((env) => (
                     <option key={`${env.type}:${env.value}`} value={`${env.type}:${env.value}`}>
                       {env.label}
                     </option>
                   ))}
-                </select>
-                <button
-                  onClick={() => applyDesktopEnv()}
-                  className="px-3 py-2 rounded-btn text-sm bg-scout-lift text-scout-text
-                             hover:bg-scout-border transition-colors"
+                </Select>
+                <Button
+                  variant="outlined"
+                  surface="panel"
+                  onClick={async () => {
+                    setApplyingEnv(true);
+                    try {
+                      await applyDesktopEnv();
+                    } finally {
+                      setApplyingEnv(false);
+                    }
+                  }}
+                  loading={applyingEnv}
+                  disabled={applyingEnv}
                 >
                   Apply
-                </button>
+                </Button>
               </div>
-              <p className="text-[11px] text-scout-muted mt-2">
+              <p className="text-micro text-scout-muted mt-2">
                 The selected runtime is auto-applied before Generate/Save.
               </p>
               {desktopEnvStatus && (
-                <p className="text-xs text-scout-muted mt-2">{desktopEnvStatus}</p>
+                <p className="text-caption text-scout-muted mt-2">{desktopEnvStatus}</p>
               )}
             </div>
           )}
 
           {step === "env" && (
             <div className="flex flex-col items-center justify-center py-10">
-              <p className="text-scout-text text-sm font-medium mb-1">
+              <p className="text-scout-text text-label font-medium mb-1">
                 Select a Python environment first
               </p>
-              <p className="text-scout-muted text-xs text-center max-w-md">
+              <p className="text-scout-muted text-caption text-center max-w-md">
                 This matches CLI behavior: choose runtime before generating workspace skills.
               </p>
             </div>
@@ -307,7 +346,7 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
           {(step === "loading" || step === "generating") && (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 size={32} className="animate-spin text-scout-text mb-3" />
-              <p className="text-scout-muted text-sm">
+              <p className="text-scout-muted text-label">
                 {step === "loading"
                   ? "Checking workspace..."
                   : "Analyzing project structure and generating workspace skills..."}
@@ -318,13 +357,13 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
           {step === "saving" && (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 size={32} className="animate-spin text-scout-text mb-3" />
-              <p className="text-scout-muted text-sm">Saving...</p>
+              <p className="text-scout-muted text-label">Saving...</p>
             </div>
           )}
 
           {step === "preview" && (
-            <div className="prose-scout text-sm">
-              <p className="text-scout-muted text-xs mb-3">
+            <div className="prose-scout text-label">
+              <p className="text-scout-muted text-caption mb-3">
                 {skillExists ? (
                   <>Saved at <code>.scout/skills/workspace.md</code></>
                 ) : (
@@ -339,15 +378,15 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
 
           {step === "editing" && (
             <div>
-              <p className="text-scout-muted text-xs mb-2">
+              <label htmlFor="init-skill-editor" className="mb-2 block text-caption text-scout-muted">
                 Edit the workspace skill:
-              </p>
-              <textarea
+              </label>
+              <Textarea
+                id="init-skill-editor"
+                size="md"
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
-                className="w-full h-80 bg-scout-input-bg border border-scout-hairline rounded-btn p-3
-                           text-sm text-scout-text font-mono outline-none
-                           focus:border-scout-text resize-none"
+                className="h-80 font-mono"
               />
             </div>
           )}
@@ -358,7 +397,7 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
               <p className="text-scout-text font-medium">
                 Workspace skill saved!
               </p>
-              <p className="text-scout-muted text-sm mt-1">
+              <p className="text-scout-muted text-label mt-1">
                 Saved to <code>.scout/skills/workspace.md</code>
               </p>
             </div>
@@ -366,12 +405,12 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
 
           {step === "error" && (
             <div className="text-center py-12">
-              <p className="text-scout-error text-sm mb-2">
+              <p className="text-scout-error text-label mb-2">
                 {error.includes("save") || error.includes("Save")
                   ? "Failed to save skill"
                   : "Failed to generate skill"}
               </p>
-              <p className="text-scout-muted text-xs break-all">{error}</p>
+              <p className="text-scout-muted text-caption break-all">{error}</p>
             </div>
           )}
         </div>
@@ -380,128 +419,77 @@ export function InitWizard({ open, baseUrl, onClose }: InitWizardProps) {
         <div className="px-5 py-4 border-t border-scout-hairline flex gap-2 justify-end">
           {step === "env" && (
             <>
-              <button
-                onClick={startInitWithSystem}
-                className="px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                Skip (System Python)
-              </button>
-              <button
-                onClick={startInitWithCurrentEnv}
-                className="px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                Continue
-              </button>
+              <Button variant="ghost" surface="panel" onClick={startInitWithSystem}>
+                  Skip (System Python)
+              </Button>
+              <Button variant="filled" surface="panel" onClick={startInitWithCurrentEnv}>
+                  Continue
+              </Button>
             </>
           )}
 
           {step === "preview" && !skillExists && (
             <>
-              <button
-                onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <RotateCcw size={14} /> Regenerate
-              </button>
-              <button
-                onClick={startEditing}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <Pencil size={14} /> Edit
-              </button>
-              <button
-                onClick={() => save(content)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                <Check size={16} /> Approve & Save
-              </button>
+              <Button variant="ghost" surface="panel" onClick={confirmRegenerate}>
+                  <RotateCcw size={14} /> Regenerate
+              </Button>
+              <Button variant="ghost" surface="panel" onClick={startEditing}>
+                  <Pencil size={14} /> Edit
+              </Button>
+              <Button variant="filled" surface="panel" onClick={() => save(content)}>
+                  <Check size={16} /> Approve & Save
+              </Button>
             </>
           )}
 
           {step === "preview" && skillExists && (
             <>
-              <button
-                onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <RotateCcw size={14} /> Regenerate
-              </button>
-              <button
-                onClick={startEditing}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                <Pencil size={14} /> Edit
-              </button>
+              <Button variant="ghost" surface="panel" onClick={confirmRegenerate}>
+                  <RotateCcw size={14} /> Regenerate
+              </Button>
+              <Button variant="filled" surface="panel" onClick={startEditing}>
+                  <Pencil size={14} /> Edit
+              </Button>
             </>
           )}
 
           {step === "editing" && (
             <>
-              <button
-                onClick={() => {
+              <Button variant="ghost" surface="panel" onClick={() => {
                   setEditContent(content);
                   setStep("preview");
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <Eye size={14} /> Preview
-              </button>
-              <button
-                onClick={() => save(editContent)}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                <Save size={16} /> Save
-              </button>
+                }}>
+                  <Eye size={14} /> Preview
+              </Button>
+              <Button variant="filled" surface="panel" onClick={() => save(editContent)}>
+                  <Save size={16} /> Save
+              </Button>
             </>
           )}
 
           {step === "done" && (
             <div className="flex gap-2">
-              <button
-                onClick={startEditing}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <Pencil size={14} /> Edit
-              </button>
-              <button
-                onClick={onClose}
-                className="px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                Close
-              </button>
+              <Button variant="ghost" surface="panel" onClick={startEditing}>
+                  <Pencil size={14} /> Edit
+              </Button>
+              <Button variant="filled" surface="panel" onClick={onClose}>
+                  Close
+              </Button>
             </div>
           )}
 
           {step === "error" && (
             <div className="flex gap-2">
-              <button
-                onClick={generate}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-pill text-[13px] font-medium
-                           text-scout-muted hover:bg-scout-lift hover:text-scout-text transition-colors"
-              >
-                <RotateCcw size={14} /> Retry
-              </button>
-              <button
-                onClick={onClose}
-                className="px-4 py-2 rounded-pill text-sm font-semibold
-                           bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98] transition-all"
-              >
-                Close
-              </button>
+              <Button variant="ghost" surface="panel" onClick={generate}>
+                  <RotateCcw size={14} /> Retry
+              </Button>
+              <Button variant="filled" surface="panel" onClick={onClose}>
+                  Close
+              </Button>
             </div>
           )}
         </div>
+      <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
     </CenterModal>
   );
 }
