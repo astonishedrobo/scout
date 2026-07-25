@@ -1,13 +1,22 @@
-import { useRef, useEffect, useState } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, ArrowDown, type LucideIcon } from "lucide-react";
 import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, TaskNotice, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
 import { PixelSparkle } from "./ScoutMark";
+import { useThreadAnchor } from "../hooks/useThreadAnchor";
 import type { Artifact } from "scout-core";
 
 interface ChatViewProps {
+  /**
+   * Identifies the conversation, so anchored scroll state resets when it changes.
+   *
+   * `null` turns anchoring off, for a transcript you read but never send into —
+   * the subagent feed in `AgentsPanel`. Its history arrives by appending, so it
+   * would otherwise anchor on whichever loaded message happened to be the user's.
+   */
+  sessionId: string | null;
   messages: Message[];
   streamingSteps: ToolStep[];
   streamingText: string;
@@ -222,12 +231,29 @@ export function ChatView({
   onAddAnnotation,
   onUpdateAnnotation,
   onRemoveAnnotation,
+  sessionId,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followsLatestRef = useRef(true);
   // Mirrored into state purely so the "jump to latest" affordance can render.
   // Auto-scroll itself stays on the ref: it must not re-render per token.
   const [followsLatest, setFollowsLatest] = useState(true);
+  const applyFollowsLatest = useCallback((follows: boolean) => {
+    setFollowsLatest((previous) => (previous === follows ? previous : follows));
+  }, []);
+
+  // Sending a message pins it to the top and reserves room beneath it, instead of
+  // jumping to the bottom. See the hook for why that is a different mechanism
+  // rather than a different scroll target.
+  const { anchorIndex, anchorRef, contentRef, spacerRef, reservedHeight } = useThreadAnchor({
+    scrollRef,
+    messages,
+    isLoading,
+    sessionId,
+    followsLatestRef,
+    setFollowsLatest: applyFollowsLatest,
+  });
+
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
   const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
@@ -246,7 +272,8 @@ export function ChatView({
     if (!element) return;
     followsLatestRef.current = true;
     setFollowsLatest(true);
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    // Land on the end of the content, not inside reserved empty space.
+    element.scrollTo({ top: element.scrollHeight - reservedHeight(), behavior: "smooth" });
   };
 
   return (
@@ -256,14 +283,20 @@ export function ChatView({
       onScroll={() => {
         const element = scrollRef.current;
         if (!element) return;
-        const follows = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+        // Measured against the end of the *content*, not the end of the scroll
+        // area: while space is reserved below the last message, sitting inside
+        // that space would otherwise read as "at the bottom" even though the
+        // content is off-screen above.
+        const distance =
+          element.scrollHeight - reservedHeight() - element.scrollTop - element.clientHeight;
+        const follows = distance < 72;
         followsLatestRef.current = follows;
         setFollowsLatest((prev) => (prev === follows ? prev : follows));
       }}
       className="min-h-0 flex-1 overflow-y-auto"
     >
       {/* thread-pad / thread-flow carry the density preference; see globals.css. */}
-      <div className="thread-flow thread-pad mx-auto max-w-[46rem] px-4">
+      <div ref={contentRef} className="thread-flow thread-pad mx-auto max-w-[46rem] px-4">
         {messages.map((msg, i) => {
           if (msg.role === "system" && msg.task) {
             return (
@@ -311,7 +344,14 @@ export function ChatView({
             .join("\n\n");
 
           return (
-            <div key={i} className="animate-enter">
+            <div
+              key={i}
+              // The anchored turn, when this is it. Index-based is sound because
+              // messages only append within a session and the hook drops the
+              // anchor on any shrink (fork, clear) or session change.
+              ref={i === anchorIndex ? anchorRef : undefined}
+              className="animate-enter"
+            >
               {/* Interleaved thinking / tools / mid-turn prose in event order. */}
               {hasTimeline && (
                 <ToolCard
@@ -395,6 +435,10 @@ export function ChatView({
           </div>
         )}
       </div>
+      {/* Room for the anchored message to reach the top. A sibling of
+          `.thread-flow`, never a child — `> * + *` would give it a
+          `--space-thread` margin and the reservation would overshoot. */}
+      <div ref={spacerRef} className="thread-spacer" aria-hidden="true" />
     </div>
       {/* Auto-scroll deliberately detaches once you scroll up, which previously
           had no UI signal at all — a streaming response just silently went by

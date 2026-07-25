@@ -572,6 +572,19 @@
     padding-bottom: var(--pad-thread);
   }
 
+  /* Transient room below the thread so a just-sent message can rise to the top of
+     the viewport. Sized in JS from measurement (see `useThreadAnchor`), so no
+     height here.
+
+     `overflow-anchor: none` is load-bearing, not defensive: the browser's own
+     scroll anchoring is on by default and compensates for content resizing by
+     adjusting `scrollTop`. Since this element shrinks on every streamed token,
+     leaving it enabled means the browser fights the anchor we are holding. */
+  .thread-spacer {
+    flex: none;
+    overflow-anchor: none;
+  }
+
   /* The rest of the density surfaces. Same `> * + *` reasoning as .thread-flow:
      these containers hold absolutely-positioned children that must not be
      spaced, so `gap` is wrong. */

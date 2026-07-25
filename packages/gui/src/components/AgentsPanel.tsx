@@ -406,6 +406,8 @@ export function AgentsPanel({
       {inDetail && detail && chat && (
         <>
           <ChatView
+            // Read-only transcript: nothing is sent from here, so no anchoring.
+            sessionId={null}
             messages={chat.messages}
             streamingSteps={chat.streamingSteps}
             streamingText={chat.streamingText}

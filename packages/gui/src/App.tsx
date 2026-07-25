@@ -953,6 +953,7 @@ export function App() {
           {isReady && (messages.length > 0 || chatBusy) && (
             <div className="flex min-h-0 flex-1 flex-col">
               <ChatView
+                sessionId={currentSessionId}
                 messages={messages}
                 streamingSteps={streamingSteps}
                 streamingText={streamingText}
