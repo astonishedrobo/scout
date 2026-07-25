@@ -214,7 +214,7 @@ export function Sidebar({
           <p className="sticky top-0 z-10 px-1 pb-1.5 pt-2.5 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
             {group.label}
           </p>
-          <div className="space-y-0.5">
+          <div className="density-list">
             {group.items.map((s) => (
               /* The row's click target is an overlay <button> rather than an
                  onClick on this container: the row contains its own edit/delete

@@ -450,7 +450,7 @@ function ToolGroupCard({
         </div>
       </button>
       {expanded && (
-        <div className="space-y-1.5 border-t border-scout-hairline-faint px-2.5 py-2">
+        <div className="density-list border-t border-scout-hairline-faint px-2.5 py-2">
           {steps.map((step, index) => (
             <ToolRow
               key={`${step.name}-${index}`}

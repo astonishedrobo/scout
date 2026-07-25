@@ -112,23 +112,67 @@
   }
 
   /*
+   * Type scale — theme-independent.
+   *
+   * These five were previously declared identically inside all three theme
+   * blocks (`light`, `dark`, `soft`), 15 declarations for 5 values, which made
+   * the scale look theme-dependent when it never was. Declared once here.
+   */
+  :root {
+    --text-body: 16px;
+    --text-prose: 15px;
+    --text-label: 13px;
+    --text-caption: 12px;
+    --text-micro: 11px;
+  }
+
+  /*
    * Density tokens — theme-independent, like the motion tokens above.
    *
-   * Only the conversation thread reads these. Density is a
-   * legibility preference about how much vertical air the reading surface has,
-   * not a licence to re-space every control in the app: shrinking button and row
-   * paddings would push touch targets under the 44px minimum. Consumed through
-   * the `.thread-flow` / `.thread-pad` utilities below, and switched by
-   * `[data-density]`, which `useDensity` stamps at module load.
+   * The governing rule: density moves the space *between* things, not the space
+   * *inside* things. Gaps, section spacing and container padding scale; row
+   * interiors, hit targets and control sizes do not, because shrinking button
+   * and row paddings would push touch targets under the 44px minimum. The one
+   * exception is the welcome screen, which is the only surface with real slack.
+   *
+   * `--leading-prose` is the highest-leverage token here: leading governs far
+   * more of a long conversation's height than any gap, and because it is a
+   * unitless ratio it changes no font size. Do not take it below 1.4 — wrapped
+   * prose at 15px stops reading as dense and starts reading as cramped.
+   *
+   * Font size is deliberately NOT on this axis: "fit more on screen" and "I can
+   * read this" are different needs, and coupling them forces anyone who wants
+   * tighter spacing into smaller text.
+   *
+   * Consumed through the `.thread-*` / `.density-*` utilities below, and switched
+   * by `[data-density]`, which `useDensity` stamps at module load.
    */
   :root {
     --space-thread: 1.75rem;
     --pad-thread: 2rem;
+    --space-section: 2rem;
+    --pad-surface: 2rem;
+    --space-list: 0.125rem;
+    --space-welcome: 1.25rem;
+    --leading-prose: 1.6;
+    --pad-table-chrome: 0.5rem;
+    --welcome-offset: clamp(1.5rem, 12vh, 7rem);
+    /* Floor, not decoration: PixelPet is 40px and strolls this ledge above the
+       composer. Below 1.5rem he overlaps the hero. */
+    --welcome-headroom: 2.25rem;
   }
 
   :root[data-density="compact"] {
     --space-thread: 1rem;
     --pad-thread: 1.25rem;
+    --space-section: 1.25rem;
+    --pad-surface: 1.25rem;
+    --space-list: 0;
+    --space-welcome: 0.75rem;
+    --leading-prose: 1.45;
+    --pad-table-chrome: 0.25rem;
+    --welcome-offset: clamp(1rem, 6vh, 3rem);
+    --welcome-headroom: 1.5rem;
   }
 
   /* Light mode — an intentionally quiet neutral canvas. Borders only define
@@ -187,11 +231,6 @@
     --radius-hero: var(--radius-composer);
     --radius-card: var(--radius-surface);
     --radius-btn: var(--radius-control);
-    --text-body: 16px;
-    --text-prose: 15px;
-    --text-label: 13px;
-    --text-caption: 12px;
-    --text-micro: 11px;
 
     /* Syntax highlighting. A dedicated palette rather than reusing the brand
        tokens: `soft` deliberately desaturates those to near-neutral, which would
@@ -264,11 +303,6 @@
     --radius-hero: var(--radius-composer);
     --radius-card: var(--radius-surface);
     --radius-btn: var(--radius-control);
-    --text-body: 16px;
-    --text-prose: 15px;
-    --text-label: 13px;
-    --text-caption: 12px;
-    --text-micro: 11px;
 
     /* Syntax highlighting. A dedicated palette rather than reusing the brand
        tokens: `soft` deliberately desaturates those to near-neutral, which would
@@ -337,11 +371,6 @@
     --radius-hero: var(--radius-composer);
     --radius-card: var(--radius-surface);
     --radius-btn: var(--radius-control);
-    --text-body: 16px;
-    --text-prose: 15px;
-    --text-label: 13px;
-    --text-caption: 12px;
-    --text-micro: 11px;
 
     /* Syntax highlighting. A dedicated palette rather than reusing the brand
        tokens: `soft` deliberately desaturates those to near-neutral, which would
@@ -467,9 +496,14 @@
      body was an arbitrary `text-[Npx]` — 173 of them across seven sizes in the
      10–16px band, plus text-xs/text-sm on top, so `text-[13px]` and `text-sm`
      were each chosen ~60 times for visually identical results. */
+  /* Leading is density-aware here and nowhere else: this is the only token in
+     the scale used for wrapped multi-line copy, so it is the only one where the
+     ratio governs real height. `.text-body` / `.text-label` / `.text-micro` stay
+     literal — they label single-line controls and would only risk clipping
+     descenders. */
   .text-prose {
     font-size: var(--text-prose);
-    line-height: 1.6;
+    line-height: var(--leading-prose);
     letter-spacing: -0.01em;
   }
 
@@ -529,6 +563,37 @@
   .thread-pad {
     padding-top: var(--pad-thread);
     padding-bottom: var(--pad-thread);
+  }
+
+  /* The rest of the density surfaces. Same `> * + *` reasoning as .thread-flow:
+     these containers hold absolutely-positioned children that must not be
+     spaced, so `gap` is wrong. */
+  .density-sections > * + * {
+    margin-top: var(--space-section);
+  }
+  .density-surface {
+    padding-top: var(--pad-surface);
+    padding-bottom: var(--pad-surface);
+  }
+  .density-list > * + * {
+    margin-top: var(--space-list);
+  }
+  /* DataTable's fixed overhead — search band, header, caption. This is 40-60px
+     per table regardless of row count, which is what makes it worth reclaiming
+     when several tables stack on one admin page. Row interiors are untouched. */
+  .density-table-chrome {
+    padding-top: var(--pad-table-chrome);
+    padding-bottom: var(--pad-table-chrome);
+  }
+
+  /* Welcome screen. The block anchors near the top with slack collecting below,
+     rather than centring in the viewport — centred, it read as a small island in
+     a large window, and tightening its spacing only grew the void. The clamp
+     floor collapses the offset on short viewports; the container scrolls. */
+  .welcome-block {
+    margin-top: var(--welcome-offset);
+    margin-bottom: auto;
+    gap: var(--space-welcome);
   }
 
   .prose-scout pre {

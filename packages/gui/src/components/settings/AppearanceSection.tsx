@@ -109,7 +109,7 @@ export function AppearanceSection() {
       <SettingsGroup label="Display" footnote="Applies immediately and is remembered on this device.">
         <SettingsRow
           label="Density"
-          description="Spacing in the conversation and panels."
+          description="Spacing across the workspace — the home screen, conversations, panels and settings. Text size does not change."
           control={
             <Segmented
               value={density}

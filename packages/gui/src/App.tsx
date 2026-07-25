@@ -921,13 +921,15 @@ export function App() {
       >
         <div className="flex flex-col flex-1 min-h-0">
           {isWelcome && (
-            <div className="relative flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
+            <div className="relative flex-1 flex flex-col items-center min-h-0 overflow-y-auto">
               <WelcomeScene />
-              <div className="relative z-10 flex w-full max-w-[42rem] flex-col gap-5 px-5">
+              {/* welcome-block carries the density preference and the top anchor;
+                  see globals.css. */}
+              <div className="welcome-block relative z-10 flex w-full max-w-[42rem] flex-col px-5">
                 <WelcomeContent />
                 {/* Extra headroom so the pet standing on the composer doesn't
                     crowd the hero title; he strolls this ledge while idle. */}
-                <div className="relative mt-9">
+                <div className="relative mt-[var(--welcome-headroom)]">
                   <div className="absolute inset-x-0 top-0 h-0">
                     <PixelPet working={chatBusy} size={40} idleStrollEveryMs={90_000} />
                   </div>

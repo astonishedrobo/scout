@@ -227,7 +227,7 @@ export function SettingsShell({
             reads cramped on a desktop display, and rows with a label, a
             description and a control need the room. Capped so long descriptions
             keep a readable line length. */}
-        <div className="mx-auto w-full max-w-[680px] px-5 py-8 sm:px-8 sm:py-10 xl:max-w-[840px]">
+        <div className="density-surface mx-auto w-full max-w-[680px] px-5 sm:px-8 xl:max-w-[840px]">
           <header className="mb-7">
             <h1 className="text-body font-semibold tracking-[-0.02em] text-scout-text">{title}</h1>
             {subtitle && <p className="mt-1 text-caption text-scout-muted">{subtitle}</p>}
@@ -245,7 +245,7 @@ export function SettingsShell({
             {status?.message ?? ""}
           </p>
 
-          <div className="space-y-8">{children}</div>
+          <div className="density-sections">{children}</div>
         </div>
       </div>
     </div>

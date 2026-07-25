@@ -117,7 +117,7 @@ export function DataTable<Row>({
   return (
     <div className={className}>
       {search && searchable.length > 0 && (
-        <div className="relative px-4 pb-2 pt-1">
+        <div className="density-table-chrome relative px-4">
           <Search
             size={13}
             className="pointer-events-none absolute left-[26px] top-1/2 -translate-y-1/2 text-scout-muted"
@@ -240,7 +240,7 @@ export function DataTable<Row>({
       )}
 
       {caption && rows.length > 0 && (
-        <p className="px-4 pt-2 text-micro text-scout-muted">
+        <p className="density-table-chrome px-4 pb-0 text-micro text-scout-muted">
           {caption}
           {filteredToNothing || visible.length !== rows.length
             ? ` · showing ${visible.length} of ${rows.length}`
