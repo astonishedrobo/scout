@@ -24,7 +24,6 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
     "general.permissionDefault",
     "ask_always",
   );
-  const [autoReview, setAutoReview] = useLocalSetting("general.autoReview", true);
   const [suggestions, setSuggestions] = useLocalSetting("general.suggestions", true);
   const [defaultPanel, setDefaultPanel] = useLocalSetting<"none" | "files" | "tasks">(
     "general.defaultPanel",
@@ -65,13 +64,6 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
                 },
               ]}
             />
-          }
-        />
-        <SettingsRow
-          label="Auto-review file changes"
-          description="Open the diff automatically when Scout edits a file."
-          control={
-            <Switch checked={autoReview} onChange={setAutoReview} label="Auto-review file changes" />
           }
         />
       </SettingsGroup>

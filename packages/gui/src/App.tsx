@@ -93,7 +93,6 @@ export function App() {
    * default at session-creation time.
    */
   const [showSuggestions] = useLocalSetting("general.suggestions", true);
-  const [autoReview] = useLocalSetting("general.autoReview", true);
   // Defaults to "none" so switching this on is an opt-in: a stored default of
   // "files" would have started opening the panel for everyone the moment the
   // setting became functional.
@@ -482,27 +481,6 @@ export function App() {
       }
     }
   }, [messages, panel]);
-
-  /*
-   * "Auto-review file changes" (General): open the diff as soon as Scout edits a
-   * file.
-   *
-   * Keyed on the change-set id in a ref rather than on tab presence, so closing
-   * the tab does not immediately reopen it, and so a set that keeps streaming
-   * updates only opens once. The freshness effect above then keeps it current.
-   */
-  const autoReviewedRef = useRef(new Set<string>());
-  // Change-set ids are per session; carrying them across would suppress the
-  // first auto-open in the next conversation.
-  useEffect(() => {
-    autoReviewedRef.current = new Set();
-  }, [currentSessionId]);
-  useEffect(() => {
-    if (!autoReview || !latestChangeSet) return;
-    if (autoReviewedRef.current.has(latestChangeSet.id)) return;
-    autoReviewedRef.current.add(latestChangeSet.id);
-    panel.open({ kind: "review", changeSet: latestChangeSet });
-  }, [autoReview, latestChangeSet, panel]);
 
   const markChangeSetUndone = useCallback((changeSetId: string) => {
     setMessages((prev) => prev.map((message) => ({
