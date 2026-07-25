@@ -17,6 +17,7 @@ export function SettingsGroup({
   description,
   action,
   footnote,
+  bare = false,
   className = "",
   children,
 }: {
@@ -26,6 +27,14 @@ export function SettingsGroup({
   action?: ReactNode;
   /** Small print under the container, e.g. "Saved on this device". */
   footnote?: ReactNode;
+  /**
+   * Render the heading without the container, for a child that is *already* a
+   * complete bordered surface — a `CodeBlock`, a chart. Wrapping one of those in
+   * the container is the box-inside-a-box this component exists to prevent, and
+   * the child cannot simply drop its own border because it is a shared primitive
+   * used outside settings too.
+   */
+  bare?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -42,9 +51,13 @@ export function SettingsGroup({
           {action && <div className="shrink-0">{action}</div>}
         </div>
       )}
-      <div className="divide-y divide-scout-hairline-faint overflow-hidden rounded-control border border-scout-hairline-faint bg-scout-panel/30">
-        {children}
-      </div>
+      {bare ? (
+        children
+      ) : (
+        <div className="divide-y divide-scout-hairline-faint overflow-hidden rounded-control border border-scout-hairline-faint bg-scout-panel/30">
+          {children}
+        </div>
+      )}
       {footnote && <p className="px-0.5 text-micro text-scout-muted/80">{footnote}</p>}
     </section>
   );

@@ -269,6 +269,92 @@ async def test_background_result_always_queues_parent_pickup(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_background_failure_notifies_parent_and_can_be_retried(tmp_path, monkeypatch):
+    multi = MultiAgentConfig(
+        enabled=True,
+        terminal_retain_seconds=120,
+        auto_continue_on_complete=True,
+    )
+    mgr = _mgr(
+        terminal_retain_seconds=120,
+        auto_continue_on_complete=True,
+    )
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+
+    from scout import agent as agent_mod
+
+    turns = 0
+
+    class FailThenRecoverAgent:
+        def __init__(self, *args, **kwargs):
+            self._messages = []
+
+        async def stream(self, user_message, attachments=None):
+            nonlocal turns
+            turns += 1
+            if turns == 1:
+                yield {"type": "response_delta", "content": "partial finding"}
+                raise ValueError("embedded null byte")
+            yield {"type": "response", "content": "retry succeeded"}
+
+        async def close(self):
+            return None
+
+        def set_request_permissions_fn(self, fn):
+            return None
+
+    monkeypatch.setattr(agent_mod, "ScoutAgent", FailThenRecoverAgent)
+    events: list[dict] = []
+    completed: list[tuple[str, str]] = []
+    mgr.set_event_listener(lambda event: events.append(event))
+    mgr.set_completion_callback(
+        lambda record: completed.append((record.agent_id, record.status))
+    )
+
+    result = await mgr.spawn(
+        description="Search random files",
+        prompt="Search for random files",
+        agent_type="snoop",
+        run_in_background=True,
+    )
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in result.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if completed == [(agent_id, "failed")]:
+            break
+        await asyncio.sleep(0.02)
+
+    record = mgr._agents[agent_id]
+    assert record.status == "failed"
+    assert record.error == "embedded null byte"
+    assert record.result == "partial finding"
+    assert sum(event["type"] == "subagent_failed" for event in events) == 1
+    assert completed == [(agent_id, "failed")]
+    assert len(mgr._notifications) == 1
+    assert mgr._notifications[0].status == "failed"
+    assert mgr._notifications[0].error == "embedded null byte"
+
+    sent = await mgr.send_message(agent_id, "Retry without reading binaries", source="user")
+    assert "delivered" in sent
+    assert mgr._notifications == []
+    for _ in range(50):
+        if completed == [(agent_id, "failed"), (agent_id, "completed")]:
+            break
+        await asyncio.sleep(0.02)
+
+    assert mgr._agents[agent_id].result == "retry succeeded"
+    assert completed == [(agent_id, "failed"), (agent_id, "completed")]
+    assert sum(event["type"] == "subagent_completed" for event in events) == 1
+    notes = mgr.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].status == "completed"
+    assert notes[0].result == "retry succeeded"
+
+
+@pytest.mark.asyncio
 async def test_undelivered_parent_pickup_survives_restart(tmp_path, monkeypatch):
     persist_path = tmp_path / "subagents.json"
     multi = MultiAgentConfig(enabled=True, terminal_retain_seconds=60)
@@ -316,6 +402,64 @@ async def test_undelivered_parent_pickup_survives_restart(tmp_path, monkeypatch)
     )
     drained_again.hydrate_from_snapshot()
     assert drained_again.drain_notifications() == []
+
+
+@pytest.mark.asyncio
+async def test_undelivered_failure_pickup_survives_restart(tmp_path, monkeypatch):
+    persist_path = tmp_path / "subagents.json"
+    multi = MultiAgentConfig(enabled=True, terminal_retain_seconds=60)
+    mgr = SubAgentManager(
+        config=multi,
+        parent_session_id="sess-1",
+        parent_user_id="u1",
+        persist_path=persist_path,
+    )
+    mgr.bind_parent(_FakeParent(tmp_path, multi))
+
+    from scout import agent as agent_mod
+
+    class FailingAgent:
+        def __init__(self, *args, **kwargs):
+            self._messages = []
+
+        async def stream(self, user_message, attachments=None):
+            raise RuntimeError("provider stream failed")
+            yield  # pragma: no cover
+
+        async def close(self):
+            return None
+
+        def set_request_permissions_fn(self, fn):
+            return None
+
+    monkeypatch.setattr(agent_mod, "ScoutAgent", FailingAgent)
+    result = await mgr.spawn(
+        description="Durable failure",
+        prompt="Fail this delegated turn",
+        run_in_background=True,
+    )
+    agent_id = next(
+        line.split(":", 1)[1].strip()
+        for line in result.splitlines()
+        if line.startswith("agent_id:")
+    )
+    for _ in range(50):
+        if mgr._notifications:
+            break
+        await asyncio.sleep(0.02)
+
+    restored = SubAgentManager(
+        config=multi,
+        parent_session_id="sess-1",
+        parent_user_id="u1",
+        persist_path=persist_path,
+    )
+    assert restored.hydrate_from_snapshot() == 1
+    notes = restored.drain_notifications()
+    assert len(notes) == 1
+    assert notes[0].agent_id == agent_id
+    assert notes[0].status == "failed"
+    assert notes[0].error == "provider stream failed"
 
 
 @pytest.mark.asyncio

@@ -185,15 +185,16 @@ export function ConfigurationSection({ baseUrl, token, setStatus }: SectionProps
       <SettingsGroup
         label="Effective values"
         description="As YAML, matching the file on disk. Secrets are redacted by the server."
+        /* CodeBlock is already a bordered surface, so it stands on its own here.
+           The skeleton and empty state are not, so they keep the container. */
+        bare={!loading && !!yaml}
       >
         {loading ? (
           <div className="px-4 py-3">
             <Skeleton.List rows={5} />
           </div>
         ) : yaml ? (
-          <div className="px-4 py-2">
-            <CodeBlock language="yaml">{yaml}</CodeBlock>
-          </div>
+          <CodeBlock language="yaml">{yaml}</CodeBlock>
         ) : (
           <EmptyState
             size="sm"

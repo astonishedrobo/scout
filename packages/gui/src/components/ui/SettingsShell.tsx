@@ -190,13 +190,13 @@ export function SettingsShell({
           <p className="px-2.5 py-2 text-caption text-scout-muted">No matching settings.</p>
         )}
 
-        <div className="space-y-4">
+        <div className="density-groups">
           {filtered.map((group, i) => (
             <div key={group.label ?? `group-${i}`}>
               {group.label && (
                 <p className="px-2.5 pb-1 text-micro font-medium text-scout-muted/60">{group.label}</p>
               )}
-              <ul className="space-y-0.5">
+              <ul className="density-list">
                 {group.sections.map((s) => {
                   const active = s.id === section;
                   return (

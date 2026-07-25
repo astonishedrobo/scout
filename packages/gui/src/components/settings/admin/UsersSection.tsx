@@ -10,6 +10,7 @@ import {
   SettingsRow,
   SettingsSelect,
   Skeleton,
+  TableSearch,
   Stat,
   StatGrid,
   formatDuration,
@@ -82,6 +83,8 @@ export function UsersSection({ baseUrl, token, setStatus }: SectionProps) {
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [userQuery, setUserQuery] = useState("");
+  const [sessionQuery, setSessionQuery] = useState("");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   // Which rows have a request in flight, so the change disables only its own
   // row instead of the previous full-list refetch flashing every row at once.
@@ -437,24 +440,32 @@ export function UsersSection({ baseUrl, token, setStatus }: SectionProps) {
       <SettingsGroup
         label="Users"
         description="Access level and turn capacity, per person. Changes apply the next time they act."
+        bare
       >
         {loading ? (
-          <div className="px-4 py-3">
-            <Skeleton.List rows={4} />
-          </div>
+          <SettingsGroup>
+            <div className="px-4 py-3">
+              <Skeleton.List rows={4} />
+            </div>
+          </SettingsGroup>
         ) : (
-          <div className="py-2">
-            <DataTable
-              columns={columns}
-              rows={users}
-              getRowId={(u) => String(u.id)}
-              search={{ placeholder: "Search users" }}
-              initialSort={{ key: "username", dir: "asc" }}
-              caption={`${users.length} user${users.length === 1 ? "" : "s"} · ${admins} admin${
-                admins === 1 ? "" : "s"
-              }`}
-              empty={<EmptyState size="sm" icon={<Users size={20} />} title="No users yet" />}
-            />
+          <div className="space-y-2">
+            <TableSearch value={userQuery} onChange={setUserQuery} placeholder="Search users" />
+            <SettingsGroup>
+              <div className="py-2">
+                <DataTable
+                  columns={columns}
+                  rows={users}
+                  getRowId={(u) => String(u.id)}
+                  query={userQuery}
+                  initialSort={{ key: "username", dir: "asc" }}
+                  caption={`${users.length} user${users.length === 1 ? "" : "s"} · ${admins} admin${
+                    admins === 1 ? "" : "s"
+                  }`}
+                  empty={<EmptyState size="sm" icon={<Users size={20} />} title="No users yet" />}
+                />
+              </div>
+            </SettingsGroup>
           </div>
         )}
       </SettingsGroup>
@@ -467,30 +478,44 @@ export function UsersSection({ baseUrl, token, setStatus }: SectionProps) {
             ? undefined
             : `${sessions.length} open · ${busySessions} working. Refreshes every 8 seconds.`
         }
+        bare
       >
         {sessionsError ? (
-          <EmptyState
-            size="sm"
-            title="Could not load live sessions"
-            body={sessionsError}
-          />
-        ) : (
-          <div className="py-2">
-            <DataTable
-              columns={sessionColumns}
-              rows={sessions}
-              getRowId={(s) => `${s.user_id}:${s.session_id}`}
-              search={{ placeholder: "Search sessions" }}
-              initialSort={{ key: "idle", dir: "asc" }}
-              empty={
-                <EmptyState
-                  size="sm"
-                  icon={<MonitorPlay size={20} />}
-                  title="No open sessions"
-                  body="Nobody has a conversation open."
-                />
-              }
+          <SettingsGroup>
+            <EmptyState
+              size="sm"
+              title="Could not load live sessions"
+              body={sessionsError}
             />
+          </SettingsGroup>
+        ) : (
+          <div className="space-y-2">
+            {sessions.length > 0 && (
+              <TableSearch
+                value={sessionQuery}
+                onChange={setSessionQuery}
+                placeholder="Search sessions"
+              />
+            )}
+            <SettingsGroup>
+              <div className="py-2">
+                <DataTable
+                  columns={sessionColumns}
+                  rows={sessions}
+                  getRowId={(s) => `${s.user_id}:${s.session_id}`}
+                  query={sessionQuery}
+                  initialSort={{ key: "idle", dir: "asc" }}
+                  empty={
+                    <EmptyState
+                      size="sm"
+                      icon={<MonitorPlay size={20} />}
+                      title="No open sessions"
+                      body="Nobody has a conversation open."
+                    />
+                  }
+                />
+              </div>
+            </SettingsGroup>
           </div>
         )}
       </SettingsGroup>

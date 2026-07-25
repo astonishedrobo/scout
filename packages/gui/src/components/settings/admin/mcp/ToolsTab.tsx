@@ -9,6 +9,7 @@ import {
   SettingsGroup,
   Skeleton,
   Switch,
+  TableSearch,
   type Column,
 } from "../../../ui";
 import type { McpActions, McpServer, McpTool } from "./types";
@@ -38,6 +39,7 @@ export function ToolsTab({
 }) {
   const [serverFilter, setServerFilter] = useState<string | null>(null);
   const [writableOnly, setWritableOnly] = useState(false);
+  const [query, setQuery] = useState("");
 
   const rows = useMemo(() => {
     const out: ToolRow[] = [];
@@ -144,7 +146,13 @@ export function ToolsTab({
     <SettingsGroup
       label="Tools"
       description="What agents may call through each integration. Write access lets a tool make changes without a separate approval."
+      bare
     >
+      <div className="space-y-2">
+      {rows.length > 0 && (
+        <TableSearch value={query} onChange={setQuery} placeholder="Search tools" />
+      )}
+      <SettingsGroup>
       {rows.length === 0 ? (
         <EmptyState
           size="sm"
@@ -160,7 +168,7 @@ export function ToolsTab({
         />
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-1.5 px-4 pt-3">
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-scout-hairline-faint px-4 pb-3 pt-3">
             <Chip pressed={!serverFilter && !writableOnly} onClick={() => {
               setServerFilter(null);
               setWritableOnly(false);
@@ -246,7 +254,7 @@ export function ToolsTab({
               columns={columns}
               rows={filtered}
               getRowId={(r) => r.key}
-              search={{ placeholder: "Search tools" }}
+              query={query}
               initialSort={{ key: "tool", dir: "asc" }}
               caption={
                 <>
@@ -272,6 +280,8 @@ export function ToolsTab({
           )}
         </>
       )}
+      </SettingsGroup>
+      </div>
     </SettingsGroup>
   );
 }

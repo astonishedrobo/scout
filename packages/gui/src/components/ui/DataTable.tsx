@@ -39,11 +39,53 @@ export interface Column<Row> {
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
 
+/**
+ * The search field for a `DataTable`, as its own surface.
+ *
+ * Deliberately a sibling of `SettingsGroup` rather than a child of it. It began
+ * life inside the group and drew its own border — a box inside a box. Deleting
+ * that border was the wrong correction: it made the field invisible, since an
+ * input with no boundary reads as a stray placeholder rather than something you
+ * can type into. A control needs a visible edge; what it must not do is sit
+ * inside another box. So it moves out and keeps its edge.
+ *
+ * Spans the full width to match `SettingsGroup`'s container beneath it.
+ */
+export function TableSearch({
+  value,
+  onChange,
+  placeholder = "Search",
+  className = "",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <Search
+        size={13}
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-scout-muted"
+        aria-hidden="true"
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="h-9 w-full rounded-control border border-scout-hairline-faint bg-scout-panel/30 pl-8 pr-3 text-caption text-scout-text placeholder:text-scout-muted focus:border-scout-text/30 focus:outline-none focus:ring-1 focus:ring-scout-text/20"
+      />
+    </div>
+  );
+}
+
 export function DataTable<Row>({
   columns,
   rows,
   getRowId,
-  search,
+  query = "",
   initialSort,
   empty,
   caption,
@@ -54,8 +96,12 @@ export function DataTable<Row>({
   columns: Column<Row>[];
   rows: Row[];
   getRowId: (row: Row) => string;
-  /** Enables the search field. Placeholder text; matching uses `searchValue`. */
-  search?: { placeholder?: string };
+  /**
+   * Current search text, matched against every column's `searchValue`. Owned by
+   * the caller, which renders `TableSearch` outside the group — see that
+   * component for why the field does not live in here.
+   */
+  query?: string;
   initialSort?: { key: string; dir: "asc" | "desc" };
   /** Shown when `rows` is empty. Filtering to nothing shows a no-results state. */
   empty: ReactNode;
@@ -67,7 +113,6 @@ export function DataTable<Row>({
   className?: string;
 }) {
   const [sort, setSort] = useState<SortState>(initialSort ?? null);
-  const [query, setQuery] = useState("");
 
   const searchable = useMemo(() => columns.filter((c) => c.searchValue), [columns]);
 
@@ -116,24 +161,6 @@ export function DataTable<Row>({
 
   return (
     <div className={className}>
-      {search && searchable.length > 0 && (
-        <div className="density-table-chrome relative px-4">
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-[26px] top-1/2 -translate-y-1/2 text-scout-muted"
-            aria-hidden="true"
-          />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={search.placeholder ?? "Search"}
-            aria-label={search.placeholder ?? "Search"}
-            className="h-8 w-full rounded-btn border border-scout-hairline-faint bg-scout-canvas pl-7 pr-2.5 text-caption text-scout-text placeholder:text-scout-muted focus:border-scout-text/30 focus:outline-none focus:ring-1 focus:ring-scout-text/20 sm:max-w-[260px]"
-          />
-        </div>
-      )}
-
       {rows.length === 0 ? (
         <div className="px-4">{empty}</div>
       ) : (

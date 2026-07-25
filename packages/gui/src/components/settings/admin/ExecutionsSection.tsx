@@ -12,6 +12,7 @@ import {
   SettingsGroup,
   Skeleton,
   Stat,
+  TableSearch,
   StatGrid,
   formatDuration,
   type Column,
@@ -63,6 +64,7 @@ export function ExecutionsSection({ baseUrl, token, setStatus }: SectionProps) {
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>("24h");
   const [statusFilter, setStatusFilter] = useState<"all" | "ok" | "failed">("all");
+  const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
 
   const selected = RANGES.find((r) => r.value === range) ?? RANGES[2];
@@ -277,8 +279,17 @@ export function ExecutionsSection({ baseUrl, token, setStatus }: SectionProps) {
       <SettingsGroup
         label="Execution log"
         description="One row per execution. Commands are summarised by the server; arguments and secrets are not recorded."
+        bare
       >
-        <div className="flex flex-wrap items-center gap-1.5 px-4 pt-3">
+        <div className="space-y-2">
+        {/* Search is its own surface. The filter chips stay inside the table's
+            surface, because they act on the rows below them. */}
+        <TableSearch value={query} onChange={setQuery} placeholder="Search commands" />
+        <SettingsGroup>
+        {/* Its own band with a closing hairline: with only `pt-3` the chips sat
+            8px above the table's header rule, reading as stacked lines rather
+            than two bands. */}
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-scout-hairline-faint px-4 pb-3 pt-3">
           <Chip pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>
             All
           </Chip>
@@ -322,7 +333,7 @@ export function ExecutionsSection({ baseUrl, token, setStatus }: SectionProps) {
               columns={columns}
               rows={filtered}
               getRowId={(r) => `${r.execution_id}:${r.start_time}`}
-              search={{ placeholder: "Search commands" }}
+              query={query}
               initialSort={{ key: "when", dir: "desc" }}
               caption={
                 filtered.length === rows.length
@@ -346,6 +357,8 @@ export function ExecutionsSection({ baseUrl, token, setStatus }: SectionProps) {
             />
           </div>
         )}
+        </SettingsGroup>
+        </div>
       </SettingsGroup>
     </>
   );

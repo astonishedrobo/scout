@@ -10,7 +10,7 @@ export { Banner, ErrorBanner, WarningBanner } from "./Banner";
 export { Badge, type BadgeTone } from "./Badge";
 export { Meter, meterTone, type MeterTone } from "./Meter";
 export { Stat, StatGrid, formatCount, type StatTone } from "./Stat";
-export { DataTable, type Column } from "./DataTable";
+export { DataTable, TableSearch, type Column } from "./DataTable";
 export { Chip, type ChipTone } from "./Chip";
 export {
   RelativeTime,

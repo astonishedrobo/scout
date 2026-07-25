@@ -1223,11 +1223,15 @@ class SubAgentManager:
                 record.summary = "Stopped"
                 record.finished_at = record.finished_at or time.time()
                 raise
-            except Exception as exc:
-                record.status = "failed"
-                record.error = str(exc)
-                record.summary = f"Failed: {exc}"
-                logger.exception("Sub-agent %s turn failed", record.agent_id)
+            except Exception:
+                # The loop owns terminal-state finalization.  Let it emit the
+                # failed lifecycle event, persist the notification, release
+                # capacity, and wake the parent exactly as it does for a
+                # successful turn.  Swallowing here leaves a failed record
+                # visible to polling but silently skips every delivery hook.
+                if final_text.strip():
+                    record.result = final_text.strip()
+                raise
 
     async def _emit(
         self,

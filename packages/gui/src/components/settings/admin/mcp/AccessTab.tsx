@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Users } from "lucide-react";
 import {
   Banner,
@@ -6,6 +7,7 @@ import {
   EmptyState,
   SettingsGroup,
   Skeleton,
+  TableSearch,
   type Column,
 } from "../../../ui";
 import type { McpActions, McpServer, UserEntry } from "./types";
@@ -36,6 +38,7 @@ export function AccessTab({
   loading: boolean;
   actions: McpActions;
 }) {
+  const [query, setQuery] = useState("");
   const selective = servers.filter((s) => s.availability === "selected");
   const open = servers.filter((s) => s.availability !== "selected");
 
@@ -108,27 +111,35 @@ export function AccessTab({
       <SettingsGroup
         label="Access"
         description="Which users may enable each restricted integration. Changes apply the next time they start a conversation."
+        bare
       >
         {selective.length === 0 ? (
-          <EmptyState
-            size="sm"
-            icon={<Users size={20} />}
-            title="No restricted integrations"
-            body="Every installed server is available to everyone, so there are no per-user assignments to manage."
-          />
+          <SettingsGroup>
+            <EmptyState
+              size="sm"
+              icon={<Users size={20} />}
+              title="No restricted integrations"
+              body="Every installed server is available to everyone, so there are no per-user assignments to manage."
+            />
+          </SettingsGroup>
         ) : (
+          <div className="space-y-2">
+          <TableSearch value={query} onChange={setQuery} placeholder="Search users" />
+          <SettingsGroup>
           <div className="py-2">
             <DataTable
               columns={columns}
               rows={users}
               getRowId={(u) => String(u.id)}
-              search={{ placeholder: "Search users" }}
+              query={query}
               initialSort={{ key: "username", dir: "asc" }}
               caption={`${users.length} user${users.length === 1 ? "" : "s"} · ${
                 selective.length
               } restricted integration${selective.length === 1 ? "" : "s"}`}
               empty={<EmptyState size="sm" icon={<Users size={20} />} title="No users yet" />}
             />
+          </div>
+          </SettingsGroup>
           </div>
         )}
       </SettingsGroup>

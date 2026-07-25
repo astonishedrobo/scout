@@ -153,10 +153,15 @@
     --space-section: 2rem;
     --pad-surface: 2rem;
     --space-list: 0.125rem;
+    /* Separation between groups in a navigation column — the settings nav's
+       Personal/Integrations/Workspace bands and the sidebar's Today/Yesterday
+       date bands. This, not row padding, is where the left column's slack is. */
+    --space-group: 1rem;
+    --pad-group-label: 0.625rem;
     --space-welcome: 1.25rem;
     --leading-prose: 1.6;
     --pad-table-chrome: 0.5rem;
-    --welcome-offset: clamp(1.5rem, 12vh, 7rem);
+    --welcome-offset: 2rem;
     /* Floor, not decoration: PixelPet is 40px and strolls this ledge above the
        composer. Below 1.5rem he overlaps the hero. */
     --welcome-headroom: 2.25rem;
@@ -168,10 +173,12 @@
     --space-section: 1.25rem;
     --pad-surface: 1.25rem;
     --space-list: 0;
+    --space-group: 0.5rem;
+    --pad-group-label: 0.25rem;
     --space-welcome: 0.75rem;
     --leading-prose: 1.45;
     --pad-table-chrome: 0.25rem;
-    --welcome-offset: clamp(1rem, 6vh, 3rem);
+    --welcome-offset: 1.25rem;
     --welcome-headroom: 1.5rem;
   }
 
@@ -578,6 +585,9 @@
   .density-list > * + * {
     margin-top: var(--space-list);
   }
+  .density-groups > * + * {
+    margin-top: var(--space-group);
+  }
   /* DataTable's fixed overhead — search band, header, caption. This is 40-60px
      per table regardless of row count, which is what makes it worth reclaiming
      when several tables stack on one admin page. Row interiors are untouched. */
@@ -586,13 +596,17 @@
     padding-bottom: var(--pad-table-chrome);
   }
 
-  /* Welcome screen. The block anchors near the top with slack collecting below,
-     rather than centring in the viewport — centred, it read as a small island in
-     a large window, and tightening its spacing only grew the void. The clamp
-     floor collapses the offset on short viewports; the container scrolls. */
+  /* Welcome screen, vertically centred.
+     `margin-block: auto` rather than the parent's `justify-content: center`:
+     inside a scroll container, centred flex content cannot be scrolled back up
+     once it overflows, so a short viewport clips the hero irrecoverably. Auto
+     margins collapse instead of going negative, so the block stays reachable.
+     `--welcome-offset` is the minimum breathing room at the extremes, not an
+     anchor — an earlier revision top-anchored the block and left a large void
+     below it, which read worse than centring. */
   .welcome-block {
-    margin-top: var(--welcome-offset);
-    margin-bottom: auto;
+    margin-block: auto;
+    padding-block: var(--welcome-offset);
     gap: var(--space-welcome);
   }
 

@@ -184,7 +184,7 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-3 pt-1">
+      <div className="density-groups flex-1 overflow-y-auto px-3 pt-1">
         {/* Placeholders while the first fetch is in flight: an empty array is
             otherwise indistinguishable from "no sessions", so the empty state
             flashed before the real list arrived. */}
@@ -210,8 +210,8 @@ export function Sidebar({
           </div>
         ) : (
           groupSessions(visibleSessions).map((group) => (
-          <div key={group.label} className="mb-1.5">
-          <p className="sticky top-0 z-10 px-1 pb-1.5 pt-2.5 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
+          <div key={group.label}>
+          <p className="sticky top-0 z-10 px-1 pb-1.5 pt-[var(--pad-group-label)] text-micro font-medium text-scout-muted/55 backdrop-blur-md">
             {group.label}
           </p>
           <div className="density-list">

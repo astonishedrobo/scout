@@ -9,6 +9,7 @@ import {
   IconButton,
   SettingsGroup,
   Skeleton,
+  TableSearch,
   type Column,
   type ConfirmRequest,
 } from "../../ui";
@@ -32,6 +33,7 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -164,25 +166,38 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
             Upload
           </Button>
         }
+        /* The heading only. The search field and the table are two separate
+           surfaces below it, so this group must not draw a container around
+           both of them. */
+        bare
       >
         {loading ? (
-          <div className="px-4 py-3">
-            <Skeleton.List rows={4} />
-          </div>
+          <SettingsGroup>
+            <div className="px-4 py-3">
+              <Skeleton.List rows={4} />
+            </div>
+          </SettingsGroup>
         ) : files.length === 0 ? (
-          <EmptyState
-            size="sm"
-            icon={<Upload size={20} />}
-            title="No shared files"
-            body="Upload reference data every user's agent should be able to read."
-          />
+          <SettingsGroup>
+            <EmptyState
+              size="sm"
+              icon={<Upload size={20} />}
+              title="No shared files"
+              body="Upload reference data every user's agent should be able to read."
+            />
+          </SettingsGroup>
         ) : (
-          <div className="py-2">
-            <DataTable
+          <div className="space-y-2">
+            {/* Search is its own surface above the table's, not a box inside it.
+                Only rendered when there is something to search. */}
+            <TableSearch value={query} onChange={setQuery} placeholder="Search files" />
+            <SettingsGroup>
+              <div className="py-2">
+                <DataTable
               columns={columns}
               rows={files}
               getRowId={(f) => f.path}
-              search={{ placeholder: "Search files" }}
+              query={query}
               initialSort={{ key: "path", dir: "asc" }}
               caption={`${files.length} file${files.length === 1 ? "" : "s"} · ${fmtSize(totalSize)} total`}
               rowActions={(file) => (
@@ -196,8 +211,10 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
                   <Trash2 size={15} />
                 </IconButton>
               )}
-              empty={<EmptyState size="sm" title="No shared files" />}
-            />
+                  empty={<EmptyState size="sm" title="No shared files" />}
+                />
+              </div>
+            </SettingsGroup>
           </div>
         )}
       </SettingsGroup>
