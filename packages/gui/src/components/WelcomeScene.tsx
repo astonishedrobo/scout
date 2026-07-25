@@ -562,7 +562,7 @@ export function PixelDuskScene({
           onClick={toggleDay}
           aria-label={day ? "Switch to night" : "Switch to day"}
           aria-pressed={day}
-          className="pointer-events-auto absolute right-[12%] top-[10%] cursor-pointer border-0 bg-transparent p-1 transition-transform hover:scale-110 motion-reduce:transition-none motion-reduce:hover:scale-100"
+          className="pointer-events-auto absolute right-[12%] top-[10%] cursor-pointer border-0 bg-transparent p-1 transition-transform hover:scale-110 motion-reduce:transition-none motion-reduce:hover:scale-100 motion-off:transition-none motion-off:hover:scale-100"
         >
           {day ? <PixelSun /> : <PixelMoon />}
         </button>

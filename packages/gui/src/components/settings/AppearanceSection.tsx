@@ -1,7 +1,7 @@
 import { Cloud, Moon, Sun } from "lucide-react";
 import { SettingsGroup, SettingsRow, Segmented, Switch } from "../ui";
 import { useTheme, type Theme } from "../../hooks/useTheme";
-import { usePrefersReducedMotion } from "../../hooks/usePrefersReducedMotion";
+import { useSystemReducedMotion } from "../../hooks/usePrefersReducedMotion";
 import { useLocalSetting } from "../../hooks/useLocalSetting";
 
 /**
@@ -77,15 +77,15 @@ const THEMES: { value: Theme; label: string; icon: React.ReactNode; swatch: stri
 
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme();
-  const systemReducedMotion = usePrefersReducedMotion();
+  const systemReducedMotion = useSystemReducedMotion();
   const [density, setDensity] = useLocalSetting<"comfortable" | "compact">(
     "appearance.density",
     "comfortable",
   );
-  const [reduceMotion, setReduceMotion] = useLocalSetting(
-    "appearance.reduceMotion",
-    systemReducedMotion,
-  );
+  // Stored independently of the system preference: defaulting the stored value to
+  // the OS state would make the switch un-turn-off-able for those users, and the
+  // OR happens in `usePrefersReducedMotion` anyway.
+  const [reduceMotion, setReduceMotion] = useLocalSetting("appearance.reduceMotion", false);
 
   return (
     <>
@@ -106,7 +106,7 @@ export function AppearanceSection() {
         </SettingsRow>
       </SettingsGroup>
 
-      <SettingsGroup label="Display" footnote="Saved on this device until the server setting lands.">
+      <SettingsGroup label="Display" footnote="Applies immediately and is remembered on this device.">
         <SettingsRow
           label="Density"
           description="Spacing in the conversation and panels."

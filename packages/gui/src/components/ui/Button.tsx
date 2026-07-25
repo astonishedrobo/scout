@@ -44,7 +44,9 @@ const sizeClasses: Record<Size, string> = {
 const base =
   "inline-flex items-center justify-center gap-2 font-semibold tracking-[-0.01em] " +
   "transition-[background-color,border-color,color,opacity,box-shadow,transform] duration-fast " +
+  // motion-reduce: is the OS query, motion-off: the Appearance setting.
   "active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 " +
+  "motion-off:transition-none motion-off:active:scale-100 " +
   "disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 " +
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-scout-text/30";
 

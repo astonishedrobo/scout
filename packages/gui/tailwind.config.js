@@ -1,3 +1,8 @@
+// Explicit ".js": tailwind v3 ships no exports map for this subpath, so bare
+// "tailwindcss/plugin" fails to resolve under ESM (this config and
+// scripts/check-tokens.mjs both load as modules).
+import plugin from "tailwindcss/plugin.js";
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
@@ -104,5 +109,20 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    /*
+     * `motion-off:` — the Appearance "Reduce motion" setting.
+     *
+     * Tailwind's built-in `motion-reduce:` compiles to the OS media query only,
+     * and redefining a core variant does not take, so the in-app setting needs a
+     * variant of its own. Use them together on a micro-interaction that has no
+     * CSS equivalent in globals.css:
+     *   motion-reduce:active:scale-100 motion-off:active:scale-100
+     * Everything animated through the `.animate-*` classes is already covered by
+     * the `[data-motion="reduce"]` rules in globals.css and needs neither.
+     */
+    plugin(({ addVariant }) => {
+      addVariant("motion-off", ':root[data-motion="reduce"] &');
+    }),
+  ],
 };

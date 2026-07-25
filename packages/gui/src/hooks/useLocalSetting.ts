@@ -1,20 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 /**
  * Device-local settings, kept in one namespaced object.
  *
- * The settings UI is being built ahead of the endpoints that will back it, so
- * some rows have nowhere on the server to write to yet. Rather than fake them
- * (a control that snaps back on reload reads as a bug) they persist here, and
- * their group carries a "Saved on this device" footnote so nothing claims to be
- * server-side.
+ * Some rows in the settings UI have nowhere on the server to write to. Rather
+ * than fake them (a control that snaps back on reload reads as a bug) they
+ * persist here, and their group carries a "Saved on this device" footnote so
+ * nothing claims to be server-side.
  *
- * When an endpoint lands, only the read/write pair in the section changes — the
- * row markup does not.
+ * Writes publish to a module-level listener set, so anything deriving state from
+ * a setting — `usePrefersReducedMotion`, the density attribute — updates in the
+ * same tab and not only in the next one.
  */
 const STORE_KEY = "scout.settings";
 
 type Store = Record<string, unknown>;
+
+const listeners = new Set<() => void>();
 
 function readStore(): Store {
   try {
@@ -41,29 +43,36 @@ export function readLocalSetting<T>(key: string, fallback: T): T {
   return value === undefined ? fallback : (value as T);
 }
 
-export function useLocalSetting<T>(key: string, fallback: T): [T, (next: T) => void] {
-  const [value, setValue] = useState<T>(() => readLocalSetting(key, fallback));
+/** Persists one setting and notifies every listener in this tab. */
+export function writeLocalSetting<T>(key: string, value: T) {
+  writeStore({ ...readStore(), [key]: value });
+  for (const listener of listeners) listener();
+}
 
-  const set = useCallback(
-    (next: T) => {
-      setValue(next);
-      writeStore({ ...readStore(), [key]: next });
-    },
-    [key],
+/** Fires on any settings write, in this tab or another one. */
+export function subscribeLocalSettings(onChange: () => void) {
+  listeners.add(onChange);
+  return () => listeners.delete(onChange);
+}
+
+// Two windows open on the same app should not disagree about a setting.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORE_KEY) return;
+    for (const listener of listeners) listener();
+  });
+}
+
+export function useLocalSetting<T>(key: string, fallback: T): [T, (next: T) => void] {
+  // Read through the store on every publish, so two controls bound to the same
+  // key agree without either of them owning the value.
+  const value = useSyncExternalStore(
+    subscribeLocalSettings,
+    () => readLocalSetting(key, fallback),
+    () => fallback,
   );
 
-  // Two windows open on the same app should not disagree about a setting.
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORE_KEY) return;
-      setValue(readLocalSetting(key, fallback));
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-    // `fallback` is a literal at every call site; re-subscribing on it would
-    // churn the listener on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  const set = useCallback((next: T) => writeLocalSetting(key, next), [key]);
 
   return [value, set];
 }

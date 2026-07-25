@@ -1,29 +1,36 @@
 import { SettingsGroup, SettingsRow, SettingsSelect, Segmented, Switch } from "../ui";
 import { useLocalSetting } from "../../hooks/useLocalSetting";
 import { APP_VERSION } from "../../appMeta";
+import type { ApprovalMode } from "scout-core";
 import type { SectionProps } from "./shared";
 
-const DEVICE_NOTE = "Saved on this device until the server setting lands.";
+const DEVICE_NOTE = "Remembered on this device.";
 
 /**
  * General preferences.
  *
- * Every row here is device-local: none of these have an endpoint yet. They are
- * built now so the layout is final and the behaviour is real to click through;
- * see `useLocalSetting` for the seam that swaps in a server call later.
+ * These are device-local by design rather than for want of an endpoint: they
+ * describe how this browser should behave, and `POST /config` is a deployment
+ * setting that is 403 in server mode anyway. Each one has a real consumer —
+ * `App.tsx` reads them and acts on them; see `useLocalSetting`, whose writes
+ * publish so a change here takes effect without a reload.
+ *
+ * "Response speed" is the exception and is still inert: making it real means
+ * deciding how much the agent deliberates before answering, which is a feature,
+ * not a config key.
  */
 export function GeneralSection({ isMultiUser }: SectionProps) {
-  const [askBeforeRun, setAskBeforeRun] = useLocalSetting("general.askBeforeRun", true);
+  const [permissionDefault, setPermissionDefault] = useLocalSetting<ApprovalMode>(
+    "general.permissionDefault",
+    "ask_always",
+  );
   const [autoReview, setAutoReview] = useLocalSetting("general.autoReview", true);
-  const [fullAccess, setFullAccess] = useLocalSetting("general.fullAccess", false);
   const [suggestions, setSuggestions] = useLocalSetting("general.suggestions", true);
-  const [defaultPanel, setDefaultPanel] = useLocalSetting<"files" | "tasks">(
+  const [defaultPanel, setDefaultPanel] = useLocalSetting<"none" | "files" | "tasks">(
     "general.defaultPanel",
-    "files",
+    "none",
   );
   const [speed, setSpeed] = useLocalSetting<"standard" | "thorough">("general.speed", "standard");
-  const [preventSleep, setPreventSleep] = useLocalSetting("general.preventSleep", false);
-  const isDesktop = !!window.scoutDesktop;
 
   return (
     <>
@@ -33,13 +40,30 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
         footnote={DEVICE_NOTE}
       >
         <SettingsRow
-          label="Ask before running commands"
-          description="Approve each shell command and file write before it runs."
+          label="Default for new conversations"
+          description="Where each conversation starts. The approval control in the composer still changes it per conversation."
           control={
-            <Switch
-              checked={askBeforeRun}
-              onChange={setAskBeforeRun}
-              label="Ask before running commands"
+            <SettingsSelect
+              value={permissionDefault}
+              onChange={setPermissionDefault}
+              label="Default for new conversations"
+              options={[
+                {
+                  value: "ask_always",
+                  label: "Ask every time",
+                  description: "Ask before workspace edits, network access, and elevated actions",
+                },
+                {
+                  value: "allow_edits",
+                  label: "Allow edits",
+                  description: "Edit workspace files automatically; still ask for network access",
+                },
+                {
+                  value: "full_access",
+                  label: "Full access",
+                  description: "Perform allowed edits and network actions without asking",
+                },
+              ]}
             />
           }
         />
@@ -48,13 +72,6 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
           description="Open the diff automatically when Scout edits a file."
           control={
             <Switch checked={autoReview} onChange={setAutoReview} label="Auto-review file changes" />
-          }
-        />
-        <SettingsRow
-          label="Full workspace access"
-          description="Skip approval for reads and writes anywhere in the workspace. Raises the risk of unintended changes."
-          control={
-            <Switch checked={fullAccess} onChange={setFullAccess} label="Full workspace access" />
           }
         />
       </SettingsGroup>
@@ -69,6 +86,7 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
               onChange={setDefaultPanel}
               label="Default side panel"
               options={[
+                { value: "none", label: "None" },
                 { value: "files", label: "Files" },
                 { value: "tasks", label: "Tasks" },
               ]}
@@ -84,7 +102,7 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
         />
         <SettingsRow
           label="Response speed"
-          description="How much work Scout does before answering."
+          description="How much work Scout does before answering. Not in effect yet."
           control={
             <SettingsSelect
               value={speed}
@@ -97,19 +115,6 @@ export function GeneralSection({ isMultiUser }: SectionProps) {
             />
           }
         />
-        {isDesktop && (
-          <SettingsRow
-            label="Prevent sleep while running"
-            description="Keep this machine awake until the task finishes."
-            control={
-              <Switch
-                checked={preventSleep}
-                onChange={setPreventSleep}
-                label="Prevent sleep while running"
-              />
-            }
-          />
-        )}
       </SettingsGroup>
 
       <SettingsGroup label="About">

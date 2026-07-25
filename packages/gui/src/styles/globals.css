@@ -111,6 +111,26 @@
     --dur-collapse-out: 150ms;
   }
 
+  /*
+   * Density tokens — theme-independent, like the motion tokens above.
+   *
+   * Only the conversation thread reads these. Density is a
+   * legibility preference about how much vertical air the reading surface has,
+   * not a licence to re-space every control in the app: shrinking button and row
+   * paddings would push touch targets under the 44px minimum. Consumed through
+   * the `.thread-flow` / `.thread-pad` utilities below, and switched by
+   * `[data-density]`, which `useDensity` stamps at module load.
+   */
+  :root {
+    --space-thread: 1.75rem;
+    --pad-thread: 2rem;
+  }
+
+  :root[data-density="compact"] {
+    --space-thread: 1rem;
+    --pad-thread: 1.25rem;
+  }
+
   /* Light mode — an intentionally quiet neutral canvas. Borders only define
      genuine boundaries; they are not used as a substitute for hierarchy. */
   :root.light {
@@ -499,6 +519,18 @@
     display: none;
   }
 
+  /* Density-aware spacing. See the `--space-thread` tokens in the base layer for
+     why only the reading surfaces opt in. `> * + *` rather than `gap`, because the
+     thread's children include absolutely-positioned overlays that must not be
+     spaced. */
+  .thread-flow > * + * {
+    margin-top: var(--space-thread);
+  }
+  .thread-pad {
+    padding-top: var(--pad-thread);
+    padding-bottom: var(--pad-thread);
+  }
+
   .prose-scout pre {
     /* Matches CodeBlock's shell (rounded-card + hairline) so a bare <pre> and a
        fenced block are not two different treatments side by side. */
@@ -822,6 +854,16 @@
   }
 }
 
+/* The media query above cannot see the Appearance setting, and `.theme-switching`
+   sits on :root itself rather than an ancestor — so the opt-out is a higher
+   specificity override rather than a guard on the query. */
+:root[data-motion="reduce"].theme-switching,
+:root[data-motion="reduce"].theme-switching *,
+:root[data-motion="reduce"].theme-switching *::before,
+:root[data-motion="reduce"].theme-switching *::after {
+  transition: none !important;
+}
+
 /* Loading placeholder. A sweeping highlight over a `lift`-toned block, for
    waits whose shape is known ahead of time (list rows, file trees) — a spinner
    there says "something is happening" where a skeleton says "a list is coming".
@@ -849,11 +891,9 @@
   animation: skeleton-sweep 1.4s linear infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .skeleton {
-    animation: none;
-    background-image: none;
-  }
+:root[data-motion="reduce"] .skeleton {
+  animation: none;
+  background-image: none;
 }
 
 /* Card hover lift — transform+shadow only, GPU-composited, cheap. */
@@ -868,7 +908,15 @@
   box-shadow: var(--shadow-card-hover);
 }
 
-@media (prefers-reduced-motion: reduce) {
+/*
+ * Reduced motion is keyed on `[data-motion="reduce"]`, not on the media query
+ * directly, because it has two sources: the OS preference and the Appearance
+ * setting. `usePrefersReducedMotion` ORs them and stamps the attribute at module
+ * load — before React renders — so nothing paints an animation we then suppress.
+ * A setting the OS could veto would be a setting that does nothing for most
+ * people, so either source alone is enough.
+ */
+:root[data-motion="reduce"] :is(
   .animate-enter,
   .animate-panel-in,
   .animate-drawer-in,
@@ -881,27 +929,26 @@
   .animate-backdrop-out,
   .animate-modal-out,
   .animate-fade-out,
-  .animate-collapse-out {
-    animation: none;
-  }
-  .panels-gliding > [data-panel] {
-    transition: none;
-  }
-  .lift-hover,
-  .lift-hover:hover {
-    transform: none;
-    transition: none;
-  }
+  .animate-collapse-out
+) {
+  animation: none;
+}
+:root[data-motion="reduce"] .panels-gliding > [data-panel] {
+  transition: none;
+}
+:root[data-motion="reduce"] :is(.lift-hover, .lift-hover:hover) {
+  transform: none;
+  transition: none;
+}
 
-  /* Spinners are SLOWED, not stopped: a frozen spinner reads as a hung app,
-     so the liveness signal has to survive. Decorative pulses just stop. */
-  .animate-spin {
-    animation-duration: 1.6s;
-  }
-  .animate-pulse {
-    animation: none;
-    opacity: 1;
-  }
+/* Spinners are SLOWED, not stopped: a frozen spinner reads as a hung app,
+   so the liveness signal has to survive. Decorative pulses just stop. */
+:root[data-motion="reduce"] .animate-spin {
+  animation-duration: 1.6s;
+}
+:root[data-motion="reduce"] .animate-pulse {
+  animation: none;
+  opacity: 1;
 }
 
 /* Stars orbiting the dazed character's head. The parent flattens this
@@ -917,10 +964,8 @@
 .dazed-orbit {
   animation: dazed-spin 2.6s linear infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-  .dazed-orbit {
-    animation: none;
-  }
+:root[data-motion="reduce"] .dazed-orbit {
+  animation: none;
 }
 
 /* Warm glass for the sunset login card — a lit-paper-lantern feel. Fixed
@@ -957,11 +1002,9 @@
   animation: login-sky-drift 80s ease-in-out infinite;
   will-change: transform;
 }
-@media (prefers-reduced-motion: reduce) {
-  .login-sky-drift {
-    animation: none;
-    transform: scale(1.08);
-  }
+:root[data-motion="reduce"] .login-sky-drift {
+  animation: none;
+  transform: scale(1.08);
 }
 
 /* ── Welcome scene: drifting pixel clouds + twinkling stars ────── */
@@ -1039,16 +1082,11 @@
   image-rendering: pixelated;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cloud-drift,
-  .star-twinkle,
-  .bird-bob,
-  .shooting-star {
-    animation: none;
-  }
-  .shooting-star {
-    opacity: 0;
-  }
+:root[data-motion="reduce"] :is(.cloud-drift, .star-twinkle, .bird-bob, .shooting-star) {
+  animation: none;
+}
+:root[data-motion="reduce"] .shooting-star {
+  opacity: 0;
 }
 
 /* ── Pixel pet ─────────────────────────────────────────────────── */
@@ -1193,13 +1231,13 @@
   animation: pet-hop 0.5s ease-in-out infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
+:root[data-motion="reduce"] :is(
   .pet-breathe,
   .pet-goof,
   .pet-stroll,
   .pet-hop,
   .pet-flap-left,
-  .pet-flap-right {
-    animation: none;
-  }
+  .pet-flap-right
+) {
+  animation: none;
 }

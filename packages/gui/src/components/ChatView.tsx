@@ -262,7 +262,8 @@ export function ChatView({
       }}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
+      {/* thread-pad / thread-flow carry the density preference; see globals.css. */}
+      <div className="thread-flow thread-pad mx-auto max-w-[46rem] px-4">
         {messages.map((msg, i) => {
           if (msg.role === "system" && msg.task) {
             return (

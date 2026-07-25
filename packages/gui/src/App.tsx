@@ -9,7 +9,8 @@ import { usePanelPrefs } from "./hooks/usePanelPrefs";
 import { useRightPanelTabs } from "./hooks/useRightPanelTabs";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useSubagents } from "./hooks/useSubagents";
-import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent } from "scout-core";
+import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ApprovalMode } from "scout-core";
+import { useLocalSetting } from "./hooks/useLocalSetting";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { BootScreen } from "./components/BootScreen";
 import { ServerErrorScreen } from "./components/ServerErrorScreen";
@@ -84,13 +85,59 @@ export function App() {
   // True until the initial route (deep-linked session or home) is resolved.
   const [routeBooting, setRouteBooting] = useState(true);
 
+  /*
+   * Device-local settings from Appearance / General, read here rather than in the
+   * leaf components so there is one consumer per setting and the wiring is
+   * visible. `useLocalSetting` publishes on write, so these take effect without a
+   * reload. Declared above `ensureSession` because it reads the permission
+   * default at session-creation time.
+   */
+  const [showSuggestions] = useLocalSetting("general.suggestions", true);
+  const [autoReview] = useLocalSetting("general.autoReview", true);
+  // Defaults to "none" so switching this on is an opt-in: a stored default of
+  // "files" would have started opening the panel for everyone the moment the
+  // setting became functional.
+  const [defaultPanel] = useLocalSetting<"none" | "files" | "tasks">(
+    "general.defaultPanel",
+    "none",
+  );
+  const [permissionDefault] = useLocalSetting<ApprovalMode>(
+    "general.permissionDefault",
+    "ask_always",
+  );
+
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
     const id = await createSession();
     sessionRef.current = id;
+    /*
+     * "Default for new conversations" (General). Written straight to the server
+     * before `useApprovalMode` loads this session, rather than through its
+     * `setMode`: the hook fetches the mode when the session id changes, and a
+     * concurrent local set would race that fetch and could be clobbered by it.
+     * Server-first means the hook simply reads the value we just stored.
+     *
+     * `ask_always` is the server's own default, so it needs no request. A failure
+     * here must not block the message the user is sending — the session stays on
+     * the safer default, which is the right way to fail.
+     */
+    if (permissionDefault !== "ask_always") {
+      try {
+        await fetch(`${baseUrl}/sessions/${id}/approval-mode`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ mode: permissionDefault }),
+        });
+      } catch {
+        // Keep the safer default and carry on.
+      }
+    }
     window.location.hash = `/c/${id}`;
     return id;
-  }, [createSession]);
+  }, [createSession, baseUrl, token, permissionDefault]);
 
   const onUserMessage = useCallback(
     async () => ensureSession(),
@@ -436,6 +483,27 @@ export function App() {
     }
   }, [messages, panel]);
 
+  /*
+   * "Auto-review file changes" (General): open the diff as soon as Scout edits a
+   * file.
+   *
+   * Keyed on the change-set id in a ref rather than on tab presence, so closing
+   * the tab does not immediately reopen it, and so a set that keeps streaming
+   * updates only opens once. The freshness effect above then keeps it current.
+   */
+  const autoReviewedRef = useRef(new Set<string>());
+  // Change-set ids are per session; carrying them across would suppress the
+  // first auto-open in the next conversation.
+  useEffect(() => {
+    autoReviewedRef.current = new Set();
+  }, [currentSessionId]);
+  useEffect(() => {
+    if (!autoReview || !latestChangeSet) return;
+    if (autoReviewedRef.current.has(latestChangeSet.id)) return;
+    autoReviewedRef.current.add(latestChangeSet.id);
+    panel.open({ kind: "review", changeSet: latestChangeSet });
+  }, [autoReview, latestChangeSet, panel]);
+
   const markChangeSetUndone = useCallback((changeSetId: string) => {
     setMessages((prev) => prev.map((message) => ({
       ...message,
@@ -498,10 +566,14 @@ export function App() {
     sessionRef.current = null;
     setCurrentSessionId(null);
     panel.closeKinds(["artifact", "review"]);
+    // "Default side panel" (General). Files and Agents are workspace-scoped, so
+    // they survive closeKinds above and only need opening when not already up.
+    if (defaultPanel === "files") panel.open({ kind: "files" });
+    else if (defaultPanel === "tasks") panel.open({ kind: "agents" });
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
-  }, [setCurrentSessionId, panel]);
+  }, [setCurrentSessionId, panel, defaultPanel]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -906,9 +978,11 @@ export function App() {
                   embedded
                 />
                 </div>
-                <div>
-                  <SuggestionChips onSuggestionClick={handleSubmit} />
-                </div>
+                {showSuggestions && (
+                  <div>
+                    <SuggestionChips onSuggestionClick={handleSubmit} />
+                  </div>
+                )}
               </div>
             </div>
           )}

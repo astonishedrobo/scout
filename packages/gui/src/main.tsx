@@ -22,6 +22,16 @@ import "@fontsource/jetbrains-mono/latin-500.css";
 
 import "./styles/globals.css";
 
+/*
+ * Imported for their module-load side effect: each stamps its attribute on
+ * <html> (`data-motion`, `data-density`) before React renders, so the first
+ * paint already honours the stored Appearance settings. Both are also real hooks
+ * used inside the tree — this import only guarantees they run even when no
+ * consumer has mounted yet. Same reason `useTheme` applies eagerly.
+ */
+import "./hooks/usePrefersReducedMotion";
+import "./hooks/useDensity";
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
