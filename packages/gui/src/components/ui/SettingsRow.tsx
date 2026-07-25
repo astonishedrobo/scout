@@ -39,7 +39,7 @@ export function SettingsRow({
   const Text = htmlFor ? "label" : "div";
 
   return (
-    <div className={`px-4 py-3.5 sm:px-5 ${className}`}>
+    <div className={`px-4 py-2.5 sm:px-4 ${className}`}>
       <div className="flex min-h-[28px] flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <Text
           {...(htmlFor ? { htmlFor } : {})}

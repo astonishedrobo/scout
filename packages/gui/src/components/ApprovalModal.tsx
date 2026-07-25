@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, CheckCheck, XCircle, MessageSquare, Share2, Shield } from "lucide-react";
+import { Check, CheckCheck, XCircle, MessageSquareText, Share2, Shield } from "lucide-react";
 import type { ApprovalRequest } from "../hooks/useChat";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
@@ -99,7 +99,7 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
           {Object.keys(cap.scope).length > 0 && (
             <div>
               <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Scope</span>
-              <pre className="text-caption font-mono bg-scout-code-bg rounded-card p-2 mt-1 overflow-x-auto border border-scout-hairline-faint">
+              <pre className="text-caption font-mono bg-scout-code-bg rounded-btn p-2 mt-1 overflow-x-auto border border-scout-hairline-faint">
                 {JSON.stringify(cap.scope, null, 2)}
               </pre>
             </div>
@@ -172,7 +172,7 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             entry.status === "added" ? "NEW" : entry.status === "deleted" ? "DELETE" : "MODIFIED";
 
           return (
-            <section key={i} className="overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel/60">
+            <section key={i} className="overflow-hidden rounded-btn border border-scout-hairline-faint bg-scout-panel/50">
               <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/95 px-3 py-2.5 backdrop-blur-sm">
                 <Badge uppercase className={`border border-scout-hairline-faint ${statusColor}`}>
                   {statusLabel}
@@ -215,7 +215,7 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
               onClick={() => setSuggestMode(true)}
               variant="filledInverse" surface="panel"
             >
-              <MessageSquare size={16} /> Suggest Changes
+              <MessageSquareText size={16} /> Suggest Changes
             </Button>
             <Button
               onClick={() => onRespond("no")}

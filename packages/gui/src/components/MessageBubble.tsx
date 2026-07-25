@@ -91,9 +91,9 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div className="w-fit max-w-full rounded-card border border-scout-hairline-faint bg-scout-input-bg px-4 py-2.5">
+          <div className="w-fit max-w-full rounded-message bg-scout-input-bg/80 px-3.5 py-2">
             {!!message.annotations?.length && (
-              <div className="mb-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/70 p-2.5">
+              <div className="mb-2.5 rounded-control bg-scout-panel/55 px-2.5 py-2">
                 <p className="text-caption font-semibold text-scout-text">{message.annotations.length} annotation{message.annotations.length === 1 ? "" : "s"}</p>
                 <div className="mt-1.5 space-y-1.5">
                   {message.annotations.map((annotation, index) => (

@@ -79,9 +79,7 @@ export function PanelLauncher({
       ref={containerRef}
       role={variant === "menu" ? "menu" : undefined}
       onKeyDown={onKeyDown}
-      className={`overflow-hidden border border-scout-hairline-faint bg-scout-panel/95 shadow-pop ${
-        variant === "menu" ? "rounded-card" : "rounded-[14px]"
-      }`}
+      className={variant === "menu" ? "py-1" : "space-y-2"}
     >
       {items.map((item) => {
         const keys = item.shortcut ? keysFor(item.shortcut) : undefined;
@@ -96,9 +94,15 @@ export function PanelLauncher({
               item.onSelect();
               onDismiss?.();
             }}
-            className="group flex min-h-11 w-full items-center gap-3 border-b border-scout-hairline-faint px-3.5 py-2.5 text-left transition-colors last:border-b-0 hover:bg-scout-lift/75 focus:bg-scout-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-scout-text/25 disabled:cursor-not-allowed disabled:bg-transparent disabled:opacity-45"
+            className={`group flex w-full items-center text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-scout-text/20 disabled:cursor-not-allowed disabled:opacity-45 ${
+              variant === "menu"
+                ? "min-h-10 gap-2.5 rounded-control border-0 bg-transparent px-3 py-2 hover:bg-scout-lift/75 focus:bg-scout-lift/75"
+                : "min-h-11 gap-3 rounded-control border border-scout-hairline-faint bg-scout-panel/35 px-3.5 py-2.5 hover:border-scout-hairline hover:bg-scout-lift/55 focus:bg-scout-lift/55"
+            }`}
           >
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-btn text-scout-muted transition-colors group-hover:bg-scout-input-bg group-hover:text-scout-text">
+            <span className={`flex shrink-0 items-center justify-center text-scout-muted transition-colors group-hover:text-scout-text ${
+              variant === "menu" ? "h-6 w-6" : "h-7 w-7"
+            }`}>
               {item.icon}
             </span>
             <span className="min-w-0 flex-1 truncate text-label font-medium text-scout-text">
@@ -108,7 +112,7 @@ export function PanelLauncher({
             {item.disabled && item.hint ? (
               <span className="shrink-0 text-micro text-scout-muted">{item.hint}</span>
             ) : (
-              keys && <Kbd>{keys}</Kbd>
+              keys && <Kbd compact>{keys}</Kbd>
             )}
           </button>
         );
@@ -119,21 +123,11 @@ export function PanelLauncher({
     </div>
   );
 
-  if (variant === "menu") return <div className="w-[286px] p-1.5">{rows}</div>;
+  if (variant === "menu") return <div className="w-[300px] px-1.5">{rows}</div>;
 
   return (
-    <div className="flex h-full items-center justify-center px-6 py-8">
-      <div className="w-full max-w-[360px]">
-        <div className="mb-3 px-1">
-          <p className="text-label font-semibold tracking-[-0.01em] text-scout-text">
-            Open a panel
-          </p>
-          <p className="mt-0.5 text-caption text-scout-muted">
-            Choose a workspace view to keep alongside your conversation.
-          </p>
-        </div>
-        {rows}
-      </div>
+    <div className="flex h-full items-center justify-center px-8 py-10">
+      <div className="w-full max-w-[460px]">{rows}</div>
     </div>
   );
 }

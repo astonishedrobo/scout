@@ -60,13 +60,13 @@ export function CenterModal({
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden ${
+        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-surface shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden ${
           exiting ? "animate-modal-out" : "animate-modal-in"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
         {(title || showClose) && (
-          <div className="flex items-center justify-between px-5 py-3 border-b border-scout-hairline-faint shrink-0">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-scout-hairline-faint shrink-0">
             {title ? (
               <h2 className="text-label font-medium text-scout-text">{title}</h2>
             ) : (

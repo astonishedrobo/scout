@@ -111,7 +111,7 @@ export interface ChatImage {
   url: string;
 }
 
-export type ArtifactRenderer = "markdown" | "html" | "image" | "csv" | "json" | "code" | "text";
+export type ArtifactRenderer = "markdown" | "html" | "image" | "csv" | "json" | "code" | "text" | "pdf";
 
 export interface Artifact {
   id: string;

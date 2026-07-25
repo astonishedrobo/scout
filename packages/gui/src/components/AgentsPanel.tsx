@@ -21,6 +21,7 @@ import { ActivityOrb } from "./ActivityOrb";
 import { PanelBreadcrumb } from "./ui/PanelBreadcrumb";
 import { IconButton } from "./ui/IconButton";
 import { EmptyState } from "./ui/EmptyState";
+import { ICON_SIZE, ICON_STROKE } from "./ui/iconSystem";
 import { ChatView } from "./ChatView";
 
 interface AgentsPanelProps {
@@ -77,7 +78,7 @@ function AgentRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-card px-2.5 py-2 text-left transition-colors hover:bg-scout-lift/60"
+      className="flex w-full items-start gap-2.5 rounded-btn px-2.5 py-2 text-left transition-colors hover:bg-scout-lift/60"
     >
       {live ? (
         <ActivityOrb className="-ml-1 -mt-0.5" />
@@ -117,7 +118,7 @@ function TerminalTaskRow({ task, onStop }: { task: TaskEvent; onStop?: () => Pro
   const elapsed = elapsedLabel(task.started_at ?? task.created_at, task.finished_at, now);
   const [stopping, setStopping] = useState(false);
   return (
-    <div className="flex items-start gap-2.5 rounded-card px-2.5 py-2">
+    <div className="flex items-start gap-2.5 rounded-btn px-2.5 py-2">
       {live ? <ActivityOrb className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -429,7 +430,7 @@ export function AgentsPanel({
             )}
             {canMessage ? (
               <div
-                className={`relative flex flex-col overflow-hidden rounded-hero border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-2 focus-within:ring-scout-muted/35 ${
+                className={`relative flex flex-col overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-1 focus-within:ring-scout-muted/25 ${
                   sending ? "opacity-70" : ""
                 }`}
               >
@@ -460,12 +461,12 @@ export function AgentsPanel({
                     }`}
                     aria-label="Send to agent"
                   >
-                    <ArrowUp size={16} strokeWidth={2.4} />
+                    <ArrowUp size={ICON_SIZE.toolbar} strokeWidth={ICON_STROKE.primary} />
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2 text-caption text-scout-muted">
+              <div className="rounded-btn border border-scout-hairline-faint bg-scout-panel/60 px-3 py-2 text-caption text-scout-muted">
                 This agent’s context has expired.
               </div>
             )}

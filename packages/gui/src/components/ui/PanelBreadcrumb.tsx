@@ -34,14 +34,14 @@ export function PanelBreadcrumb({
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-scout-hairline-faint bg-scout-canvas px-3">
-      {/* Truncates from the left: the deepest segment identifies what you are
-          looking at, so it is the last thing that should be cut. */}
+      {/* The path owns only the space left over after metadata and actions.
+          It stays anchored at the logical root and scrolls independently when
+          it grows, while the controls remain pinned to the right. */}
       <nav
         aria-label="Location"
         className="no-scrollbar flex min-w-0 flex-1 items-center overflow-x-auto"
-        dir="rtl"
       >
-        <ol className="flex shrink-0 items-center gap-1" dir="ltr">
+        <ol className="flex shrink-0 items-center gap-1">
           {crumbs.map((crumb, index) => {
             const last = index === crumbs.length - 1;
             return (

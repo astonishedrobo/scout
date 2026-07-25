@@ -65,7 +65,7 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
         : "bg-scout-accent-cta";
   const body = task.error || task.summary || task.result_preview;
   const content = (
-    <div className="flex min-w-0 items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel/70 px-3 py-2.5 text-left transition-colors hover:bg-scout-lift/60">
+    <div className="flex min-w-0 items-start gap-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/55 px-3 py-2 text-left transition-colors hover:bg-scout-lift/60">
       <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${statusColor} ${active ? "animate-pulse" : ""}`} />
       <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
       <span className="min-w-0 flex-1">
@@ -184,10 +184,10 @@ export function SuggestionChips({
             key={s.prompt}
             onClick={() => onSuggestionClick(s.prompt)}
             title={s.description}
-            className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left transition-colors hover:bg-scout-lift"
+            className="group flex items-start gap-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/65 px-3 py-2.5 text-left transition-colors hover:border-scout-hairline hover:bg-scout-lift/70"
           >
             <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center ${s.iconClass}`}>
-              <Icon size={15} strokeWidth={1.8} />
+              <Icon size={15} />
             </span>
             <span className="min-w-0">
               <span className="block text-label font-semibold text-scout-text/90">{s.title}</span>

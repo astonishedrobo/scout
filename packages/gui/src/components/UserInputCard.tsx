@@ -66,8 +66,8 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
 
   return (
     <div className="mx-auto w-full max-w-[46rem]">
-      <div className="overflow-hidden rounded-card border border-scout-hairline bg-scout-panel/95 shadow-pop">
-        <div className="flex items-start gap-3 px-4 py-3">
+      <div className="overflow-hidden rounded-btn border border-scout-hairline bg-scout-panel/95 shadow-composer">
+        <div className="flex items-start gap-3 px-3.5 py-2.5">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-center gap-2">
               {question.header && question.header !== "Question" && (
@@ -101,7 +101,7 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
                 key={`${option.label}-${optionIndex}`}
                 disabled={submitting}
                 onClick={() => submit(option.label)}
-                className="group flex w-full items-center gap-3 rounded-card border-t border-scout-hairline-faint px-2.5 py-2.5 text-left transition-colors first:border-t-0 hover:bg-scout-lift disabled:opacity-50"
+                className="group flex w-full items-center gap-2.5 border-t border-scout-hairline-faint px-2.5 py-2 text-left transition-colors first:border-t-0 hover:bg-scout-lift disabled:opacity-50"
               >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-btn bg-scout-lift text-label font-medium text-scout-muted group-hover:text-scout-text">
                   {optionIndex + 1}
@@ -149,7 +149,7 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
               <button
                 type="button"
                 onClick={() => setOtherMode(true)}
-                className="flex flex-1 items-center gap-3 rounded-card px-2.5 py-2 text-left transition-colors hover:bg-scout-lift"
+                className="flex flex-1 items-center gap-2.5 rounded-btn px-2.5 py-2 text-left transition-colors hover:bg-scout-lift"
               >
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-btn bg-scout-lift text-scout-muted">
                   <Pencil size={14} />

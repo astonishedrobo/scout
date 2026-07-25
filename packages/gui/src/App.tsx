@@ -665,7 +665,7 @@ export function App() {
     [handleNewChat, openSettingsRoute],
   );
 
-  const { uploadFiles, activeCount } = useUploads(
+  const { uploads, uploadFiles, dismiss: dismissUpload, activeCount, errorCount } = useUploads(
     baseUrl,
     token,
   );
@@ -848,6 +848,11 @@ export function App() {
                   token={token}
                   refreshSignal={`${messages.length}:${chatBusy ? "running" : "idle"}`}
                   onTitleChange={(title) => panel.setTitle(open.key, title)}
+                  uploads={uploads}
+                  uploadActiveCount={activeCount}
+                  uploadErrorCount={errorCount}
+                  onUpload={isMultiUser ? uploadFiles : undefined}
+                  onDismissUpload={isMultiUser ? dismissUpload : undefined}
                 />
               ) : open.tab.kind === "artifact" ? (
                 <ArtifactPanel

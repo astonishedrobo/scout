@@ -7,8 +7,10 @@ import { PixelPet } from "./PixelPet";
 import { PanelBreadcrumb, pathCrumbs } from "./ui/PanelBreadcrumb";
 import { IconButton } from "./ui/IconButton";
 import { Badge } from "./ui/Badge";
+import { SourceViewer } from "./SourceViewer";
 
 const artifactScrollPositions = new Map<string, number>();
+const preferredRichModes = new Map<"markdown" | "html", "preview" | "source">();
 
 export function ArtifactPanel({
   artifact,
@@ -18,7 +20,10 @@ export function ArtifactPanel({
   compact = false,
   scope = null,
   contentEndpoint = "/artifacts/content",
-  leadingActions,
+  trailingActions,
+  onRefresh,
+  adjacentPane,
+  contentHidden = false,
 }: {
   artifact: Artifact;
   baseUrl: string;
@@ -34,15 +39,24 @@ export function ArtifactPanel({
    * breadcrumb's action row. The workspace browser puts its tree toggle and
    * refresh here so the nested preview does not need a second breadcrumb.
    */
-  leadingActions?: React.ReactNode;
+  /** Host actions pinned after the file operations, at the right edge. */
+  trailingActions?: React.ReactNode;
+  /** Optional host refresh, used by the workspace browser to refresh its tree too. */
+  onRefresh?: () => void | Promise<void>;
+  /** Optional pane rendered beside the preview, below the shared full-width header. */
+  adjacentPane?: React.ReactNode;
+  /** Lets compact hosts show the adjacent pane without duplicating the header. */
+  contentHidden?: boolean;
 }) {
   const artifactKey = `${scope ?? "workspace"}:${artifact.path}`;
   const [content, setContent] = useState("");
+  const [previewContent, setPreviewContent] = useState("");
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [viewMode, setViewMode] = useState<"preview" | "source">("preview");
   const scrollRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestRef = useRef(0);
@@ -87,6 +101,7 @@ export function ArtifactPanel({
     setIsRefreshing(true);
     if (!sameArtifact) {
       setContent("");
+      setPreviewContent("");
       setUrl("");
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }
@@ -109,9 +124,9 @@ export function ArtifactPanel({
         if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = nextUrl;
         setUrl(nextUrl);
-        if (artifact.renderer !== "image") {
+        if (artifact.renderer !== "image" && artifact.renderer !== "pdf") {
           const text = await blob.text();
-          const nextContent =
+          const nextPreviewContent =
             artifact.renderer === "html"
               ? await inlineLocalAssets(
                   text,
@@ -124,7 +139,8 @@ export function ArtifactPanel({
                 )
               : text;
           if (requestId !== requestRef.current) return;
-          setContent(nextContent);
+          setContent(text);
+          setPreviewContent(nextPreviewContent);
         }
         requestAnimationFrame(() => {
           if (requestId !== requestRef.current) return;
@@ -145,6 +161,12 @@ export function ArtifactPanel({
     };
   }, [artifact.path, artifact.version, artifactKey, baseUrl, contentEndpoint, token, refresh, artifact.renderer, scope]);
 
+  useEffect(() => {
+    if (artifact.renderer === "markdown" || artifact.renderer === "html") {
+      setViewMode(preferredRichModes.get(artifact.renderer) ?? "preview");
+    }
+  }, [artifactKey, artifact.renderer]);
+
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     window.clearTimeout(restoreTimerRef.current);
@@ -156,7 +178,19 @@ export function ArtifactPanel({
 
   const blocked = artifact.renderer === "html" && hasExternalAssets(content);
   const rendererLabel = artifact.renderer === "markdown" ? "MD" : artifact.renderer.toUpperCase();
-  const canCopy = !!content && artifact.renderer !== "html";
+  const canCopy =
+    !!content &&
+    artifact.renderer !== "image" &&
+    artifact.renderer !== "pdf";
+  const canSwitchView = artifact.renderer === "markdown" || artifact.renderer === "html";
+  const showingSource = canSwitchView && viewMode === "source";
+
+  const toggleView = () => {
+    if (!canSwitchView) return;
+    const next = viewMode === "preview" ? "source" : "preview";
+    preferredRichModes.set(artifact.renderer as "markdown" | "html", next);
+    setViewMode(next);
+  };
 
   const copyContent = () => {
     if (!canCopy) return;
@@ -170,7 +204,11 @@ export function ArtifactPanel({
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
       <PanelBreadcrumb
         crumbs={[
-          ...(scope === "shared" ? [{ label: "Shared" }] : []),
+          ...(scope === "shared"
+            ? [{ label: "Shared" }]
+            : scope === "personal"
+              ? [{ label: "Workspace" }]
+              : []),
           ...pathCrumbs(artifact.path),
         ]}
         meta={
@@ -185,15 +223,31 @@ export function ArtifactPanel({
         }
         actions={
           <>
-            {/* Actions belonging to the file itself. The pane's expand and close
-                controls live once in the tab strip above, not per surface. */}
-            {leadingActions}
+            {canSwitchView && (
+              <button
+                type="button"
+                onClick={toggleView}
+                className="rounded-control px-2.5 py-1.5 text-caption font-medium text-scout-text transition-colors hover:bg-scout-lift"
+              >
+                {showingSource ? "View preview" : "View source"}
+              </button>
+            )}
             {canCopy && (
               <IconButton label="Copy artifact content" onClick={copyContent}>
                 {copied ? <Check size={15} /> : <Copy size={15} />}
               </IconButton>
             )}
-            {url && (
+            <IconButton
+              label="Refresh"
+              onClick={() => {
+                setRefresh((value) => value + 1);
+                void onRefresh?.();
+              }}
+              disabled={isRefreshing}
+            >
+              <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
+            </IconButton>
+            {url ? (
               <a
                 href={url}
                 download={artifact.name}
@@ -203,30 +257,35 @@ export function ArtifactPanel({
               >
                 <Download size={16} />
               </a>
+            ) : (
+              <IconButton label="Download" disabled>
+                <Download size={16} />
+              </IconButton>
             )}
-            <IconButton
-              label="Refresh"
-              onClick={() => setRefresh((value) => value + 1)}
-              disabled={isRefreshing}
-            >
-              <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
-            </IconButton>
+            {trailingActions}
           </>
         }
       />
-      <div
-        ref={scrollRef}
-        onScroll={(event) => {
-          if (restoringScrollRef.current) return;
-          const scrollTop = event.currentTarget.scrollTop;
-          preservedScrollRef.current = scrollTop;
-          artifactScrollPositions.set(artifactKey, scrollTop);
-        }}
-        className={`flex-1 min-h-0 overflow-auto bg-scout-canvas ${
-          artifact.renderer === "markdown" ? "px-5 py-8" : "p-4"
-        }`}
-      >
-        {blocked && (
+      <div className="flex min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={(event) => {
+            if (restoringScrollRef.current) return;
+            const scrollTop = event.currentTarget.scrollTop;
+            preservedScrollRef.current = scrollTop;
+            artifactScrollPositions.set(artifactKey, scrollTop);
+          }}
+          className={`min-h-0 min-w-0 flex-1 overflow-auto bg-scout-canvas ${
+            contentHidden ? "hidden" : ""
+          } ${
+            showingSource || ["code", "text", "json", "csv", "html", "pdf"].includes(artifact.renderer)
+              ? "p-0"
+              : artifact.renderer === "markdown"
+                ? "px-5 py-8"
+                : "p-4"
+          }`}
+        >
+        {blocked && !showingSource && (
           <p className="mb-3 rounded-card border border-scout-warning/25 bg-scout-warning-muted p-3 text-caption text-scout-warning">
             External assets were blocked. HTML previews must be self-contained.
           </p>
@@ -243,22 +302,22 @@ export function ArtifactPanel({
             <p className="text-label font-semibold text-scout-text">Loading artifact…</p>
           </div>
         )}
-        {artifact.renderer === "image" && url && (
+        {!showingSource && artifact.renderer === "image" && url && (
           <div className="flex min-h-full items-start justify-center">
-            <img src={url} alt={artifact.title} className="max-w-full rounded-card border border-scout-hairline-faint shadow-pop" />
+            <img src={url} alt={artifact.title} className="max-w-full" />
           </div>
         )}
-        {artifact.renderer === "html" && content && (
+        {!showingSource && artifact.renderer === "html" && previewContent && (
           <iframe
             ref={iframeRef}
             onLoad={() => restoreIframeScroll(iframeRef.current, iframeScrollRef.current)}
             title={artifact.title}
-            srcDoc={sandboxHtml(content, artifact.path, baseUrl)}
+            srcDoc={sandboxHtml(previewContent, artifact.path, baseUrl)}
             sandbox="allow-scripts"
-            className="w-full h-full min-h-[70vh] bg-white rounded-card border border-scout-hairline-faint"
+            className="h-full min-h-[70vh] w-full border-0 bg-white"
           />
         )}
-        {artifact.renderer === "markdown" && content && (
+        {!showingSource && artifact.renderer === "markdown" && content && (
           <div className="artifact-document prose-scout mx-auto max-w-[760px]">
             <MarkdownRenderer
               content={content}
@@ -270,13 +329,25 @@ export function ArtifactPanel({
             />
           </div>
         )}
-        {artifact.renderer === "json" && content && (
-          <pre className="rounded-card border border-scout-hairline-faint bg-scout-code-bg p-4 text-caption whitespace-pre-wrap">{formatJson(content)}</pre>
+        {artifact.renderer === "pdf" && url && (
+          <object data={url} type="application/pdf" className="h-full min-h-[70vh] w-full">
+            <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 px-8 text-center">
+              <p className="text-label text-scout-muted">This browser cannot display the PDF.</p>
+              <a href={url} download={artifact.name} className="rounded-control bg-scout-text px-3 py-2 text-caption font-semibold text-scout-bg">
+                Download PDF
+              </a>
+            </div>
+          </object>
         )}
         {artifact.renderer === "csv" && content && <CsvPreview content={content} />}
-        {(artifact.renderer === "code" || artifact.renderer === "text") && content && (
-          <pre className="rounded-card border border-scout-hairline-faint bg-scout-code-bg p-4 text-caption whitespace-pre-wrap font-mono">{content}</pre>
+        {(showingSource || artifact.renderer === "code" || artifact.renderer === "text" || artifact.renderer === "json") && content && (
+          <SourceViewer
+            content={artifact.renderer === "json" ? formatJson(content) : content}
+            path={artifact.path}
+          />
         )}
+        </div>
+        {adjacentPane}
       </div>
     </div>
   );
@@ -396,7 +467,7 @@ function CsvPreview({ content }: { content: string }) {
   const headers = rows[0] ?? [];
   const body = rows.slice(1);
   return (
-    <div className="overflow-x-auto rounded-card border border-scout-hairline-faint bg-scout-panel/70">
+    <div className="min-w-full overflow-x-auto bg-scout-canvas">
       <table className="w-full text-caption border-collapse">
         <thead className="sticky top-0 z-10">
           <tr>

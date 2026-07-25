@@ -5,9 +5,15 @@
  * without the row: when the styling lived only inside the row, a third caller
  * copied the class string, which is how the first two drifted.
  */
-export function Kbd({ children }: { children: React.ReactNode }) {
+export function Kbd({
+  children,
+  compact = false,
+}: {
+  children: React.ReactNode;
+  compact?: boolean;
+}) {
   return (
-    <kbd className="min-w-[40px] shrink-0 rounded-btn border border-scout-hairline bg-scout-input-bg px-2 py-1 text-center font-mono text-caption font-medium text-scout-text shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)]">
+    <kbd className={`${compact ? "min-w-0 px-1.5 py-0.5 text-micro" : "min-w-[40px] px-2 py-1 text-caption"} shrink-0 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/70 text-center font-mono font-medium text-scout-text`}>
       {children}
     </kbd>
   );

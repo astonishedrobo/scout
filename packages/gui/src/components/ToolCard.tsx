@@ -416,7 +416,7 @@ function ToolGroupCard({
 
   return (
     <div
-      className={`rounded-card border ${
+      className={`rounded-btn border ${
         anyFailed
           ? "border-scout-error/25 bg-scout-error-muted"
           : "border-scout-hairline-faint bg-scout-lift/30"
@@ -426,7 +426,7 @@ function ToolGroupCard({
         type="button"
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
-        className="flex w-full items-start gap-2 px-3 py-2 text-left text-caption text-scout-muted hover:text-scout-text transition-colors"
+        className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-caption text-scout-muted transition-colors hover:text-scout-text"
       >
         <ChevronRight
           size={13}
@@ -450,7 +450,7 @@ function ToolGroupCard({
         </div>
       </button>
       {expanded && (
-        <div className="space-y-2 border-t border-scout-hairline-faint px-3 py-2.5">
+        <div className="space-y-1.5 border-t border-scout-hairline-faint px-2.5 py-2">
           {steps.map((step, index) => (
             <ToolRow
               key={`${step.name}-${index}`}

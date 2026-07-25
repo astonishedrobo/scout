@@ -80,6 +80,10 @@ export default {
         hero: "var(--radius-hero)",
         card: "var(--radius-card)",
         btn: "var(--radius-btn)",
+        composer: "var(--radius-composer)",
+        message: "var(--radius-message)",
+        surface: "var(--radius-surface)",
+        control: "var(--radius-control)",
       },
       boxShadow: {
         pop: "var(--shadow-pop)",

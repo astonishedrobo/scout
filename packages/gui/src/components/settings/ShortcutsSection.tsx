@@ -46,7 +46,7 @@ export function ShortcutsSection() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search shortcuts"
           aria-label="Search shortcuts"
-          className="h-9 w-full rounded-card border border-scout-hairline-faint bg-scout-panel/40 pl-9 pr-3 text-label text-scout-text placeholder:text-scout-muted focus:border-scout-text/30 focus:outline-none focus:ring-1 focus:ring-scout-text/20"
+          className="h-8 w-full rounded-btn border border-scout-hairline-faint bg-scout-panel/40 pl-8 pr-3 text-caption text-scout-text placeholder:text-scout-muted focus:border-scout-text/30 focus:outline-none focus:ring-1 focus:ring-scout-text/20"
         />
       </div>
 

@@ -110,7 +110,7 @@ export function AnchoredPopover({
         transform and pin the popover to 0,0.
       */}
       <div
-        className={`origin-top overflow-hidden overflow-y-auto rounded-card border border-scout-hairline bg-scout-panel/95 shadow-pop backdrop-blur-xl animate-enter ${className}`}
+        className={`origin-top overflow-hidden overflow-y-auto rounded-surface border border-scout-hairline-faint bg-scout-panel/95 shadow-pop backdrop-blur-xl animate-enter ${className}`}
       >
         {children}
       </div>

@@ -42,7 +42,7 @@ function ShellHeader({
   | "onToggleRightPanel"
 >) {
   return (
-    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-scout-hairline-faint bg-scout-canvas px-3.5">
+    <header className="flex h-[46px] shrink-0 items-center gap-3 border-b border-scout-hairline-faint bg-scout-canvas px-3">
       <IconButton
         onClick={onToggleSidebar}
         label={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}

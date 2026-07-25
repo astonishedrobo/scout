@@ -28,12 +28,12 @@ export function FileChangeCards({
         return (
           <div
             key={changeSet.id}
-            className={`flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint px-3.5 py-3 ${
+            className={`flex w-full max-w-[45rem] items-center gap-2.5 rounded-btn border border-scout-hairline-faint px-3 py-2.5 ${
               changeSet.undone ? "bg-scout-success-muted" : "bg-scout-card-peach"
             }`}
           >
             <span
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-btn ${
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-btn ${
                 changeSet.undone
                   ? "bg-scout-success/15 text-scout-success"
                   : "bg-scout-peach-muted text-scout-peach"

@@ -286,9 +286,9 @@ export function InitWizard({ open, baseUrl, token, onClose }: InitWizardProps) {
       title={skillExists && step !== "generating" ? "Workspace Skill" : "Initialize Workspace"}
       maxWidth="lg"
     >
-        <div className="px-5 py-4">
+        <div className="px-4 py-3.5">
           {isDesktopMode && (
-            <div className="mb-4 p-3 rounded-btn border border-scout-hairline bg-scout-canvas/40">
+            <div className="mb-3 rounded-btn border border-scout-hairline bg-scout-canvas/30 p-2.5">
               <p className="text-caption text-scout-muted mb-2">
                 Python runtime for this workspace
               </p>
@@ -370,7 +370,7 @@ export function InitWizard({ open, baseUrl, token, onClose }: InitWizardProps) {
                   <>Will be saved to <code>.scout/skills/workspace.md</code></>
                 )}
               </p>
-              <div className="border border-scout-hairline rounded-btn p-4 bg-scout-canvas/50">
+              <div className="rounded-btn border border-scout-hairline bg-scout-canvas/35 p-3">
                 <MarkdownRenderer content={content} />
               </div>
             </div>
@@ -416,7 +416,7 @@ export function InitWizard({ open, baseUrl, token, onClose }: InitWizardProps) {
         </div>
 
         {/* Actions */}
-        <div className="px-5 py-4 border-t border-scout-hairline flex gap-2 justify-end">
+        <div className="flex justify-end gap-1.5 border-t border-scout-hairline px-4 py-3">
           {step === "env" && (
             <>
               <Button variant="ghost" surface="panel" onClick={startInitWithSystem}>

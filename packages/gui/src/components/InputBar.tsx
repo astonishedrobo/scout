@@ -16,7 +16,7 @@ import {
   Hand,
   ShieldCheck,
   ShieldAlert,
-  MessageSquare,
+  MessageSquareText,
   CornerDownRight,
   Trash2,
 } from "lucide-react";
@@ -25,6 +25,7 @@ import type { ApprovalMode, ChatImage, ResponseAnnotation } from "scout-core";
 import type { UploadResult } from "../hooks/useUploads";
 import { formatAnnotatedFollowUp } from "../hooks/useResponseAnnotations";
 import { AttachmentCard, isImageAttachment } from "./AttachmentCard";
+import { ICON_SIZE, ICON_STROKE } from "./ui/iconSystem";
 
 interface SlashCommand {
   name: string;
@@ -526,7 +527,7 @@ export function InputBar({
   const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
   const popoverMenuItem =
-    "w-full flex items-center gap-3 px-3 py-2.5 rounded-card text-label font-medium hover:bg-scout-lift/80 transition-colors text-left";
+    "w-full flex items-center gap-3 px-3 py-2.5 rounded-control text-label font-medium hover:bg-scout-lift/80 transition-colors text-left";
 
   const sendBtnClass = "flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 transition-all";
   const approvalLabel = approvalMode === "ask_always"
@@ -618,13 +619,13 @@ export function InputBar({
       )}
 
       <div
-      className={`relative flex flex-col overflow-visible rounded-hero border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-2 focus-within:ring-scout-muted/35 ${disabled ? "opacity-60" : ""}`}
+      className={`relative flex flex-col overflow-visible rounded-composer border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-1 focus-within:ring-scout-muted/20 ${disabled ? "opacity-60" : ""}`}
       >
         {showAnnotationReview && annotations.length > 0 && (
-          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 rounded-card border border-scout-hairline bg-scout-panel p-3 shadow-pop">
-            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 rounded-surface border border-scout-hairline-faint bg-scout-panel/98 p-2 shadow-pop backdrop-blur-xl">
+            <div className="max-h-56 divide-y divide-scout-hairline-faint overflow-y-auto">
               {annotations.map((annotation, index) => (
-                <div key={annotation.id} className="rounded-btn p-2 hover:bg-scout-lift/40">
+                <div key={annotation.id} className="rounded-control px-2.5 py-2.5 transition-colors hover:bg-scout-lift/35">
                   <div className="flex items-start gap-2.5">
                     <span className="mt-0.5 text-label font-medium text-scout-muted">{index + 1}.</span>
                     <div className="min-w-0 flex-1">
@@ -651,12 +652,12 @@ export function InputBar({
         )}
         {annotations.length > 0 && (
           <div className="flex items-center px-4 pt-3">
-            <div className="flex h-9 items-center rounded-full border border-scout-hairline-faint bg-scout-lift/70 text-[14px] font-semibold text-scout-text">
-              <button type="button" onClick={() => setShowAnnotationReview((open) => !open)} className="flex h-full items-center gap-2 rounded-l-full pl-3.5 pr-1.5 hover:bg-scout-lift" aria-expanded={showAnnotationReview}>
-                <MessageSquare size={15} strokeWidth={1.8} />
+            <div className="flex h-8 items-center rounded-full border border-scout-hairline-faint bg-scout-lift/40 text-label font-semibold text-scout-text">
+              <button type="button" onClick={() => setShowAnnotationReview((open) => !open)} className="flex h-full items-center gap-1.5 rounded-l-full pl-2.5 pr-1 hover:bg-scout-lift/70" aria-expanded={showAnnotationReview}>
+                <MessageSquareText size={ICON_SIZE.feature} className="text-scout-muted" />
                 <span>{annotations.length} annotation{annotations.length === 1 ? "" : "s"}</span>
               </button>
-              <button type="button" onClick={() => { annotations.forEach((annotation) => onRemoveAnnotation?.(annotation.id)); setShowAnnotationReview(false); }} className="mr-1 flex h-7 w-7 items-center justify-center rounded-full text-scout-muted hover:bg-scout-input-bg hover:text-scout-text" aria-label="Clear annotations">
+              <button type="button" onClick={() => { annotations.forEach((annotation) => onRemoveAnnotation?.(annotation.id)); setShowAnnotationReview(false); }} className="mr-0.5 flex h-6 w-6 items-center justify-center rounded-full text-scout-muted hover:bg-scout-input-bg hover:text-scout-text" aria-label="Clear annotations">
                 <X size={14} />
               </button>
             </div>
@@ -749,7 +750,7 @@ export function InputBar({
               ref={modelBtnRef}
               onClick={() => setShowModelMenu((p) => !p)}
               disabled={modelDisabled}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-label font-bold text-scout-text/80 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent transition-all disabled:cursor-not-allowed disabled:opacity-45"
+              className="flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1.5 text-label font-semibold text-scout-text/80 transition-colors hover:bg-scout-lift/80 hover:text-scout-text disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="truncate max-w-[160px]">{shortModel}</span>
               <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
@@ -776,7 +777,9 @@ export function InputBar({
               aria-label={isLoading ? "Steer current turn" : "Send message"}
               title={isLoading ? "Steer" : "Send"}
             >
-              {isLoading ? <CornerDownRight size={17} strokeWidth={2.3} /> : <ArrowUp size={18} strokeWidth={2.3} />}
+              {isLoading
+                ? <CornerDownRight size={ICON_SIZE.primary} strokeWidth={ICON_STROKE.primary} />
+                : <ArrowUp size={ICON_SIZE.primary} strokeWidth={ICON_STROKE.primary} />}
             </button>
           </div>
         </div>

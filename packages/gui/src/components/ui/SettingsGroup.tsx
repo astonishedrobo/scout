@@ -42,7 +42,7 @@ export function SettingsGroup({
           {action && <div className="shrink-0">{action}</div>}
         </div>
       )}
-      <div className="divide-y divide-scout-hairline-faint overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel/40">
+      <div className="divide-y divide-scout-hairline-faint overflow-hidden rounded-control border border-scout-hairline-faint bg-scout-panel/30">
         {children}
       </div>
       {footnote && <p className="px-0.5 text-micro text-scout-muted/80">{footnote}</p>}

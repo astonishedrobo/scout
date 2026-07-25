@@ -7,7 +7,7 @@ import {
   ChevronRight,
   FilePenLine,
   Loader2,
-  MessageSquare,
+  MessageSquareText,
   Network,
   Share2,
   Terminal,
@@ -122,8 +122,8 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
     const command = cap?.command_summary;
 
     return (
-      <div className="overflow-hidden rounded-hero border border-scout-hairline bg-scout-panel shadow-composer">
-        <div className="px-4 pb-3 pt-4 sm:px-5">
+      <div className="overflow-hidden rounded-surface border border-scout-hairline bg-scout-panel">
+        <div className="px-4 pb-2.5 pt-3">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-scout-warning-muted text-scout-warning">
               {isPermission ? <Network size={16} /> : <Terminal size={16} />}
@@ -132,19 +132,19 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
               <div className="text-label font-semibold text-scout-text">{title}</div>
               {detail && <p className="mt-1 text-caption leading-relaxed text-scout-muted">{detail}</p>}
               {permission?.network_domains?.length ? (
-                <div className="mt-2 rounded-card bg-scout-code-bg px-3 py-2 font-mono text-caption text-scout-text/85">
+                <div className="mt-2 rounded-btn bg-scout-code-bg px-2.5 py-1.5 font-mono text-caption text-scout-text/85">
                   {permission.network_domains.join(", ")}
                 </div>
               ) : null}
               {command && (
-                <div className="mt-2 max-h-28 overflow-auto rounded-card bg-scout-code-bg px-3 py-2 font-mono text-caption text-scout-text/85">
+                <div className="mt-2 max-h-28 overflow-auto rounded-btn bg-scout-code-bg px-2.5 py-1.5 font-mono text-caption text-scout-text/85">
                   {command}
                 </div>
               )}
               {cap && Object.keys(cap.scope).length > 0 && (
                 <details className="mt-2 text-caption text-scout-muted">
                   <summary className="cursor-pointer select-none">View requested scope</summary>
-                  <pre className="mt-1 max-h-28 overflow-auto rounded-card bg-scout-code-bg p-2 font-mono text-micro">
+                  <pre className="mt-1 max-h-28 overflow-auto rounded-btn bg-scout-code-bg p-2 font-mono text-micro">
                     {JSON.stringify(cap.scope, null, 2)}
                   </pre>
                 </details>
@@ -168,7 +168,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
             <AlertCircle size={14} /> {error}
           </div>
         )}
-        <div className="flex items-center gap-2 border-t border-scout-hairline-faint px-3 py-3 sm:px-4">
+        <div className="flex items-center gap-1.5 border-t border-scout-hairline-faint px-3 py-2.5">
           <Button
             variant="ghost"
             surface="panel"
@@ -212,8 +212,8 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
     : `${actor} wants to edit ${diffs.length} file${diffs.length === 1 ? "" : "s"}`;
 
   return (
-    <div className="overflow-hidden rounded-hero border border-scout-hairline bg-scout-panel shadow-composer">
-      <div className="px-4 pb-3 pt-4 sm:px-5">
+    <div className="overflow-hidden rounded-surface border border-scout-hairline bg-scout-panel">
+      <div className="px-4 pb-2.5 pt-3">
         <div className="flex items-start gap-3">
           <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-scout-warning-muted text-scout-warning">
             <FilePenLine size={16} />
@@ -243,7 +243,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
       <button
         type="button"
         onClick={() => void openReview()}
-        className="flex w-full items-center gap-2 border-y border-scout-hairline-faint px-4 py-2.5 text-left text-caption font-semibold text-scout-muted transition-colors hover:bg-scout-lift/60 hover:text-scout-text sm:px-5"
+        className="flex w-full items-center gap-2 border-y border-scout-hairline-faint px-4 py-2 text-left text-caption font-semibold text-scout-muted transition-colors hover:bg-scout-lift/60 hover:text-scout-text"
       >
         <ChevronRight size={14} className={`transition-transform ${reviewOpen ? "rotate-90" : ""}`} />
         Review changes
@@ -283,7 +283,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
 
       {suggesting ? (
         <div className="p-3 sm:p-4">
-          <div className="flex items-end gap-2 rounded-card border border-scout-hairline-faint bg-scout-input-bg/70 p-2">
+          <div className="flex items-end gap-2 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/55 p-1.5">
             <textarea
               autoFocus
               value={feedback}
@@ -312,7 +312,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap items-center gap-1.5 px-3 py-3 sm:px-4">
+        <div className="flex flex-wrap items-center gap-1.5 px-3 py-2.5">
           <Button
             variant="ghost"
             surface="panel"
@@ -325,7 +325,7 @@ export function ApprovalDock({ request, baseUrl, sessionId, token, onRespond }: 
           </Button>
           {!isPromotion && (
             <Button variant="ghost" surface="panel" size="compact" disabled={!!submitting} onClick={() => setSuggesting(true)}>
-              <MessageSquare size={13} /> Suggest changes
+              <MessageSquareText size={13} /> Suggest changes
             </Button>
           )}
           {request.canShare && !isPromotion && (

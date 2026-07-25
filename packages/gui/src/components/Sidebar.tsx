@@ -167,7 +167,7 @@ export function Sidebar({
       </div>
 
       {!hasModels && isConnected && !isMultiUser && (
-        <div className="mx-4 mb-3 p-3 rounded-card bg-scout-warning-muted border border-scout-warning/15">
+        <div className="mx-3 mb-3 rounded-btn border border-scout-warning/15 bg-scout-warning-muted px-3 py-2.5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={14} className="text-scout-warning mt-0.5 shrink-0" />
             <div>
@@ -361,7 +361,7 @@ export function Sidebar({
           className="w-[calc(100%-16px)] mx-2 my-2 flex items-center gap-2.5 px-2.5 py-2 rounded-btn text-label text-scout-text hover:bg-scout-input-bg/80 border border-transparent hover:border-scout-hairline-faint transition-all"
           title="Account & app menu"
         >
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-pill border border-scout-hairline-faint bg-scout-input-bg">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-scout-input-bg">
             {username ? (
               <span className="text-caption font-semibold text-scout-text uppercase">
                 {username.charAt(0)}

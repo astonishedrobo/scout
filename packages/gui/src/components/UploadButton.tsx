@@ -14,6 +14,7 @@ interface UploadButtonProps {
   errorCount: number;
   onUpload: (files: FileList | null) => void | Promise<unknown>;
   onDismiss: (id: string) => void;
+  compact?: boolean;
 }
 
 /**
@@ -27,6 +28,7 @@ export function UploadButton({
   errorCount,
   onUpload,
   onDismiss,
+  compact = false,
 }: UploadButtonProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -45,7 +47,7 @@ export function UploadButton({
           if (hasItems) setShowStatus((p) => !p);
           else fileInputRef.current?.click();
         }}
-        className={`${headerActionButtonClass} ${
+        className={`${headerActionButtonClass} ${compact ? "!h-7 !px-2" : ""} ${
           busy
             ? "border-scout-action/30 bg-scout-action-muted text-scout-text"
             : errorCount > 0

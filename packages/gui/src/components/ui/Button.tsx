@@ -29,9 +29,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 // light and dark, 12/8 in `soft`. (These used to be fixed Tailwind radii, which
 // froze every button at one theme's value.)
 const sizeClasses: Record<Size, string> = {
-  hero: "px-6 py-3 text-prose rounded-card",
-  default: "px-5 py-2.5 text-label rounded-card",
-  compact: "px-3 py-1.5 text-caption rounded-btn",
+  hero: "px-5 py-2.5 text-prose rounded-surface",
+  default: "px-4 py-2 text-label rounded-control",
+  compact: "px-2.5 py-1.5 text-caption rounded-control",
 };
 
 /*
@@ -77,12 +77,12 @@ const variants: Record<Variant, Record<Surface, string>> = {
   },
   outlined: {
     canvas:
-      "bg-transparent text-scout-text border border-scout-hairline hover:bg-scout-lift rounded-pill",
+      "bg-transparent text-scout-text border border-scout-hairline hover:bg-scout-lift rounded-control",
     panel:
-      "bg-transparent text-scout-muted border border-scout-hairline-faint hover:text-scout-text hover:border-scout-hairline rounded-pill",
+      "bg-transparent text-scout-muted border border-scout-hairline-faint hover:text-scout-text hover:border-scout-hairline rounded-control",
     // Always-black void surface — literal white, not theme tokens (text-inverse flips in dark mode).
     void:
-      "bg-transparent text-white border border-white/40 hover:text-white hover:border-white/70 hover:bg-white/5 rounded-pill",
+      "bg-transparent text-white border border-white/40 hover:text-white hover:border-white/70 hover:bg-white/5 rounded-control",
   },
   ghost: {
     canvas: "bg-transparent text-scout-muted hover:text-scout-text hover:bg-scout-lift rounded-btn",

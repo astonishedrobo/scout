@@ -73,8 +73,8 @@ export function AttachmentCard({
   const subtitle = [presentation.label, formatSize(size)].filter(Boolean).join(" · ");
 
   return (
-    <div className={`group/attachment relative flex h-[54px] w-[178px] shrink-0 items-center gap-2.5 rounded-btn border border-scout-hairline bg-scout-lift/45 px-2 pr-3 ${className}`} title={title}>
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-btn ${presentation.tone}`}>
+    <div className={`group/attachment relative flex h-[48px] w-[170px] shrink-0 items-center gap-2 rounded-btn border border-scout-hairline-faint bg-scout-lift/35 px-2 pr-2.5 ${className}`} title={title}>
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-btn ${presentation.tone}`}>
         {image ? (
           <AuthenticatedImage
             src={previewUrl ?? `${baseUrl}/files/content?path=${encodeURIComponent(path)}`}
@@ -83,7 +83,7 @@ export function AttachmentCard({
             className="h-full w-full object-cover"
           />
         ) : (
-          <Icon size={18} strokeWidth={1.8} />
+          <Icon size={18} />
         )}
       </div>
       <div className="min-w-0 flex-1">
@@ -98,7 +98,7 @@ export function AttachmentCard({
           aria-label={`Remove ${title}`}
         >
           <span className="flex h-5 w-5 items-center justify-center rounded-full border border-scout-hairline bg-scout-panel shadow-sm transition-colors hover:bg-scout-lift">
-            <X size={12} strokeWidth={2.2} />
+            <X size={12} />
           </span>
         </button>
       )}

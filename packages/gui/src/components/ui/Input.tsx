@@ -10,8 +10,8 @@ import { Eye, EyeOff } from "lucide-react";
 export type InputSize = "lg" | "md" | "sm";
 
 const sizeClass: Record<InputSize, string> = {
-  lg: "px-4 py-3 text-label",
-  md: "px-3 py-2.5 text-label",
+  lg: "px-3.5 py-2.5 text-label",
+  md: "px-3 py-2 text-label",
   sm: "px-2 py-1.5 text-caption",
 };
 
@@ -20,7 +20,7 @@ const fieldBase =
 
 // rounded-card, not a fixed radius: the theme tightens radii in `soft`, and a
 // hardcoded rounded-card froze every field at one theme's value.
-const fieldCanvas = `${fieldBase} border border-scout-hairline-faint rounded-card focus:border-scout-text/30 focus:ring-1 focus:ring-scout-text/20`;
+const fieldCanvas = `${fieldBase} border border-scout-hairline-faint rounded-btn focus:border-scout-text/30 focus:ring-1 focus:ring-scout-text/20`;
 
 // Always-black void surface — no theme tokens from fieldBase (light-mode input-bg is cream).
 const fieldVoid =

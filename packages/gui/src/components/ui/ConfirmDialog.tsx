@@ -27,7 +27,7 @@ export function ConfirmDialog({
 }) {
   return (
     <CenterModal open={!!request} onClose={onClose} title={request?.title} maxWidth="sm">
-      <div className="space-y-4 px-5 py-4">
+      <div className="space-y-3 px-4 py-3.5">
         <p className="text-label leading-relaxed text-scout-muted">{request?.body}</p>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" surface="panel" onClick={onClose}>

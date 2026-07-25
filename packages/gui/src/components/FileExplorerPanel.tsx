@@ -5,24 +5,21 @@ import { IconButton } from "./ui/IconButton";
 import { Skeleton } from "./ui/Skeleton";
 import {
   ChevronRight,
-  File,
-  FileCode2,
   FileQuestion,
   FileText,
-  Folder,
-  FolderOpen,
   FolderTree,
-  Image,
   Loader2,
   RefreshCw,
   Search,
-  Table2,
   X,
 } from "lucide-react";
 import { PixelChest, PixelDazed } from "./PixelArt";
 import { FolderToggleIcon } from "./ui/PanelToggleIcon";
 import { ArtifactPanel } from "./ArtifactPanel";
 import { useMediaQuery } from "../hooks/usePanelPrefs";
+import { FileTypeIcon } from "./ui/FileTypeIcon";
+import { UploadButton } from "./UploadButton";
+import type { UploadItem } from "../hooks/useUploads";
 
 export type FileTreeNode = {
   name: string;
@@ -52,6 +49,11 @@ type FileExplorerPanelProps = {
    * permanent "Files". `undefined` restores the default label.
    */
   onTitleChange?: (title: string | undefined) => void;
+  uploads?: UploadItem[];
+  uploadActiveCount?: number;
+  uploadErrorCount?: number;
+  onUpload?: (files: FileList | null) => void | Promise<unknown>;
+  onDismissUpload?: (id: string) => void;
 };
 
 function nodeKey(node: FileTreeNode, scope: string): string {
@@ -59,13 +61,7 @@ function nodeKey(node: FileTreeNode, scope: string): string {
 }
 
 function FileKindIcon({ node }: { node: FileTreeNode }) {
-  const renderer = node.renderer;
-  const className = "shrink-0 text-scout-muted";
-  if (renderer === "image") return <Image size={15} className="shrink-0 text-scout-lavender" />;
-  if (renderer === "csv") return <Table2 size={15} className="shrink-0 text-scout-success" />;
-  if (renderer === "code" || renderer === "json") return <FileCode2 size={15} className={className} />;
-  if (renderer === "markdown" || renderer === "text") return <FileText size={15} className={className} />;
-  return <File size={15} className={className} />;
+  return <FileTypeIcon name={node.name} size={16} />;
 }
 
 function TreeNodeRow({
@@ -128,11 +124,7 @@ function TreeNodeRow({
         {isLoading ? (
           <Loader2 size={13} className="shrink-0 animate-spin text-scout-muted" />
         ) : isDir ? (
-          isOpen ? (
-            <FolderOpen size={15} className="shrink-0 text-scout-cyan/85" />
-          ) : (
-            <Folder size={15} className="shrink-0 text-scout-cyan/85" />
-          )
+          <FileTypeIcon name={node.name} directory open={isOpen} size={16} />
         ) : (
           <FileKindIcon node={node} />
         )}
@@ -262,6 +254,11 @@ export function FileExplorerPanel({
   token,
   refreshSignal,
   onTitleChange,
+  uploads = [],
+  uploadActiveCount = 0,
+  uploadErrorCount = 0,
+  onUpload,
+  onDismissUpload,
 }: FileExplorerPanelProps) {
   const [roots, setRoots] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -466,20 +463,104 @@ export function FileExplorerPanel({
   const selectedKey = selection ? nodeKey(selection.node, selection.scope) : null;
   const artifact = selection ? toArtifact(selection) : null;
 
+  const treeToggleAction = (
+    <IconButton
+      label={treeVisible ? "Hide file tree" : "Show file tree"}
+      onClick={() => setTreeVisible((visible) => !visible)}
+      aria-pressed={treeVisible}
+    >
+      <FolderToggleIcon open={treeVisible} size={16} />
+    </IconButton>
+  );
+
+  const uploadControl = onUpload && onDismissUpload ? (
+    <UploadButton
+      compact
+      uploads={uploads}
+      activeCount={uploadActiveCount}
+      errorCount={uploadErrorCount}
+      onDismiss={onDismissUpload}
+      onUpload={async (files) => {
+        await onUpload(files);
+        await loadTree();
+      }}
+    />
+  ) : null;
+
   const explorerActions = (
     <>
-      <IconButton
-        label={treeVisible ? "Hide file tree" : "Show file tree"}
-        onClick={() => setTreeVisible((visible) => !visible)}
-        aria-pressed={treeVisible}
-      >
-        <FolderToggleIcon open={treeVisible} size={16} />
-      </IconButton>
       <IconButton label="Refresh files" onClick={() => void loadTree()} disabled={loading}>
         <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
       </IconButton>
+      {treeToggleAction}
+      {uploadControl}
     </>
   );
+
+  const treePane = treeVisible ? (
+    <aside className={`order-2 flex shrink-0 flex-col bg-scout-canvas ${isCompactViewport ? "w-full" : "w-[clamp(180px,32%,240px)]"}`}>
+      <div className="shrink-0 p-2.5">
+        <label className="flex h-9 items-center gap-2 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/75 px-2.5 text-scout-muted transition-colors focus-within:border-scout-muted/40 focus-within:bg-scout-input-bg">
+          <Search size={14} className="shrink-0" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Find a file"
+            aria-label="Find a workspace file"
+            className="min-w-0 flex-1 bg-transparent text-caption text-scout-text outline-none placeholder:text-scout-muted/65"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-btn hover:bg-scout-lift hover:text-scout-text"
+              aria-label="Clear file search"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </label>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
+        {loading && roots.length === 0 && <Skeleton.List rows={7} className="pt-1" />}
+        {error && (
+          <div className="m-2 rounded-btn border border-scout-error/20 bg-scout-error-muted px-3 py-2 text-caption text-scout-error">
+            {error}
+          </div>
+        )}
+        {!loading && !error && roots.length === 0 && (
+          <div className="px-3 py-10 text-center">
+            <div className="mb-3 flex justify-center"><PixelChest size={40} /></div>
+            <p className="text-caption font-medium text-scout-text">The chest is empty</p>
+            <p className="mt-1 text-caption leading-relaxed text-scout-muted">
+              Upload a file or ask Scout to create one — it will appear here.
+            </p>
+          </div>
+        )}
+        {!loading && !error && roots.length > 0 && visibleRoots.length === 0 && (
+          <div className="px-3 py-10 text-center text-caption text-scout-muted">
+            {searching ? "Searching…" : "No matching files"}
+          </div>
+        )}
+        {visibleRoots.map((root) => (
+          <TreeNodeRow
+            key={nodeKey(root, root.scope ?? "workspace")}
+            node={root}
+            scope={root.scope ?? "workspace"}
+            depth={0}
+            expanded={expanded}
+            selectedKey={selectedKey}
+            forceExpanded={!!query.trim()}
+            showFullPath={!!query.trim()}
+            loadingKeys={loadingKeys}
+            onToggle={toggle}
+            onSelect={selectFile}
+          />
+        ))}
+      </div>
+    </aside>
+  ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
@@ -501,72 +582,11 @@ export function FileExplorerPanel({
       )}
 
       <div className="flex min-h-0 flex-1">
-        {treeVisible && (
-          <aside className={`order-2 flex shrink-0 flex-col bg-scout-panel/70 ${isCompactViewport ? "w-full" : "w-[clamp(180px,32%,240px)] border-l border-scout-hairline-faint"}`}>
-            <div className="shrink-0 p-2.5">
-              <label className="flex h-9 items-center gap-2 rounded-btn border border-scout-hairline-faint bg-scout-input-bg/75 px-2.5 text-scout-muted transition-colors focus-within:border-scout-muted/40 focus-within:bg-scout-input-bg">
-                <Search size={14} className="shrink-0" />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Find a file"
-                  aria-label="Find a workspace file"
-                  className="min-w-0 flex-1 bg-transparent text-caption text-scout-text outline-none placeholder:text-scout-muted/65"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    onClick={() => setQuery("")}
-                    className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-btn hover:bg-scout-lift hover:text-scout-text"
-                    aria-label="Clear file search"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </label>
-            </div>
+        {!(selection && artifact) && treePane}
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
-              {loading && roots.length === 0 && <Skeleton.List rows={7} className="pt-1" />}
-              {error && (
-                <div className="m-2 rounded-card border border-scout-error/20 bg-scout-error-muted px-3 py-2 text-caption text-scout-error">
-                  {error}
-                </div>
-              )}
-              {!loading && !error && roots.length === 0 && (
-                <div className="px-3 py-10 text-center">
-                  <div className="mb-3 flex justify-center"><PixelChest size={40} /></div>
-                  <p className="text-caption font-medium text-scout-text">The chest is empty</p>
-                  <p className="mt-1 text-caption leading-relaxed text-scout-muted">
-                    Upload a file or ask Scout to create one — it will appear here.
-                  </p>
-                </div>
-              )}
-              {!loading && !error && roots.length > 0 && visibleRoots.length === 0 && (
-                <div className="px-3 py-10 text-center text-caption text-scout-muted">
-                  {searching ? "Searching…" : "No matching files"}
-                </div>
-              )}
-              {visibleRoots.map((root) => (
-                <TreeNodeRow
-                  key={nodeKey(root, root.scope ?? "workspace")}
-                  node={root}
-                  scope={root.scope ?? "workspace"}
-                  depth={0}
-                  expanded={expanded}
-                  selectedKey={selectedKey}
-                  forceExpanded={!!query.trim()}
-                  showFullPath={!!query.trim()}
-                  loadingKeys={loadingKeys}
-                  onToggle={toggle}
-                  onSelect={selectFile}
-                />
-              ))}
-            </div>
-          </aside>
-        )}
-
-        <main className={`order-1 min-w-0 flex-1 bg-scout-canvas ${isCompactViewport && treeVisible ? "hidden" : ""}`}>
+        <main className={`order-1 min-w-0 flex-1 bg-scout-canvas ${
+          isCompactViewport && treeVisible && !(selection && artifact) ? "hidden" : ""
+        }`}>
           {selection && artifact ? (
             <ArtifactPanel
               artifact={artifact}
@@ -576,12 +596,16 @@ export function FileExplorerPanel({
               embedded
               compact
               contentEndpoint="/workspace/content"
-              leadingActions={
+              onRefresh={loadTree}
+              adjacentPane={treePane}
+              contentHidden={isCompactViewport && treeVisible}
+              trailingActions={
                 <>
-                  {explorerActions}
                   <IconButton label="Clear selection" onClick={closePreview}>
                     <X size={15} />
                   </IconButton>
+                  {treeToggleAction}
+                  {uploadControl}
                 </>
               }
             />
@@ -596,7 +620,7 @@ export function FileExplorerPanel({
                 <button
                   type="button"
                   onClick={closePreview}
-                  className="mt-4 rounded-card border border-scout-hairline-faint bg-scout-input-bg px-3 py-2 text-caption font-medium text-scout-text transition-colors hover:bg-scout-lift"
+                  className="mt-4 rounded-btn border border-scout-hairline-faint bg-scout-input-bg px-3 py-2 text-caption font-medium text-scout-text transition-colors hover:bg-scout-lift"
                 >
                   Clear selection
                 </button>

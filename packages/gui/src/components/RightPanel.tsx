@@ -1,27 +1,37 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Bot, FileText, FolderTree, GitCompareArrows } from "lucide-react";
+import { Bot, FolderTree, GitCompareArrows } from "lucide-react";
 import { PanelTabs, type PanelTab } from "./ui/PanelTabs";
 import { PanelExpandButton } from "./ui/PanelExpandButton";
 import { IconButton } from "./ui/IconButton";
 import { AnchoredPopover } from "./ui/AnchoredPopover";
 import { PanelLauncher, type LauncherItem } from "./PanelLauncher";
 import { PanelToggleIcon } from "./ui/PanelToggleIcon";
+import { ICON_SIZE } from "./ui/iconSystem";
+import { FileTypeIcon } from "./ui/FileTypeIcon";
 import type { OpenTab, RightPanelTab } from "../hooks/useRightPanelTabs";
 
 /** Tab label and icon for a surface, with the surface's own title winning. */
 function presentation(tab: RightPanelTab, title?: string): { label: string; icon: ReactNode } {
   switch (tab.kind) {
     case "files":
-      return { label: title ?? "Files", icon: <FolderTree size={13} /> };
+      return {
+        label: title ?? "Files",
+        icon: title
+          ? <FileTypeIcon name={title} size={ICON_SIZE.feature} />
+          : <FolderTree size={ICON_SIZE.feature} />,
+      };
     case "agents":
-      return { label: title ?? "Agents", icon: <Bot size={13} /> };
+      return { label: title ?? "Agents", icon: <Bot size={ICON_SIZE.feature} /> };
     case "review":
       return {
         label: title ?? (tab.changeSet.undone ? "Undo applied" : "Review"),
-        icon: <GitCompareArrows size={13} />,
+        icon: <GitCompareArrows size={ICON_SIZE.feature} />,
       };
     case "artifact":
-      return { label: title ?? tab.artifact.title, icon: <FileText size={13} /> };
+      return {
+        label: title ?? tab.artifact.title,
+        icon: <FileTypeIcon name={tab.artifact.name || tab.artifact.path} size={ICON_SIZE.feature} />,
+      };
   }
 }
 
@@ -83,7 +93,7 @@ export function RightPanel({
               onClick={onCloseAll}
               aria-expanded={true}
             >
-              <PanelToggleIcon open side="right" size={16} />
+              <PanelToggleIcon open side="right" size={14} />
             </IconButton>
           </>
         }

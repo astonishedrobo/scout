@@ -21,6 +21,15 @@ def test_describe_artifact_for_presentable_markdown(tmp_path: Path):
     assert art["name"] == "notes.md"
 
 
+def test_describe_artifact_for_presentable_pdf(tmp_path: Path):
+    target = tmp_path / "report.pdf"
+    target.write_bytes(b"%PDF-1.7\\n")
+    art = describe_artifact(target, tmp_path)
+    assert art is not None
+    assert art["renderer"] == "pdf"
+    assert art["mime_type"] == "application/pdf"
+
+
 def test_dedupe_artifacts_by_path_aliases():
     from scout.artifacts import dedupe_artifacts
 

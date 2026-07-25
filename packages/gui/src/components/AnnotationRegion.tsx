@@ -391,7 +391,7 @@ export function AnnotationRegion({
           data-no-annotation
           role="dialog"
           aria-label={editing.id === "new" ? "Add annotation" : "Edit annotation"}
-          className="annotation-editor fixed z-[80] flex flex-col overflow-hidden rounded-[13px] border border-scout-hairline bg-scout-panel/95 p-2 shadow-pop backdrop-blur-xl transition-colors focus-within:border-scout-muted/60"
+          className="annotation-editor fixed z-[80] flex flex-col overflow-hidden rounded-surface border border-scout-hairline-faint bg-scout-panel/98 p-2 shadow-pop backdrop-blur-xl transition-colors focus-within:border-scout-muted/50"
           style={editorPosition}
         >
           <textarea
@@ -407,9 +407,9 @@ export function AnnotationRegion({
             }}
             placeholder="Add a note…"
             rows={2}
-            className="min-h-[48px] w-full flex-1 resize-none border-0 bg-transparent px-2 py-2 text-label leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/65"
+            className="min-h-[44px] w-full flex-1 resize-none border-0 bg-transparent px-2 py-1.5 text-label leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/65"
           />
-          <div className="flex items-center justify-between gap-2 border-t border-scout-hairline-faint px-1 pt-2">
+          <div className="flex items-center justify-between gap-2 px-1 pt-1">
             <button
               type="button"
               onClick={() => {

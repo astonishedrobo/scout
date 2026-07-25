@@ -23,6 +23,7 @@ DELIVERABLE_RENDERERS = {
     ".svg": "image",
     ".csv": "csv",
     ".json": "json",
+    ".pdf": "pdf",
     ".txt": "text",
 }
 
