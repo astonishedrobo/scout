@@ -90,8 +90,8 @@ export function App() {
    * Device-local settings from Appearance / General, read here rather than in the
    * leaf components so there is one consumer per setting and the wiring is
    * visible. `useLocalSetting` publishes on write, so these take effect without a
-   * reload. Declared above `ensureSession` because it reads the permission
-   * default at session-creation time.
+   * reload. Declared above the draft approval state because the configured
+   * permission is what a fresh composer starts from.
    */
   const [showSuggestions] = useLocalSetting("general.suggestions", true);
   // Defaults to "none" so switching this on is an opt-in: a stored default of
@@ -106,19 +106,38 @@ export function App() {
     "ask_always",
   );
 
-  const ensureSession = useCallback(async (initialMode?: ApprovalMode): Promise<string> => {
+  const {
+    mode: approvalMode,
+    setMode: setApprovalMode,
+    resetToDefault: resetApprovalMode,
+    isChanging: approvalModeChanging,
+    error: approvalModeError,
+  } = useApprovalMode({
+    baseUrl,
+    sessionId: currentSessionId,
+    token,
+    isReady,
+    defaultMode: permissionDefault,
+  });
+
+  const ensureSession = useCallback(async (initialMode: ApprovalMode): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
-    const id = await createSession(undefined, initialMode ?? permissionDefault);
+    const id = await createSession(undefined, initialMode);
     sessionRef.current = id;
     // Creation persists this mode atomically before useApprovalMode can load
     // the new session, so the composer's first GET cannot race a follow-up PUT.
     window.location.hash = `/c/${id}`;
     return id;
-  }, [createSession, permissionDefault]);
+  }, [createSession]);
+
+  const ensureComposerSession = useCallback(
+    () => ensureSession(approvalMode),
+    [approvalMode, ensureSession],
+  );
 
   const onUserMessage = useCallback(
-    async () => ensureSession(),
-    [ensureSession],
+    async () => ensureComposerSession(),
+    [ensureComposerSession],
   );
 
   const onUserAccepted = useCallback(
@@ -193,19 +212,6 @@ export function App() {
   });
 
   const { models, currentModel, setModel, reloadConfig, capabilities } = useConfig(baseUrl, isReady, token);
-  const {
-    mode: approvalMode,
-    setMode: setApprovalMode,
-    isChanging: approvalModeChanging,
-    error: approvalModeError,
-  } = useApprovalMode({
-    baseUrl,
-    sessionId: currentSessionId,
-    token,
-    isReady,
-    ensureSession,
-    defaultMode: permissionDefault,
-  });
   const { theme, toggle: toggleTheme } = useTheme();
   const {
     annotations,
@@ -519,13 +525,15 @@ export function App() {
     if (sessionRef.current) clearSession(sessionRef.current);
     sessionRef.current = null;
     setCurrentSessionId(null);
+    resetApprovalMode();
     panel.closeKinds(["artifact", "review"]);
     logout();
-  }, [reset, clearSession, setCurrentSessionId, logout, panel]);
+  }, [reset, clearSession, setCurrentSessionId, resetApprovalMode, logout, panel]);
 
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
+    resetApprovalMode();
     panel.closeKinds(["artifact", "review"]);
     // "Default side panel" (General). Files and Agents are workspace-scoped, so
     // they survive closeKinds above and only need opening when not already up.
@@ -534,7 +542,7 @@ export function App() {
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
-  }, [setCurrentSessionId, panel, defaultPanel, openFilesExplorer, openAgentsPanel]);
+  }, [setCurrentSessionId, resetApprovalMode, panel, defaultPanel, openFilesExplorer, openAgentsPanel]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -925,7 +933,7 @@ export function App() {
                   models={models}
                   capabilities={capabilities}
                   requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-                  ensureSession={ensureSession}
+                  ensureSession={ensureComposerSession}
                   currentModel={currentModel}
                   onSelectModel={(model) => setModel(model, sessionRef.current)}
                   approvalMode={approvalMode}
@@ -1033,7 +1041,7 @@ export function App() {
                   models={models}
                   capabilities={capabilities}
                   requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-                  ensureSession={ensureSession}
+                  ensureSession={ensureComposerSession}
                   currentModel={currentModel}
                   onSelectModel={(model) => setModel(model, sessionRef.current)}
                   approvalMode={approvalMode}

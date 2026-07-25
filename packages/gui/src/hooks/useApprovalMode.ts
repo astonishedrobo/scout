@@ -8,14 +8,12 @@ export function useApprovalMode({
   sessionId,
   token,
   isReady,
-  ensureSession,
   defaultMode,
 }: {
   baseUrl: string;
   sessionId: string | null;
   token: string | null;
   isReady: boolean;
-  ensureSession: (initialMode?: ApprovalMode) => Promise<string>;
   defaultMode: ApprovalMode;
 }) {
   const [mode, setModeState] = useState<ApprovalMode>(defaultMode);
@@ -25,6 +23,7 @@ export function useApprovalMode({
 
   useEffect(() => {
     if (!isReady || !sessionId) {
+      ++requestRef.current;
       setModeState(defaultMode);
       setError(null);
       return;
@@ -52,18 +51,18 @@ export function useApprovalMode({
 
   const setMode = useCallback(async (nextMode: ApprovalMode) => {
     if (nextMode === mode) return;
+    // Before a conversation exists this is draft state, just like composer
+    // text. The eventual message/upload path supplies it to atomic creation.
+    if (!sessionId) {
+      setModeState(nextMode);
+      setError(null);
+      return;
+    }
     const previous = mode;
     setModeState(nextMode);
     setIsChanging(true);
     setError(null);
     try {
-      // A composer override chosen before the first message becomes the
-      // session's initial mode. Creating it atomically avoids a GET/PUT race.
-      if (!sessionId) {
-        await ensureSession(nextMode);
-        setModeState(nextMode);
-        return;
-      }
       const id = sessionId;
       const response = await fetch(`${baseUrl}/sessions/${id}/approval-mode`, {
         method: "PUT",
@@ -86,7 +85,14 @@ export function useApprovalMode({
     } finally {
       setIsChanging(false);
     }
-  }, [baseUrl, ensureSession, mode, sessionId, token]);
+  }, [baseUrl, mode, sessionId, token]);
 
-  return { mode, setMode, isChanging, error };
+  const resetToDefault = useCallback(() => {
+    ++requestRef.current;
+    setModeState(defaultMode);
+    setIsChanging(false);
+    setError(null);
+  }, [defaultMode]);
+
+  return { mode, setMode, resetToDefault, isChanging, error };
 }
