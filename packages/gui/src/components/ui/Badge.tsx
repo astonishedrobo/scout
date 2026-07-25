@@ -17,17 +17,21 @@ const tones: Record<BadgeTone, string> = {
 export function Badge({
   tone = "neutral",
   uppercase = false,
+  title,
   className = "",
   children,
 }: {
   tone?: BadgeTone;
   /** Uppercase variant for status/kind labels; sentence case for counts. */
   uppercase?: boolean;
+  /** Hover explanation. The badge text must still stand alone without it. */
+  title?: string;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <span
+      title={title}
       className={`inline-flex shrink-0 items-center rounded-pill px-2 py-0.5 text-micro font-semibold ${
         uppercase ? "uppercase tracking-[0.08em]" : ""
       } ${tones[tone]} ${className}`}

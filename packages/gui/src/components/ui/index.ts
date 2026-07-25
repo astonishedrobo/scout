@@ -7,10 +7,21 @@ export { AnchoredPopover } from "./AnchoredPopover";
 export { Presence } from "./Presence";
 export { IconButton } from "./IconButton";
 export { Banner, ErrorBanner, WarningBanner } from "./Banner";
-export { Badge } from "./Badge";
+export { Badge, type BadgeTone } from "./Badge";
+export { Meter, meterTone, type MeterTone } from "./Meter";
+export { Stat, StatGrid, formatCount, type StatTone } from "./Stat";
+export { DataTable, type Column } from "./DataTable";
+export { Chip, type ChipTone } from "./Chip";
+export {
+  RelativeTime,
+  useSecondTick,
+  formatAge,
+  formatDuration,
+} from "./RelativeTime";
 export { ShortcutRow, Kbd } from "./ShortcutRow";
 export { Switch } from "./Switch";
 export { EmptyState } from "./EmptyState";
+export { FileTypeIcon } from "./FileTypeIcon";
 export { Tooltip } from "./Tooltip";
 export { Skeleton } from "./Skeleton";
 export { SettingsShell, type NavGroup, type NavSection } from "./SettingsShell";

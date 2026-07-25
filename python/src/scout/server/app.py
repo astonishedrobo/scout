@@ -3242,11 +3242,30 @@ def create_app(
     @app.get("/admin/execution-health")
     async def execution_health(admin: User = Depends(require_admin)) -> dict:
         """Admin-only execution backend health and metrics."""
-        metrics = {"worker_starts": 0, "timeouts": 0, "denied_capabilities": 0}
+        # Every key the auditor maintains, so a counter it tracks can never go
+        # missing from this response. The old default listed three of six, which
+        # silently hid worker crashes, cleanup failures and promotion conflicts.
+        metrics = {
+            "worker_starts": 0,
+            "worker_crashes": 0,
+            "timeouts": 0,
+            "denied_capabilities": 0,
+            "cleanup_failures": 0,
+            "promotion_conflicts": 0,
+        }
         health_info = None
+        sampled_sessions = 0
         for s in _state["sessions"].values():
             svc = s.agent.execution_service
-            if svc:
+            if not svc:
+                continue
+            # Counters live on each session's ExecutionService, so reading one
+            # session — as this route used to — reported an arbitrary fraction of
+            # activity as if it were the whole server. Sum across all of them.
+            for key, value in svc.auditor.metrics.items():
+                metrics[key] = metrics.get(key, 0) + value
+            sampled_sessions += 1
+            if health_info is None:
                 h = await svc.health()
                 health_info = {
                     "available": h.available,
@@ -3259,8 +3278,6 @@ def create_app(
                     "oneshot": h.oneshot,
                     "worker_reachable": h.worker_reachable,
                 }
-                metrics = svc.auditor.metrics
-                break
         if health_info is None:
             cached = _state.get("execution_health")
             if cached:
@@ -3290,7 +3307,96 @@ def create_app(
         return {
             "execution": health_info,
             "metrics": metrics,
+            # How many services contributed, so a reader can tell "zero" apart
+            # from "nothing was running to count".
+            "metrics_sessions": sampled_sessions,
             "admission": await _state["turn_scheduler"].snapshot(),
+        }
+
+    @app.get("/admin/sessions")
+    async def admin_sessions(admin: User = Depends(require_admin)) -> dict:
+        """Live sessions — who is connected right now, and who is working.
+
+        Everything here is already in memory; it simply had no reader. Ages are
+        returned as elapsed seconds rather than timestamps because
+        `SessionState.created_at`/`last_activity` come from `time.monotonic()`,
+        which has no relationship to wall-clock time.
+        """
+        now = time.monotonic()
+        rows = []
+        for (user_id, session_id), s in _state["sessions"].items():
+            rows.append({
+                "user_id": user_id,
+                "session_id": session_id,
+                "model": s.model,
+                "age_seconds": round(now - s.created_at, 1),
+                "idle_seconds": round(now - s.last_activity, 1),
+                "is_busy": s.is_busy,
+                "active_turn_id": s.active_turn_id,
+                "subscribers": len(s.event_subscribers),
+                "approval_mode": s.approval_mode,
+                "permission_profile": s.active_permission_profile,
+                "pending_approval": s.pending_approval_id is not None,
+                "turns_recorded": len(s.turn_metrics),
+            })
+        rows.sort(key=lambda r: r["idle_seconds"])
+        return {
+            "sessions": rows,
+            "total": len(rows),
+            "busy": sum(1 for r in rows if r["is_busy"]),
+        }
+
+    @app.get("/admin/executions")
+    async def admin_executions(
+        limit: int = 100,
+        since_seconds: float | None = None,
+        admin: User = Depends(require_admin),
+    ) -> dict:
+        """Page the durable execution audit log.
+
+        `since_seconds` is a lookback window rather than an absolute timestamp so
+        the caller does not have to reason about clock skew between browser and
+        server.
+        """
+        limit = max(1, min(500, limit))
+        since = time.time() - since_seconds if since_seconds else None
+
+        auditor = None
+        for s in _state["sessions"].values():
+            svc = s.agent.execution_service
+            if svc:
+                auditor = svc.auditor
+                break
+        if auditor is None:
+            # No live service, but the table outlives every service — read it
+            # directly rather than reporting an empty history.
+            from ..execution.audit import ExecutionAuditor
+            auditor = ExecutionAuditor()
+
+        entries, total = auditor.query(limit=limit, since=since)
+        return {
+            "executions": [
+                {
+                    "execution_id": e.execution_id,
+                    "user_id": e.user_id,
+                    "session_id": e.session_id,
+                    "runtime": e.runtime,
+                    "command_summary": e.command_summary,
+                    "start_time": e.start_time,
+                    "end_time": e.end_time,
+                    "duration_seconds": (
+                        round(e.end_time - e.start_time, 3) if e.end_time else None
+                    ),
+                    "status": e.status,
+                    "error_category": e.error_category,
+                    "changed_paths": e.changed_paths,
+                    "approval_outcome": e.approval_outcome,
+                }
+                for e in entries
+            ],
+            "total": total,
+            "limit": limit,
+            "truncated": total > len(entries),
         }
 
     @app.get("/admin/config/effective")
