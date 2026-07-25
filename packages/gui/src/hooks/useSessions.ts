@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
+import type { ApprovalMode, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
 
 interface StoredMessage {
   role: string;
@@ -34,7 +34,7 @@ interface UseSessionsReturn {
    */
   sessionsLoading: boolean;
   currentSessionId: string | null;
-  createSession: (model?: string) => Promise<string>;
+  createSession: (model?: string, approvalMode?: ApprovalMode) => Promise<string>;
   loadSession: (id: string) => Promise<StoredMessage[]>;
   renameSession: (id: string, title: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -94,14 +94,17 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
   }, [isReady, refreshSessions]);
 
   const createSession = useCallback(
-    async (model?: string): Promise<string> => {
+    async (
+      model?: string,
+      approvalMode: ApprovalMode = "ask_always",
+    ): Promise<string> => {
       const resp = await fetch(`${baseUrl}/sessions`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ model, approval_mode: approvalMode }),
       });
       
       if (!resp.ok) {

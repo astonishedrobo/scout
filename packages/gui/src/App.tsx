@@ -106,38 +106,15 @@ export function App() {
     "ask_always",
   );
 
-  const ensureSession = useCallback(async (): Promise<string> => {
+  const ensureSession = useCallback(async (initialMode?: ApprovalMode): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
-    const id = await createSession();
+    const id = await createSession(undefined, initialMode ?? permissionDefault);
     sessionRef.current = id;
-    /*
-     * "Default for new conversations" (General). Written straight to the server
-     * before `useApprovalMode` loads this session, rather than through its
-     * `setMode`: the hook fetches the mode when the session id changes, and a
-     * concurrent local set would race that fetch and could be clobbered by it.
-     * Server-first means the hook simply reads the value we just stored.
-     *
-     * `ask_always` is the server's own default, so it needs no request. A failure
-     * here must not block the message the user is sending — the session stays on
-     * the safer default, which is the right way to fail.
-     */
-    if (permissionDefault !== "ask_always") {
-      try {
-        await fetch(`${baseUrl}/sessions/${id}/approval-mode`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ mode: permissionDefault }),
-        });
-      } catch {
-        // Keep the safer default and carry on.
-      }
-    }
+    // Creation persists this mode atomically before useApprovalMode can load
+    // the new session, so the composer's first GET cannot race a follow-up PUT.
     window.location.hash = `/c/${id}`;
     return id;
-  }, [createSession, baseUrl, token, permissionDefault]);
+  }, [createSession, permissionDefault]);
 
   const onUserMessage = useCallback(
     async () => ensureSession(),
@@ -227,6 +204,7 @@ export function App() {
     token,
     isReady,
     ensureSession,
+    defaultMode: permissionDefault,
   });
   const { theme, toggle: toggleTheme } = useTheme();
   const {

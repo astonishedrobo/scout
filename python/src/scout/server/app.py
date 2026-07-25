@@ -150,6 +150,11 @@ class SessionModelRequest(BaseModel):
     model: str
 
 
+class SessionCreateRequest(BaseModel):
+    model: str | None = None
+    approval_mode: str = "ask_always"
+
+
 class SessionTitleRequest(BaseModel):
     title: str
 
@@ -3587,8 +3592,16 @@ def create_app(
         return {"sessions": sessions}
 
     @app.post("/sessions")
-    async def create_session(model: str | None = None, user: User | None = Depends(get_user_context)) -> dict:
-        """Create a new session and return its ID."""
+    async def create_session(
+        req: SessionCreateRequest | None = None,
+        model: str | None = None,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Create a session with its initial approval policy already persisted."""
+        initial_mode = req.approval_mode if req else DEFAULT_APPROVAL_MODE
+        if initial_mode not in APPROVAL_MODES:
+            raise HTTPException(status_code=400, detail="Invalid approval mode")
+        selected_model = req.model if req and req.model is not None else model
         uid = user.id if user else "default"
         cwd = _session_cwd(uid)
         session_id = str(uuid.uuid4())
@@ -3601,11 +3614,16 @@ def create_app(
             "projectDir": str(Path(cwd).resolve()),
             "createdAt": _now_iso(),
             "title": DEFAULT_SESSION_TITLE,
-            "model": model,
+            "model": selected_model,
         }
         path = _session_file(cwd, session_id, uid)
         path.write_text(json.dumps(header) + "\n", encoding="utf-8")
-        return {"sessionId": session_id}
+        save_session_snapshot(
+            sdir,
+            session_id,
+            approval_mode=initial_mode,
+        )
+        return {"sessionId": session_id, "approvalMode": initial_mode}
 
     @app.put("/sessions/{session_id}")
     async def ensure_session(session_id: str, model: str | None = None, user: User | None = Depends(get_user_context)) -> dict:

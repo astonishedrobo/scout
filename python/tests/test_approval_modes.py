@@ -65,3 +65,47 @@ def test_session_approval_mode_api_persists_without_initializing_an_agent(tmp_pa
 
     invalid = client.put(f"/sessions/{session_id}/approval-mode", json={"mode": "unsafe"})
     assert invalid.status_code == 400
+
+
+def test_session_creation_persists_initial_approval_mode_atomically(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import scout.server.app as app_module
+
+    monkeypatch.setattr(app_module, "SESSIONS_ROOT", tmp_path / "sessions")
+    app = app_module.create_app(cwd=tmp_path / "workspace")
+    client = TestClient(app)
+
+    created = client.post(
+        "/sessions",
+        json={"model": "test-model", "approval_mode": "allow_edits"},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["approvalMode"] == "allow_edits"
+    assert client.get(f"/sessions/{body['sessionId']}/approval-mode").json() == {
+        "mode": "allow_edits",
+    }
+
+    listed = client.get("/sessions").json()["sessions"]
+    assert next(item for item in listed if item["sessionId"] == body["sessionId"])["model"] == "test-model"
+
+
+def test_session_creation_rejects_invalid_mode_and_keeps_legacy_query_model(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import scout.server.app as app_module
+
+    monkeypatch.setattr(app_module, "SESSIONS_ROOT", tmp_path / "sessions")
+    app = app_module.create_app(cwd=tmp_path / "workspace")
+    client = TestClient(app)
+
+    invalid = client.post("/sessions", json={"approval_mode": "unsafe"})
+    assert invalid.status_code == 400
+
+    legacy = client.post("/sessions?model=legacy-model")
+    assert legacy.status_code == 200
+    session_id = legacy.json()["sessionId"]
+    listed = client.get("/sessions").json()["sessions"]
+    assert next(item for item in listed if item["sessionId"] == session_id)["model"] == "legacy-model"
+    assert client.get(f"/sessions/{session_id}/approval-mode").json() == {
+        "mode": "ask_always",
+    }

@@ -9,21 +9,23 @@ export function useApprovalMode({
   token,
   isReady,
   ensureSession,
+  defaultMode,
 }: {
   baseUrl: string;
   sessionId: string | null;
   token: string | null;
   isReady: boolean;
-  ensureSession: () => Promise<string>;
+  ensureSession: (initialMode?: ApprovalMode) => Promise<string>;
+  defaultMode: ApprovalMode;
 }) {
-  const [mode, setModeState] = useState<ApprovalMode>(DEFAULT_MODE);
+  const [mode, setModeState] = useState<ApprovalMode>(defaultMode);
   const [isChanging, setIsChanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
 
   useEffect(() => {
     if (!isReady || !sessionId) {
-      setModeState(DEFAULT_MODE);
+      setModeState(defaultMode);
       setError(null);
       return;
     }
@@ -46,16 +48,23 @@ export function useApprovalMode({
           setError(reason instanceof Error ? reason.message : "Could not load approval mode");
         }
       });
-  }, [baseUrl, isReady, sessionId, token]);
+  }, [baseUrl, defaultMode, isReady, sessionId, token]);
 
   const setMode = useCallback(async (nextMode: ApprovalMode) => {
-    if (nextMode === mode && sessionId) return;
+    if (nextMode === mode) return;
     const previous = mode;
     setModeState(nextMode);
     setIsChanging(true);
     setError(null);
     try {
-      const id = sessionId ?? await ensureSession();
+      // A composer override chosen before the first message becomes the
+      // session's initial mode. Creating it atomically avoids a GET/PUT race.
+      if (!sessionId) {
+        await ensureSession(nextMode);
+        setModeState(nextMode);
+        return;
+      }
+      const id = sessionId;
       const response = await fetch(`${baseUrl}/sessions/${id}/approval-mode`, {
         method: "PUT",
         headers: {
@@ -81,4 +90,3 @@ export function useApprovalMode({
 
   return { mode, setMode, isChanging, error };
 }
-
