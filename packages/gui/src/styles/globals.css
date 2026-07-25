@@ -165,6 +165,14 @@
     /* Floor, not decoration: PixelPet is 40px and strolls this ledge above the
        composer. Below 1.5rem he overlaps the hero. */
     --welcome-headroom: 2.25rem;
+    /* Popover menus — the composer's approval, model, attach, slash and @-file
+       menus. The comfortable values are today's hard-coded ones, so comfortable is
+       the baseline and only compact actually moves. Row padding scales here, unlike
+       `SettingsRow`, because these rows are two-line and stay above the ~44px
+       minimum; a 28px settings row would not. */
+    --pad-menu: 0.375rem;
+    --pad-menu-row: 0.375rem;
+    --space-menu-note: 0.375rem;
   }
 
   :root[data-density="compact"] {
@@ -180,6 +188,9 @@
     --pad-table-chrome: 0.25rem;
     --welcome-offset: 1.25rem;
     --welcome-headroom: 1.5rem;
+    --pad-menu: 0.25rem;
+    --pad-menu-row: 0.25rem;
+    --space-menu-note: 0.25rem;
   }
 
   /* Light mode — an intentionally quiet neutral canvas. Borders only define
@@ -607,6 +618,28 @@
   .density-table-chrome {
     padding-top: var(--pad-table-chrome);
     padding-bottom: var(--pad-table-chrome);
+  }
+
+  /* Popover menus. `AnchoredPopover` supplies no padding of its own — every caller
+     passes it — so these are what the composer's menus use instead of a literal
+     `p-1.5` / `py-2.5`. `.density-menu` is the shell; `.density-menu-row` is a
+     selectable row; `.density-menu-note` is a heading or footer note, which is
+     separation rather than a target and so may tighten further.
+
+     Padding is the only lever used here. A two-line row is ~37px of text on its
+     own (`.text-label` is 1.45, `.text-caption` 1.5), so the type dominates and
+     padding can only trim the remainder — overriding those leadings with Tailwind
+     utilities would fight a deliberate part of the type scale for a few pixels. */
+  .density-menu {
+    padding: var(--pad-menu);
+  }
+  .density-menu-row {
+    padding-top: var(--pad-menu-row);
+    padding-bottom: var(--pad-menu-row);
+  }
+  .density-menu-note {
+    padding-top: var(--space-menu-note);
+    padding-bottom: var(--space-menu-note);
   }
 
   /* Welcome screen, vertically centred.

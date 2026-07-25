@@ -526,8 +526,10 @@ export function InputBar({
   const visionBlocked = (hasImageAttachment || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported";
   const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
+  // Shared by the attach, slash and @-file menus. Vertical padding comes from
+  // `density-menu-row` so every composer menu tightens together; see globals.css.
   const popoverMenuItem =
-    "w-full flex items-center gap-3 px-3 py-2.5 rounded-control text-label font-medium hover:bg-scout-lift/80 transition-colors text-left";
+    "w-full flex items-center gap-3 px-3 density-menu-row rounded-control text-label font-medium hover:bg-scout-lift/80 transition-colors text-left";
 
   const sendBtnClass = "flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 transition-all";
   const approvalLabel = approvalMode === "ask_always"
@@ -804,9 +806,9 @@ export function InputBar({
         anchorRef={approvalBtnRef}
         placement="top-start"
         maxHeight={360}
-        className="w-[min(28rem,calc(100vw-1rem))] p-2"
+        className="density-menu w-[min(28rem,calc(100vw-1rem))]"
       >
-        <div className="px-2 pb-1.5 pt-1 text-caption font-medium text-scout-muted">
+        <div className="density-menu-note px-2 text-caption font-medium text-scout-muted">
           How should Scout actions be approved?
         </div>
         {([
@@ -839,18 +841,22 @@ export function InputBar({
                 setShowApprovalMenu(false);
                 void Promise.resolve(onSelectApprovalMode(option.mode)).catch(() => {});
               }}
-              className={`flex w-full items-start gap-3 rounded-card px-3 py-2.5 text-left transition-colors ${active ? "bg-scout-lift" : "hover:bg-scout-lift/70"}`}
+              // `items-start` stays: the row is two lines, so the icon and the check
+              // must align to the title rather than to the block's centre.
+              className={`density-menu-row flex w-full items-start gap-2.5 rounded-control px-3 text-left transition-colors ${active ? "bg-scout-lift" : "hover:bg-scout-lift/70"}`}
             >
-              <Icon size={18} className="mt-0.5 shrink-0 text-scout-muted" />
+              <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
               <span className="min-w-0 flex-1">
                 <span className="block text-label font-semibold text-scout-text">{option.label}</span>
-                <span className="mt-0.5 block text-caption leading-relaxed text-scout-muted">{option.description}</span>
+                <span className="block text-caption text-scout-muted">{option.description}</span>
               </span>
-              {active && <Check size={17} className="mt-0.5 shrink-0 text-scout-text" />}
+              {active && <Check size={14} className="mt-0.5 shrink-0 text-scout-text" />}
             </button>
           );
         })}
-        <p className="px-3 pb-1 pt-2 text-micro leading-relaxed text-scout-muted/80">
+        {/* `text-micro` already carries a 1.4 leading; `leading-relaxed` on top of
+            it added ~5px to each of this note's two lines for no gain. */}
+        <p className="density-menu-note px-3 text-micro text-scout-muted/80">
           Protected files, account permissions, and hard safety rules always remain enforced.
         </p>
       </AnchoredPopover>
@@ -861,7 +867,7 @@ export function InputBar({
         anchorRef={containerRef}
         placement="top-start"
         matchAnchorWidth
-        className="p-1.5"
+        className="density-menu"
       >
         {filteredCommands.map((cmd, i) => (
           <button
@@ -883,7 +889,7 @@ export function InputBar({
         placement="top-start"
         matchAnchorWidth
         maxHeight={240}
-        className="p-1.5"
+        className="density-menu"
       >
         {atFiles.map((file, i) => (
           <button
@@ -917,7 +923,7 @@ export function InputBar({
         onClose={() => setShowPlusMenu(false)}
         anchorRef={plusBtnRef}
         placement="bottom-start"
-        className="w-52 p-1.5"
+        className="density-menu w-52"
       >
         <button onClick={insertAtSymbol} className={popoverMenuItem}>
           <AtSign size={16} className="text-scout-muted" />
@@ -943,7 +949,7 @@ export function InputBar({
         onClose={() => setShowModelMenu(false)}
         anchorRef={modelBtnRef}
         placement="bottom-end"
-        className="w-72 p-1.5"
+        className="density-menu w-72"
       >
         {models.map((m) => {
           const isActive = m === currentModel;
@@ -961,7 +967,7 @@ export function InputBar({
                 onSelectModel(m);
                 setShowModelMenu(false);
               }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-btn text-label font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`w-full flex items-center gap-2.5 px-3 density-menu-row rounded-btn text-label font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 isActive
                   ? "text-scout-text bg-scout-lift"
                   : "text-scout-text/70 hover:bg-scout-input-bg hover:text-scout-text"
