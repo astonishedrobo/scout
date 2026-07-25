@@ -251,6 +251,10 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
   const panel = useRightPanelTabs();
+  // Visibility is deliberately independent from tab lifecycle. Hiding the
+  // panel must not destroy the file tree, selected preview, tab set, or scroll
+  // positions; only an explicit tab close should discard a surface.
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [isAutoContinuing, setIsAutoContinuing] = useState(false);
   const [autoStreamingText, setAutoStreamingText] = useState("");
   const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
@@ -291,28 +295,34 @@ export function App() {
    * surface no longer destroys the others.
    */
   const openArtifact = useCallback(
-    (artifact: Artifact) => panel.open({ kind: "artifact", artifact }),
+    (artifact: Artifact) => {
+      panel.open({ kind: "artifact", artifact });
+      setRightPanelOpen(true);
+    },
     [panel],
   );
 
   const openFileChanges = useCallback(
-    (changeSet: FileChangeSet) => panel.open({ kind: "review", changeSet }),
+    (changeSet: FileChangeSet) => {
+      panel.open({ kind: "review", changeSet });
+      setRightPanelOpen(true);
+    },
     [panel],
   );
 
-  const openFilesExplorer = useCallback(() => panel.open({ kind: "files" }), [panel]);
+  const openFilesExplorer = useCallback(() => {
+    panel.open({ kind: "files" });
+    setRightPanelOpen(true);
+  }, [panel]);
 
-  const openAgentsPanel = useCallback(() => panel.open({ kind: "agents" }), [panel]);
+  const openAgentsPanel = useCallback(() => {
+    panel.open({ kind: "agents" });
+    setRightPanelOpen(true);
+  }, [panel]);
 
 
   const filesTabActive = panel.active?.tab.kind === "files";
   const agentsTabActive = panel.active?.tab.kind === "agents";
-  /**
-   * The panel can be open with nothing in it, showing the launcher — that is how
-   * you discover what it holds. Tabs alone cannot express that, hence this flag.
-   */
-  const [panelPinned, setPanelPinned] = useState(false);
-  const rightPanelOpen = panel.tabs.length > 0 || panelPinned;
 
   const {
     active: activeSubagents,
@@ -383,12 +393,10 @@ export function App() {
     .filter((message) => message.role === "system" && message.task?.task_type === "terminal")
     .map((message) => message.task!);
 
-  /** Dismiss the panel entirely: no tabs, and not pinned open on the launcher. */
-  const closePanel = useCallback(() => {
-    setPanelPinned(false);
-    void clearSubagentSelection();
-    panel.closeAll();
-  }, [clearSubagentSelection, panel]);
+  /** Hide the panel without destroying any of its mounted surface state. */
+  const hidePanel = useCallback(() => {
+    setRightPanelOpen(false);
+  }, []);
 
   /** The most recent change set in the transcript — what "Review" opens. */
   const latestChangeSet = useMemo(
@@ -438,23 +446,19 @@ export function App() {
 
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
-  useEffect(() => {
-    if (!rightPanelOpen) setRightPanelExpanded(false);
-  }, [rightPanelOpen]);
-
   useShortcuts({
     "panel.files": openFilesExplorer,
     "panel.agents": openAgentsPanel,
     "panel.review": () => {
       if (latestChangeSet) openFileChanges(latestChangeSet);
     },
-    // Reopens onto the launcher rather than guessing a surface for you.
+    // Restore the exact surface that was visible before the panel was hidden.
+    // With no tabs, the already-mounted panel naturally shows its launcher.
     "panel.toggle": () => {
-      if (rightPanelOpen) closePanel();
-      else setPanelPinned(true);
+      setRightPanelOpen((open) => !open);
     },
     "panel.closeTab": () => {
-      if (panel.activeKey) panel.close(panel.activeKey);
+      if (rightPanelOpen && panel.activeKey) panel.close(panel.activeKey);
     },
   });
 
@@ -547,12 +551,12 @@ export function App() {
     panel.closeKinds(["artifact", "review"]);
     // "Default side panel" (General). Files and Agents are workspace-scoped, so
     // they survive closeKinds above and only need opening when not already up.
-    if (defaultPanel === "files") panel.open({ kind: "files" });
-    else if (defaultPanel === "tasks") panel.open({ kind: "agents" });
+    if (defaultPanel === "files") openFilesExplorer();
+    else if (defaultPanel === "tasks") openAgentsPanel();
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
-  }, [setCurrentSessionId, panel, defaultPanel]);
+  }, [setCurrentSessionId, panel, defaultPanel, openFilesExplorer, openAgentsPanel]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -789,8 +793,7 @@ export function App() {
         sessionTitle={sessionTitle}
         rightPanelOpen={rightPanelOpen}
         onToggleRightPanel={() => {
-          if (rightPanelOpen) closePanel();
-          else setPanelPinned(true);
+          setRightPanelOpen((open) => !open);
         }}
         artifactOpen={rightPanelOpen}
         artifactExpanded={rightPanelExpanded}
@@ -838,7 +841,8 @@ export function App() {
               if (key === "agents") void clearSubagentSelection();
               panel.close(key);
             }}
-            onCloseAll={closePanel}
+            visible={rightPanelOpen}
+            onHide={hidePanel}
             launcherItems={launcherItems}
             expanded={rightPanelExpanded}
             onToggleExpand={toggleRightPanelExpanded}

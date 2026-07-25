@@ -219,8 +219,17 @@ export function WorkspaceShell({
                   : "bg-transparent"
               }
             >
-              {artifactOpen && artifactPanel ? (
-                <div className="h-full animate-backdrop-in">{artifactPanel}</div>
+              {artifactPanel ? (
+                <div
+                  aria-hidden={!artifactOpen}
+                  className={`h-full ${
+                    artifactOpen
+                      ? "animate-backdrop-in"
+                      : "invisible pointer-events-none"
+                  }`}
+                >
+                  {artifactPanel}
+                </div>
               ) : null}
             </Panel>
           </Group>
@@ -237,8 +246,17 @@ export function WorkspaceShell({
             {banners}
             <div className="flex-1 flex flex-col min-h-0 relative bg-transparent">
               {children}
-              {artifactOpen && artifactPanel && (
-                <div className="absolute inset-0 z-40 bg-scout-canvas animate-panel-in">{artifactPanel}</div>
+              {artifactPanel && (
+                <div
+                  aria-hidden={!artifactOpen}
+                  className={`absolute inset-0 z-40 bg-scout-canvas ${
+                    artifactOpen
+                      ? "animate-panel-in"
+                      : "invisible pointer-events-none"
+                  }`}
+                >
+                  {artifactPanel}
+                </div>
               )}
             </div>
           </>

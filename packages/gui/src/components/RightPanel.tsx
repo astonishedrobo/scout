@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, FolderTree, GitCompareArrows } from "lucide-react";
 import { PanelTabs, type PanelTab } from "./ui/PanelTabs";
 import { PanelExpandButton } from "./ui/PanelExpandButton";
@@ -52,7 +52,8 @@ export function RightPanel({
   activeKey,
   onActivate,
   onCloseTab,
-  onCloseAll,
+  visible,
+  onHide,
   launcherItems,
   expanded,
   onToggleExpand,
@@ -62,7 +63,9 @@ export function RightPanel({
   activeKey: string | null;
   onActivate: (key: string) => void;
   onCloseTab: (key: string) => void;
-  onCloseAll: () => void;
+  /** Panel visibility is separate from the lifecycle of its tabs. */
+  visible: boolean;
+  onHide: () => void;
   launcherItems: LauncherItem[];
   expanded: boolean;
   onToggleExpand: () => void;
@@ -70,6 +73,13 @@ export function RightPanel({
 }) {
   const [launcherOpen, setLauncherOpen] = useState(false);
   const addRef = useRef<HTMLButtonElement>(null);
+
+  // A launcher popover is transient chrome, not restorable panel state. Avoid
+  // reopening onto a detached menu if the panel was hidden from the chat header
+  // or a keyboard shortcut.
+  useEffect(() => {
+    if (!visible) setLauncherOpen(false);
+  }, [visible]);
 
   const stripTabs: PanelTab[] = tabs.map((open) => {
     const { label, icon } = presentation(open.tab, open.title);
@@ -90,7 +100,7 @@ export function RightPanel({
             <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />
             <IconButton
               label="Close side panel (Alt+P)"
-              onClick={onCloseAll}
+              onClick={onHide}
               aria-expanded={true}
             >
               <PanelToggleIcon open side="right" size={14} />
