@@ -3,11 +3,13 @@ import { Trash2, Upload } from "lucide-react";
 import {
   Button,
   ConfirmDialog,
+  DataTable,
   EmptyState,
+  FileTypeIcon,
   IconButton,
   SettingsGroup,
-  SettingsRow,
   Skeleton,
+  type Column,
   type ConfirmRequest,
 } from "../../ui";
 import { errorDetail, useAuthHeaders, type SectionProps } from "../shared";
@@ -51,22 +53,43 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
 
   const upload = async (list: FileList | null) => {
     if (!list?.length) return;
+    const chosen = Array.from(list);
     setUploading(true);
+    // Each file is reported on its own. Throwing on the first failure used to
+    // abandon the rest of the batch and report the whole upload as failed, even
+    // though earlier files had already landed on the server.
+    const uploaded: string[] = [];
+    const failures: string[] = [];
     try {
-      for (const file of Array.from(list)) {
+      for (const file of chosen) {
         const form = new FormData();
         form.append("file", file);
-        const r = await fetch(`${baseUrl}/upload?target=shared`, {
-          method: "POST",
-          headers: authHeaders,
-          body: form,
-        });
-        if (!r.ok) throw new Error(await errorDetail(r, `Could not upload ${file.name}.`));
+        try {
+          const r = await fetch(`${baseUrl}/upload?target=shared`, {
+            method: "POST",
+            headers: authHeaders,
+            body: form,
+          });
+          if (!r.ok) throw new Error(await errorDetail(r, `Could not upload ${file.name}.`));
+          uploaded.push(file.name);
+        } catch (e) {
+          failures.push(e instanceof Error ? e.message : `Could not upload ${file.name}.`);
+        }
       }
       await load();
-      setStatus({ message: `Uploaded ${list.length} file${list.length > 1 ? "s" : ""}.`, tone: "info" });
-    } catch (e) {
-      setStatus({ message: e instanceof Error ? e.message : "Upload failed.", tone: "error" });
+      if (failures.length === 0) {
+        setStatus({
+          message: `Uploaded ${uploaded.length} file${uploaded.length === 1 ? "" : "s"}.`,
+          tone: "info",
+        });
+      } else if (uploaded.length === 0) {
+        setStatus({ message: failures[0], tone: "error" });
+      } else {
+        setStatus({
+          message: `Uploaded ${uploaded.length} of ${chosen.length} files. ${failures[0]}`,
+          tone: "error",
+        });
+      }
     } finally {
       setUploading(false);
     }
@@ -91,6 +114,38 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
         setStatus({ message: `${path} deleted.`, tone: "info" });
       },
     });
+
+  const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+
+  const columns: Column<SharedFile>[] = [
+    {
+      key: "path",
+      header: "File",
+      width: "minmax(140px,1fr)",
+      sortValue: (f) => f.path.toLowerCase(),
+      searchValue: (f) => f.path,
+      render: (f) => (
+        <span className="flex min-w-0 items-center gap-2">
+          <FileTypeIcon name={f.path} size={14} className="shrink-0" />
+          <span className="truncate font-mono text-micro" title={f.path}>
+            {f.path}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: "size",
+      header: "Size",
+      align: "right",
+      width: "max-content",
+      sortValue: (f) => f.size,
+      render: (f) => (
+        <span className="whitespace-nowrap font-mono tabular-nums text-scout-muted">
+          {fmtSize(f.size)}
+        </span>
+      ),
+    },
+  ];
 
   return (
     <>
@@ -122,20 +177,28 @@ export function SharedFilesSection({ baseUrl, token, setStatus }: SectionProps) 
             body="Upload reference data every user's agent should be able to read."
           />
         ) : (
-          files.map((file) => (
-            <SettingsRow
-              key={file.path}
-              label={<span className="font-mono text-caption">{file.path}</span>}
-              description={fmtSize(file.size)}
-              control={
+          <div className="py-2">
+            <DataTable
+              columns={columns}
+              rows={files}
+              getRowId={(f) => f.path}
+              search={{ placeholder: "Search files" }}
+              initialSort={{ key: "path", dir: "asc" }}
+              caption={`${files.length} file${files.length === 1 ? "" : "s"} · ${fmtSize(totalSize)} total`}
+              rowActions={(file) => (
                 // Was a 24px target hidden behind `hover-reveal`, so on touch it
                 // was undiscoverable and on mouse it was hard to hit.
-                <IconButton label={`Delete ${file.path}`} tone="danger" onClick={() => remove(file.path)}>
+                <IconButton
+                  label={`Delete ${file.path}`}
+                  tone="danger"
+                  onClick={() => remove(file.path)}
+                >
                   <Trash2 size={15} />
                 </IconButton>
-              }
+              )}
+              empty={<EmptyState size="sm" title="No shared files" />}
             />
-          ))
+          </div>
         )}
       </SettingsGroup>
 
