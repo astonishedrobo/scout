@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Cpu,
   Gauge,
+  History,
   Keyboard,
   MessageSquareText,
   Palette,
@@ -23,6 +24,7 @@ import { ModelsSection } from "./settings/ModelsSection";
 import { SharedFilesSection } from "./settings/admin/SharedFilesSection";
 import { UsersSection } from "./settings/admin/UsersSection";
 import { ExecutionSection } from "./settings/admin/ExecutionSection";
+import { ExecutionsSection } from "./settings/admin/ExecutionsSection";
 import { McpSection } from "./settings/admin/McpSection";
 import { ConfigurationSection } from "./settings/admin/ConfigurationSection";
 import type { SectionProps, StatusMessage } from "./settings/shared";
@@ -46,6 +48,7 @@ export type SettingsSectionId =
   | "files"
   | "users"
   | "execution"
+  | "executions"
   | "mcp"
   | "config";
 
@@ -149,6 +152,15 @@ const SECTIONS: SectionDef[] = [
     render: (p) => <ExecutionSection {...p} />,
   },
   {
+    id: "executions",
+    label: "Execution log",
+    icon: <History size={15} />,
+    keywords: ["audit", "history", "log", "runs", "failures", "sandbox"],
+    group: "workspace",
+    when: ({ isAdmin }) => isAdmin,
+    render: (p) => <ExecutionsSection {...p} />,
+  },
+  {
     id: "mcp",
     label: "MCP tools",
     icon: <Plug size={15} />,
@@ -186,6 +198,7 @@ const TITLES: Record<string, { title: string; subtitle?: string }> = {
   users: { title: "Users & access", subtitle: "Who can do what, and how much at once" },
   execution: { title: "Execution", subtitle: "Sandbox health and turn capacity" },
   mcp: { title: "MCP tools", subtitle: "Servers published to this workspace" },
+  executions: { title: "Execution log", subtitle: "Every execution the server has recorded" },
   config: { title: "Configuration", subtitle: "The deployment's effective settings" },
 };
 

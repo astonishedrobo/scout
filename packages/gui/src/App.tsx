@@ -45,6 +45,7 @@ const ADMIN_SECTIONS = new Set<SettingsSectionId>([
   "files",
   "users",
   "execution",
+  "executions",
   "mcp",
   "config",
 ]);
