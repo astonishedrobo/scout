@@ -1,6 +1,9 @@
 import { useState } from "react";
 import {
+  AlertTriangle,
   ChevronRight,
+  Copy,
+  Check,
   FileText,
   FolderOpen,
   PencilLine,
@@ -8,14 +11,14 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
+import { Presence } from "./ui/Presence";
+import { EXIT_MS } from "../motion";
 import type { ResponseAnnotation, ToolStep } from "scout-core";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { AssistantProse } from "./AssistantProse";
 import { AnnotationRegion } from "./AnnotationRegion";
 
 interface ToolCardProps {
   steps: ToolStep[];
-  /** When true, expand tool-group details by default (streaming). */
-  defaultExpanded?: boolean;
   baseUrl?: string;
   token?: string | null;
   awaitingApproval?: boolean;
@@ -75,6 +78,10 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
         return file
           ? `Stopped presenting ${file}`
           : "Stopped presenting files";
+      case "spawn_subagent":
+        return "Stopped launching agent";
+      case "send_subagent_message":
+        return "Stopped messaging agent";
       default:
         return "Stopped tool";
     }
@@ -113,6 +120,20 @@ function displayName(step: ToolStep, tense: "present" | "past" | "stopped" = "pa
       return tense === "present" ? "Checking command output" : "Checked command output";
     case "memory_add_note":
       return tense === "present" ? "Updating memory" : "Updated memory";
+    case "spawn_subagent":
+      {
+        const description = String(step.args?.description ?? "").trim();
+        const name = description || "agent";
+        return tense === "present" ? `Launching ${name}` : `Launched ${name}`;
+      }
+    case "send_subagent_message":
+      return tense === "present" ? "Messaging agent" : "Messaged agent";
+    case "list_subagents":
+      return tense === "present" ? "Checking agents" : "Checked agents";
+    case "get_subagent_result":
+      return tense === "present" ? "Reading agent result" : "Read agent result";
+    case "stop_subagent":
+      return tense === "present" ? "Stopping agent" : "Stopped agent";
     default:
       return tense === "present" ? "Using a tool" : "Used a tool";
   }
@@ -131,11 +152,26 @@ function detailText(step: ToolStep): string {
   if (step.name === "run_node") {
     return String(step.args?.description ?? step.args?.code ?? "").split("\n")[0] ?? "";
   }
+  if (step.name === "spawn_subagent") {
+    return String(step.args?.agent_type ?? "").trim();
+  }
   return "";
 }
 
+function exposesInternalOutput(step: ToolStep): boolean {
+  return new Set([
+    "spawn_subagent",
+    "list_subagents",
+    "get_subagent_result",
+    "send_subagent_message",
+    "stop_subagent",
+  ]).has(step.name);
+}
+
 function iconFor(step: ToolStep) {
-  // Tool-type icons only — no status-colored spinners/ticks/stops.
+  // Tool-type icons, with one exception: a failed step overrides the tool icon,
+  // because the failure is the more important fact about the row.
+  if (step.status === "failed") return AlertTriangle;
   if (step.name === "write_file" || step.name === "write_binary_artifact") return FileText;
   if (step.name === "present_files") return FileText;
   if (step.name === "apply_patch") return PencilLine;
@@ -166,6 +202,12 @@ function stepTense(step: ToolStep): "present" | "past" | "stopped" {
   return "past";
 }
 
+/** First line of a failure output, for the collapsed row. */
+function failureSummary(step: ToolStep): string {
+  const first = (step.output ?? "").trimStart().split("\n", 1)[0] ?? "";
+  return first.replace(/^\[|\]$/g, "").trim();
+}
+
 function deriveToolGroupTitle(tools: ToolStep[]): string {
   if (tools.length === 0) return "Working";
   if (tools.length === 1) {
@@ -173,7 +215,23 @@ function deriveToolGroupTitle(tools: ToolStep[]): string {
   }
   if (tools.some((step) => step.status === "executing")) return "Running tools";
   if (tools.some((step) => step.status === "interrupted")) return "Stopped tools";
-  return "Completed tools";
+  const failures = tools.filter((step) => step.status === "failed").length;
+  if (failures > 0) {
+    return failures === tools.length
+      ? `${failures} action${failures === 1 ? "" : "s"} failed`
+      : `${failures} of ${tools.length} actions failed`;
+  }
+  const names = new Set(tools.map((step) => step.name));
+  if ([...names].every((name) => name === "read_file" || name === "list_files")) {
+    return `Checked ${tools.length} ${tools.length === 1 ? "file" : "files"}`;
+  }
+  if ([...names].every((name) => name === "search_workspace" || name === "filter_table")) {
+    return "Searched workspace";
+  }
+  if ([...names].some((name) => name === "write_file" || name === "apply_patch")) {
+    return "Updated workspace";
+  }
+  return `${tools.length} actions complete`;
 }
 
 /**
@@ -236,18 +294,46 @@ function ToolRow({
   step: ToolStep;
   defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const failed = step.status === "failed";
+  // A failure starts open: the whole point of surfacing it is that the reason
+  // should not be hidden behind a 13px chevron.
+  const [expanded, setExpanded] = useState(defaultExpanded ?? failed);
+  const [copied, setCopied] = useState(false);
   const Icon = iconFor(step);
   const detail = detailText(step);
-  const hasOutput = Boolean(step.output && step.name !== "memory_add_note");
+  const hasOutput = Boolean(
+    step.output
+    && step.name !== "memory_add_note"
+    && !exposesInternalOutput(step),
+  );
+  const summary = failed ? failureSummary(step) : "";
+
+  const copyOutput = async () => {
+    try {
+      await navigator.clipboard.writeText(step.output ?? "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* Clipboard unavailable (insecure origin / denied permission). */
+    }
+  };
+
+  const Header = hasOutput ? "button" : "div";
 
   return (
-    <div className="space-y-1">
-      <button
-        type="button"
-        onClick={() => hasOutput && setExpanded((value) => !value)}
-        className={`group flex w-full items-start gap-2 text-left text-xs text-scout-muted ${
-          hasOutput ? "hover:text-scout-text cursor-pointer" : "cursor-default"
+    <div className="group space-y-1">
+      {/* A row with no output is not interactive: it used to be a focusable
+          <button> that did nothing when activated. */}
+      <Header
+        {...(hasOutput
+          ? {
+              type: "button" as const,
+              onClick: () => setExpanded((value) => !value),
+              "aria-expanded": expanded,
+            }
+          : {})}
+        className={`flex w-full items-start gap-2 text-left text-caption text-scout-muted ${
+          hasOutput ? "cursor-pointer hover:text-scout-text" : ""
         } transition-colors`}
       >
         {hasOutput ? (
@@ -258,23 +344,51 @@ function ToolRow({
         ) : (
           <span className="w-[13px] shrink-0" />
         )}
-        <Icon size={13} className="mt-0.5 shrink-0 text-scout-muted" />
+        <Icon size={13} className={`mt-0.5 shrink-0 ${failed ? "text-scout-error" : "text-scout-muted"}`} />
         <div className="min-w-0">
-          <div className="text-scout-text/80">
+          <div className={failed ? "font-medium text-scout-text" : "text-scout-text/80"}>
             {displayName(step, stepTense(step))}
+            {failed && <span className="ml-1.5 font-normal text-scout-error">failed</span>}
           </div>
           {detail && (
-            <div className="mt-0.5 truncate font-mono text-[11px] text-scout-muted/75">
+            <div className="mt-0.5 truncate font-mono text-micro text-scout-muted/75">
               {detail}
             </div>
           )}
+          {failed && summary && !expanded && (
+            <div className="mt-0.5 truncate text-micro text-scout-error/90">{summary}</div>
+          )}
         </div>
-      </button>
-      {expanded && hasOutput && (
-        <pre className="ml-8 max-h-40 overflow-auto rounded-btn border border-scout-hairline-faint bg-scout-code-bg/90 p-2.5 text-xs text-scout-muted whitespace-pre-wrap">
-          {step.output}
-        </pre>
-      )}
+      </Header>
+      {/* Fade rather than animating height: the <pre> is a scrollable
+          max-h-40 region with wrapped content, and animating its height
+          jitters as the content reflows. */}
+      <Presence
+        show={expanded && hasOutput}
+        enterClass="animate-enter"
+        exitClass="animate-fade-out"
+        exitMs={EXIT_MS.panel}
+      >
+        <div
+          className={`group/output relative ml-8 rounded-btn border bg-scout-code-bg/90 ${
+            failed
+              ? "border-scout-error/25 bg-scout-error-muted"
+              : "border-scout-hairline-faint"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={copyOutput}
+            className="hover-reveal absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-btn bg-scout-panel/80 text-scout-muted transition-colors hover:text-scout-text"
+            aria-label={copied ? "Copied" : "Copy output"}
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+          <pre className={`max-h-40 overflow-auto whitespace-pre-wrap p-2.5 pr-10 text-caption ${failed ? "text-scout-text/90" : "text-scout-muted"}`}>
+            {step.output}
+          </pre>
+        </div>
+      </Presence>
     </div>
   );
 }
@@ -295,32 +409,48 @@ function ToolGroupCard({
   awaitingApproval?: boolean;
 }) {
   const running = steps.some((step) => step.status === "executing");
-  const [expanded, setExpanded] = useState(defaultExpanded ?? running);
+  const anyFailed = steps.some((step) => step.status === "failed");
+  // Expand on failure as well as while running — a collapsed card was the last
+  // place a failure could hide.
+  const [expanded, setExpanded] = useState(defaultExpanded ?? (running || anyFailed));
 
   return (
-    <div className="rounded-card border border-scout-hairline-faint bg-scout-lift/30">
+    <div
+      className={`rounded-btn border ${
+        anyFailed
+          ? "border-scout-error/25 bg-scout-error-muted"
+          : "border-scout-hairline-faint bg-scout-lift/30"
+      }`}
+    >
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs text-scout-muted hover:text-scout-text transition-colors"
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-caption text-scout-muted transition-colors hover:text-scout-text"
       >
         <ChevronRight
           size={13}
           className={`mt-0.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
         />
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] uppercase tracking-wide text-scout-muted/70 mb-0.5">
+          <div
+            className={`mb-0.5 text-micro uppercase tracking-wide ${
+              anyFailed && !running ? "text-scout-error" : "text-scout-muted/70"
+            }`}
+          >
             {awaitingApproval && running
               ? "Waiting for approval"
               : running
                 ? "Working"
-                : `${steps.length} step${steps.length === 1 ? "" : "s"}`}
+                : anyFailed
+                  ? "Failed"
+                  : `${steps.length} step${steps.length === 1 ? "" : "s"}`}
           </div>
           <div className="text-scout-text/85 leading-relaxed">{title}</div>
         </div>
       </button>
       {expanded && (
-        <div className="space-y-2 border-t border-scout-hairline-faint px-3 py-2.5">
+        <div className="density-list border-t border-scout-hairline-faint px-2.5 py-2">
           {steps.map((step, index) => (
             <ToolRow
               key={`${step.name}-${index}`}
@@ -357,9 +487,7 @@ function TextBlock({
 }) {
   if (!content.trim()) return null;
   const body = (
-    <div className="prose-scout text-[15px] overflow-x-auto">
-      <MarkdownRenderer content={content} baseUrl={baseUrl} token={token} />
-    </div>
+    <AssistantProse content={content} baseUrl={baseUrl} token={token} />
   );
   return sourceId && onAddAnnotation && onUpdateAnnotation && onRemoveAnnotation ? (
     <AnnotationRegion sourceId={sourceId} annotations={annotations ?? []} annotationNumbers={annotationNumbers ?? new Map()} onAdd={onAddAnnotation} onUpdate={onUpdateAnnotation} onRemove={onRemoveAnnotation}>
@@ -374,7 +502,6 @@ function TextBlock({
  */
 export function ToolCard({
   steps,
-  defaultExpanded = false,
   baseUrl = "",
   token = null,
   awaitingApproval = false,
@@ -414,7 +541,6 @@ export function ToolCard({
             key={`tools-${index}`}
             title={segment.title}
             steps={segment.steps}
-            defaultExpanded={defaultExpanded}
             awaitingApproval={awaitingApproval}
           />
         );

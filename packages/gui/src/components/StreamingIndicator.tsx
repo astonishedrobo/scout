@@ -1,8 +1,12 @@
+import { useEffect, useState } from "react";
+import { ActivityOrb } from "./ActivityOrb";
+
 interface StreamingIndicatorProps {
   currentTool: string | undefined;
   text: string;
   statusMessage?: string;
   hasToolSteps?: boolean;
+  startedAt?: number | null;
 }
 
 function humanToolName(name: string) {
@@ -34,22 +38,48 @@ export function StreamingIndicator({
   text,
   statusMessage,
   hasToolSteps,
+  startedAt,
 }: StreamingIndicatorProps) {
-  const label = text
-    ? currentTool
-      ? `${humanToolName(currentTool)}...`
-      : "Writing..."
+  const [fallbackStartedAt, setFallbackStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const active = !!(currentTool || statusMessage);
+
+  useEffect(() => {
+    if (!active) {
+      setFallbackStartedAt(null);
+      return;
+    }
+    const current = Date.now();
+    setFallbackStartedAt((existing) => existing ?? current);
+    setNow(current);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  // Once prose is visibly streaming, the text itself is the progress signal.
+  if (text && !currentTool) return null;
+
+  const rawLabel = text
+    ? humanToolName(currentTool!)
     : currentTool
-      ? `${humanToolName(currentTool)}...`
+      ? humanToolName(currentTool)
       : statusMessage
-        ? `${statusMessage}...`
+        ? statusMessage
         : hasToolSteps
-          ? "Preparing response..."
-          : "Thinking...";
+          ? "Preparing response"
+          : "Starting";
+  const effectiveStartedAt = startedAt ?? fallbackStartedAt;
+  const elapsed = effectiveStartedAt
+    ? Math.max(0, Math.floor((now - effectiveStartedAt) / 1000))
+    : null;
+  const label = elapsed === null
+    ? `${rawLabel.replace(/[.…]+$/u, "")}…`
+    : `${rawLabel.replace(/[.…]+$/u, "")} · ${elapsed}s`;
 
   return (
     <div className="flex items-center gap-2 py-1.5">
-      <span className="shimmer-text text-[13px]">{label}</span>
+      <ActivityOrb />
+      <span className="text-label text-scout-muted">{label}</span>
     </div>
   );
 }

@@ -1,18 +1,28 @@
-import { useRef, useEffect, useState } from "react";
-import { FileText, BarChart3, Compass, type LucideIcon } from "lucide-react";
-import type { FileChangeSet, Message, ResponseAnnotation, ToolStep } from "scout-core";
+import { useCallback, useRef, useEffect, useState } from "react";
+import { FileText, BarChart3, Compass, Clock3, Terminal, Bot, ArrowDown, type LucideIcon } from "lucide-react";
+import type { FileChangeSet, Message, ResponseAnnotation, TaskEvent, TaskNotice, ToolStep } from "scout-core";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCard } from "./ToolCard";
 import { StreamingIndicator } from "./StreamingIndicator";
 import { PixelSparkle } from "./ScoutMark";
+import { useThreadAnchor, FOLLOW_THRESHOLD } from "../hooks/useThreadAnchor";
 import type { Artifact } from "scout-core";
 
 interface ChatViewProps {
+  /**
+   * Identifies the conversation, so anchored scroll state resets when it changes.
+   *
+   * `null` turns anchoring off, for a transcript you read but never send into —
+   * the subagent feed in `AgentsPanel`. Its history arrives by appending, so it
+   * would otherwise anchor on whichever loaded message happened to be the user's.
+   */
+  sessionId: string | null;
   messages: Message[];
   streamingSteps: ToolStep[];
   streamingText: string;
   currentTool: string | undefined;
   statusMessage?: string;
+  activityStartedAt?: number | null;
   isLoading: boolean;
   awaitingApproval?: boolean;
   onSuggestionClick?: (text: string) => void;
@@ -22,12 +32,81 @@ interface ChatViewProps {
   onOpenFileChanges?: (changeSet: FileChangeSet) => void;
   onUndoFileChanges?: (changeSet: FileChangeSet) => void;
   onOpenMemories?: () => void;
+  onOpenTask?: (task: TaskEvent) => void;
   baseUrl: string;
   token: string | null;
   annotations?: ResponseAnnotation[];
   onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
   onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
   onRemoveAnnotation?: (id: string) => void;
+}
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  const active = task.status === "queued" || task.status === "running";
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  const start = task.started_at ?? task.created_at;
+  const end = task.finished_at ?? now / 1000;
+  const elapsed = start ? formatElapsed((end - start) * 1000) : "";
+  const state = task.status === "completed"
+    ? "finished"
+    : task.status === "cancelled"
+      ? "cancelled"
+      : task.status;
+  const Icon = task.task_type === "terminal" ? Terminal : Bot;
+  const statusColor = task.status === "failed"
+    ? "bg-scout-error"
+    : task.status === "completed"
+      ? "bg-scout-success"
+      : task.status === "cancelled" || task.status === "interrupted"
+        ? "bg-scout-muted"
+        : "bg-scout-accent-cta";
+  const body = task.error || task.summary || task.result_preview;
+  const content = (
+    <div className="flex min-w-0 items-start gap-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/55 px-3 py-2 text-left transition-colors hover:bg-scout-lift/60">
+      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${statusColor} ${active ? "animate-pulse" : ""}`} />
+      <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5 text-label text-scout-text">
+          <span className="truncate font-medium">{task.title}</span>
+          <span className="shrink-0 text-scout-muted">{state}</span>
+        </span>
+        {body && <span className="mt-0.5 block truncate text-caption text-scout-muted">{body}</span>}
+      </span>
+      {elapsed && <span className="flex shrink-0 items-center gap-1 pt-0.5 text-micro tabular-nums text-scout-muted"><Clock3 size={12} />{elapsed}</span>}
+    </div>
+  );
+  return onOpen ? <button type="button" onClick={onOpen} className="block w-full text-left">{content}</button> : content;
+}
+
+function TaskNoticeRow({ notice }: { notice: TaskNotice }) {
+  const failed = notice.status === "failed";
+  const stopped = notice.status === "cancelled" || notice.status === "interrupted";
+  const label = failed
+    ? `${notice.title} failed:`
+    : stopped
+      ? `${notice.title} stopped:`
+      : "Finished:";
+  const detail = notice.result_preview || notice.summary;
+  return (
+    <div className="flex items-center gap-2 px-1 text-label text-scout-muted">
+      <span className={failed ? "text-scout-error" : stopped ? "text-scout-warning" : "text-scout-success"}>●</span>
+      <span className="shrink-0 font-medium text-scout-text">{label}</span>
+      {!failed && !stopped && <span className="min-w-0 truncate">{notice.title}</span>}
+      {detail && <span className="min-w-0 truncate">— {detail}</span>}
+    </div>
+  );
 }
 
 // Fixed vivid icon colors — theme tokens desaturate in the soft/dark themes
@@ -37,28 +116,28 @@ const SUGGESTIONS: {
   description: string;
   prompt: string;
   icon: LucideIcon;
-  iconColor: string;
+  iconClass: string;
 }[] = [
   {
     title: "Summarize workspace",
     description: "Get an overview of the files in your project",
     prompt: "Summarize the files in my workspace",
     icon: FileText,
-    iconColor: "#f0a058",
+    iconClass: "text-scout-peach",
   },
   {
     title: "Visualize data",
     description: "Create charts and plots from your datasets",
     prompt: "Create a chart from my data",
     icon: BarChart3,
-    iconColor: "#a78bfa",
+    iconClass: "text-scout-lavender",
   },
   {
     title: "Explore a dataset",
     description: "Investigate patterns, stats, and outliers",
     prompt: "Help me explore a dataset",
     icon: Compass,
-    iconColor: "#2cb8d8",
+    iconClass: "text-scout-cyan",
   },
 ];
 
@@ -114,14 +193,14 @@ export function SuggestionChips({
             key={s.prompt}
             onClick={() => onSuggestionClick(s.prompt)}
             title={s.description}
-            className="group lift-hover flex items-start gap-2.5 rounded-card border border-scout-hairline-faint bg-scout-panel px-3 py-2.5 text-left hover:bg-scout-lift"
+            className="group flex items-start gap-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/65 px-3 py-2.5 text-left transition-colors hover:border-scout-hairline hover:bg-scout-lift/70"
           >
-            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center" style={{ color: s.iconColor }}>
-              <Icon size={15} strokeWidth={1.8} />
+            <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center ${s.iconClass}`}>
+              <Icon size={15} />
             </span>
             <span className="min-w-0">
-              <span className="block text-[13.5px] font-semibold text-scout-text/90">{s.title}</span>
-              <span className="mt-0.5 block text-[11px] leading-snug text-scout-muted/85">{s.description}</span>
+              <span className="block text-label font-semibold text-scout-text/90">{s.title}</span>
+              <span className="mt-0.5 block text-micro leading-snug text-scout-muted/85">{s.description}</span>
             </span>
           </button>
         );
@@ -136,6 +215,7 @@ export function ChatView({
   streamingText,
   currentTool,
   statusMessage,
+  activityStartedAt,
   isLoading,
   awaitingApproval = false,
   onRetry,
@@ -144,33 +224,114 @@ export function ChatView({
   onOpenFileChanges,
   onUndoFileChanges,
   onOpenMemories,
+  onOpenTask,
   baseUrl,
   token,
   annotations = [],
   onAddAnnotation,
   onUpdateAnnotation,
   onRemoveAnnotation,
+  sessionId,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followsLatestRef = useRef(true);
+  // Mirrored into state purely so the "jump to latest" affordance can render.
+  // Auto-scroll itself stays on the ref: it must not re-render per token.
+  const [followsLatest, setFollowsLatest] = useState(true);
+  const applyFollowsLatest = useCallback((follows: boolean) => {
+    setFollowsLatest((previous) => (previous === follows ? previous : follows));
+  }, []);
+
+  // Sending a message pins it to the top and reserves room beneath it, instead of
+  // jumping to the bottom. See the hook for why that is a different mechanism
+  // rather than a different scroll target.
+  const {
+    anchorIndex,
+    anchorRef,
+    contentRef,
+    spacerRef,
+    reservedHeight,
+    anchoredRef,
+    endAnchor,
+    caughtUp,
+  } = useThreadAnchor({
+    scrollRef,
+    messages,
+    isLoading,
+    sessionId,
+    followsLatestRef,
+    setFollowsLatest: applyFollowsLatest,
+  });
+
   const activeTool =
     currentTool ?? streamingSteps.find((step) => step.status === "executing")?.name;
   const annotationNumbers = new Map(annotations.map((annotation, index) => [annotation.id, index + 1]));
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages, streamingSteps, streamingText, isLoading]);
+    const element = scrollRef.current;
+    if (!element || !followsLatestRef.current) return;
+    // An anchored turn holds its position for the whole reply: the reader stays on
+    // the message they sent and the answer grows below, off the bottom of the
+    // window, until they choose to catch up. Following here instead would drag the
+    // view down the stream — the exact thing anchoring exists to stop.
+    if (anchoredRef.current) return;
+    // Streaming should feel immediate and must never pull someone away from
+    // an earlier result they are reading.  Browser smooth scrolling on every
+    // token makes the interface visibly lag behind the model.
+    element.scrollTop = element.scrollHeight;
+  }, [messages, streamingSteps, streamingText, isLoading, anchoredRef]);
+
+  const jumpToLatest = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    // Pressing this is an explicit request to follow the stream, so it ends the
+    // anchor — otherwise the next token would pull the view back.
+    endAnchor();
+    // Land on the end of the content, not inside reserved empty space.
+    element.scrollTo({ top: element.scrollHeight - reservedHeight(), behavior: "smooth" });
+  };
 
   return (
-    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-      <div className="max-w-[46rem] mx-auto px-4 py-8 space-y-7">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div
+      ref={scrollRef}
+      onScroll={() => {
+        const element = scrollRef.current;
+        if (!element) return;
+        // Measured against the end of the *content*, not the end of the scroll
+        // area: while space is reserved below the last message, sitting inside
+        // that space would otherwise read as "at the bottom" even though the
+        // content is off-screen above.
+        const distance =
+          element.scrollHeight - reservedHeight() - element.scrollTop - element.clientHeight;
+        // Scrolling down to the end of a streaming reply is how the reader opts back
+        // into following it for the rest of the turn.
+        if (caughtUp(distance)) endAnchor();
+        const follows = distance < FOLLOW_THRESHOLD;
+        followsLatestRef.current = follows;
+        setFollowsLatest((prev) => (prev === follows ? prev : follows));
+      }}
+      className="min-h-0 flex-1 overflow-y-auto"
+    >
+      {/* thread-pad / thread-flow carry the density preference; see globals.css. */}
+      <div ref={contentRef} className="thread-flow thread-pad mx-auto max-w-[46rem] px-4">
         {messages.map((msg, i) => {
+          if (msg.role === "system" && msg.task) {
+            return (
+              <div key={`task-${msg.task.task_id}`} className="animate-enter">
+                <TaskEventRow task={msg.task} onOpen={onOpenTask ? () => onOpenTask(msg.task!) : undefined} />
+              </div>
+            );
+          }
+          if (msg.role === "system" && msg.taskNotice) {
+            return (
+              <div key={`task-notice-${msg.taskNotice.task_id}-${i}`} className="animate-enter">
+                <TaskNoticeRow notice={msg.taskNotice} />
+              </div>
+            );
+          }
           const hasTimeline = msg.role === "assistant" && !!msg.steps?.length;
           const timelineHasText = !!msg.steps?.some((step) => step.kind === "text");
-          // When mid-turn prose is already in the timeline, only show final
-          // content if it is not a duplicate of the last text block.
           const lastText = [...(msg.steps ?? [])]
             .reverse()
             .find((step) => step.kind === "text");
@@ -188,8 +349,27 @@ export function ChatView({
             || !!msg.artifacts?.length
             || !!msg.fileChanges?.length;
 
+          // Everything the user can actually see for this turn, in order: the
+          // timeline's prose steps plus `content` when it is not a duplicate of
+          // the last one. This is what copy must write.
+          const visibleProse = [
+            ...(msg.steps ?? [])
+              .filter((step) => step.kind === "text")
+              .map((step) => (step.content ?? "").trim()),
+            contentAlreadyInTimeline ? "" : (msg.content ?? "").trim(),
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+
           return (
-            <div key={i} className="animate-enter">
+            <div
+              key={i}
+              // The anchored turn, when this is it. Index-based is sound because
+              // messages only append within a session and the hook drops the
+              // anchor on any shrink (fork, clear) or session change.
+              ref={i === anchorIndex ? anchorRef : undefined}
+              className="animate-enter"
+            >
               {/* Interleaved thinking / tools / mid-turn prose in event order. */}
               {hasTimeline && (
                 <ToolCard
@@ -207,10 +387,9 @@ export function ChatView({
               {showBubble && (
                 <MessageBubble
                   message={
-                    contentAlreadyInTimeline
-                      ? { ...msg, content: "" }
-                      : msg
+                    contentAlreadyInTimeline ? { ...msg, content: "" } : msg
                   }
+                  copyText={msg.role === "assistant" ? visibleProse : undefined}
                   onRetry={msg.role === "assistant" && onRetry ? () => onRetry(i) : undefined}
                   onFork={onFork ? () => onFork(i) : undefined}
                   onOpenArtifact={onOpenArtifact}
@@ -236,7 +415,6 @@ export function ChatView({
             {streamingSteps.length > 0 && (
               <ToolCard
                 steps={streamingSteps}
-                defaultExpanded
                 baseUrl={baseUrl}
                 token={token}
                 awaitingApproval={awaitingApproval}
@@ -249,7 +427,9 @@ export function ChatView({
               />
             )}
             {streamingText ? (
-              <div className="prose-scout text-[15px]">
+              // No prose wrapper here: MessageBubble applies `prose-scout
+              // text-prose` itself, and nesting the scope duplicated it.
+              <div>
                 <MessageBubble
                   message={{ role: "assistant", content: streamingText }}
                   baseUrl={baseUrl}
@@ -268,10 +448,29 @@ export function ChatView({
               text={streamingText}
               statusMessage={statusMessage}
               hasToolSteps={streamingSteps.length > 0}
+              startedAt={activityStartedAt}
             />
           </div>
         )}
       </div>
+      {/* Room for the anchored message to reach the top. A sibling of
+          `.thread-flow`, never a child — `> * + *` would give it a
+          `--space-thread` margin and the reservation would overshoot. */}
+      <div ref={spacerRef} className="thread-spacer" aria-hidden="true" />
+    </div>
+      {/* Auto-scroll deliberately detaches once you scroll up, which previously
+          had no UI signal at all — a streaming response just silently went by
+          off screen. */}
+      {!followsLatest && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-pill border border-scout-hairline bg-scout-panel/95 px-3 py-1.5 text-caption font-medium text-scout-text shadow-pop backdrop-blur-sm transition-colors hover:bg-scout-lift"
+        >
+          <ArrowDown size={13} />
+          Jump to latest
+        </button>
+      )}
     </div>
   );
 }

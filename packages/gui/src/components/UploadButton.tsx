@@ -14,6 +14,7 @@ interface UploadButtonProps {
   errorCount: number;
   onUpload: (files: FileList | null) => void | Promise<unknown>;
   onDismiss: (id: string) => void;
+  compact?: boolean;
 }
 
 /**
@@ -27,6 +28,7 @@ export function UploadButton({
   errorCount,
   onUpload,
   onDismiss,
+  compact = false,
 }: UploadButtonProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -45,7 +47,7 @@ export function UploadButton({
           if (hasItems) setShowStatus((p) => !p);
           else fileInputRef.current?.click();
         }}
-        className={`${headerActionButtonClass} ${
+        className={`${headerActionButtonClass} ${compact ? "!h-7 !px-2" : ""} ${
           busy
             ? "border-scout-action/30 bg-scout-action-muted text-scout-text"
             : errorCount > 0
@@ -97,15 +99,15 @@ export function UploadButton({
         onClose={() => setShowStatus(false)}
         anchorRef={btnRef}
         placement="bottom-end"
-        className="w-72 p-1.5"
+        className="w-[min(18rem,calc(100vw-2rem))] p-1.5"
       >
-        <div className="px-2 py-1.5 text-[11px] uppercase tracking-wider font-semibold text-scout-muted">
+        <div className="px-2 py-1.5 text-micro uppercase tracking-wider font-semibold text-scout-muted">
           Workspace uploads
         </div>
         {uploads.map((u) => (
           <div
             key={u.id}
-            className="flex items-center gap-2.5 px-2 py-2 rounded-lg text-[13px] font-medium"
+            className="flex items-center gap-2.5 px-2 py-2 rounded-btn text-label font-medium"
           >
             {u.status === "uploading" && (
               <Loader2 size={14} className="text-scout-text animate-spin shrink-0" />
@@ -117,7 +119,7 @@ export function UploadButton({
             <div className="flex-1 min-w-0">
               <p className="text-scout-text truncate">{u.name}</p>
               {u.status === "error" && u.error && (
-                <p className="text-[11px] text-scout-error truncate">{u.error}</p>
+                <p className="text-micro text-scout-error truncate">{u.error}</p>
               )}
             </div>
             {u.status === "error" && (
@@ -132,7 +134,7 @@ export function UploadButton({
         ))}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="w-full flex items-center gap-2.5 px-2 py-2 mt-0.5 rounded-lg text-[13px] font-medium text-scout-text hover:bg-scout-lift transition-colors border-t border-scout-hairline-faint"
+          className="w-full flex items-center gap-2.5 px-2 py-2 mt-0.5 rounded-btn text-label font-medium text-scout-text hover:bg-scout-lift transition-colors border-t border-scout-hairline-faint"
         >
           <Upload size={14} className="text-scout-muted" />
           Upload more files

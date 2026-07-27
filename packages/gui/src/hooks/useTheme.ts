@@ -28,14 +28,44 @@ function readPreferredDarkTheme(): Exclude<Theme, "light"> {
 
 let preferredDarkTheme = readPreferredDarkTheme();
 
-function applyTheme(theme: Theme) {
+/*
+ * Crossfade bookkeeping. `.theme-switching` enables a colour-only transition on
+ * every element (see globals.css) and MUST be transient — the `*` selector is
+ * expensive, so it is removed as soon as the swap has settled.
+ */
+const THEME_FADE_MS = 180;
+const THEME_FADE_SLACK_MS = 40;
+let themeFadeTimer: number | undefined;
+
+function applyTheme(theme: Theme, animate = false) {
   const root = document.documentElement;
+
+  if (animate) {
+    root.classList.add("theme-switching");
+    if (themeFadeTimer !== undefined) window.clearTimeout(themeFadeTimer);
+    themeFadeTimer = window.setTimeout(() => {
+      themeFadeTimer = undefined;
+      root.classList.remove("theme-switching");
+    }, THEME_FADE_MS + THEME_FADE_SLACK_MS);
+  }
+
   root.classList.remove("dark", "soft", "light");
   root.classList.add(theme);
+  // Keep the native surfaces (form controls, scrollbars) and the mobile browser
+  // chrome in step with the app theme. index.html sets these pre-paint; without
+  // this they would stay on the *initial* theme after a toggle.
+  root.style.colorScheme = theme === "light" ? "light" : "dark";
+  const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (themeColor) {
+    themeColor.content =
+      theme === "light" ? "#f9fafb" : theme === "soft" ? "#232426" : "#131415";
+  }
   localStorage.setItem("scout-theme", theme);
 }
 
-// Make sure the DOM matches the stored value on first load.
+// Make sure the DOM matches the stored value on first load. Never animated —
+// there is no previous theme to fade from, and index.html has already painted
+// the stored theme pre-hydration.
 applyTheme(currentTheme);
 
 function setThemeInternal(theme: Theme) {
@@ -45,7 +75,7 @@ function setThemeInternal(theme: Theme) {
     localStorage.setItem("scout-dark-theme", theme);
   }
   currentTheme = theme;
-  applyTheme(theme);
+  applyTheme(theme, true);
   listeners.forEach((l) => l());
 }
 

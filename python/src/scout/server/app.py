@@ -21,10 +21,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import os as _os
+import re
 import shutil
+import socket
 import threading
 import time
 import traceback
@@ -33,6 +36,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, UploadFile, File as FAFile
@@ -42,6 +46,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from ..execution.grants import CapabilityGrantStore
+from ..task_store import TaskStore
 from ..execution.models import CapabilityRequest
 from ..artifacts import MAX_ARTIFACT_SIZE, RENDERERS
 from ..config import (
@@ -92,6 +97,8 @@ from ..memories import (
     save_memory_summary,
 )
 from ..memory_pipeline import schedule_memory_pipeline
+from ..mcp_manager import McpManager
+from ..mcp_store import McpStore
 from ..permissions import profile_from_user, resolve_profile
 from ..session_snapshot import copy_session_snapshot, load_session_snapshot, save_session_snapshot
 from .session_title import (
@@ -125,6 +132,14 @@ class ChatRequest(BaseModel):
     chat_image_ids: list[str] = []
 
 
+class SteerRequest(BaseModel):
+    message: str
+    expected_turn_id: str
+    client_id: str
+    attachments: list[str] = []
+    chat_image_ids: list[str] = []
+
+
 class ConfigSetRequest(BaseModel):
     key: str        # dotted path, e.g. "agent.model"
     value: Any
@@ -133,6 +148,11 @@ class ConfigSetRequest(BaseModel):
 
 class SessionModelRequest(BaseModel):
     model: str
+
+
+class SessionCreateRequest(BaseModel):
+    model: str | None = None
+    approval_mode: str = "ask_always"
 
 
 class SessionTitleRequest(BaseModel):
@@ -161,7 +181,7 @@ class ApprovalResponse(BaseModel):
     approval_id: str
     action: str       # "yes", "no", "suggest", "edit", "always", "shared", "allow_once", "allow_session", "deny"
     feedback: str = ""
-    kind: str = "file_changes"  # "file_changes" | "capability" | "permission_elevation"
+    kind: str = "file_changes"  # "file_changes" | "capability" | "mcp_tool" | "permission_elevation"
     save_execpolicy: bool = False
     execpolicy_prefix: str = ""
     execpolicy_scope: str = "session"
@@ -194,6 +214,27 @@ class SessionMessageRequest(BaseModel):
     chat_images: list[dict] | None = None
     annotations: list[dict] | None = None
     stopped: bool | None = None
+
+
+class EditDoneRequest(BaseModel):
+    approval_id: str
+    session_id: str
+
+
+class ForkSessionRequest(BaseModel):
+    from_message_index: int
+
+
+class MemoriesRequest(BaseModel):
+    content: str = ""
+    entry: str = ""
+    remove_index: int | None = None
+    summary: str | None = None
+
+
+class MemoryPreferencesRequest(BaseModel):
+    use_memories: bool
+    generate_memories: bool
 
 
 # ── Session store helpers (matches Node.js JSONL format) ─────────────────
@@ -338,6 +379,7 @@ def _parse_session_file(path: Path) -> dict | None:
         return None
 
     messages = []
+    task_indexes: dict[str, int] = {}
     updated_at = header.get("createdAt", "")
     for raw in lines[1:]:
         try:
@@ -356,6 +398,20 @@ def _parse_session_file(path: Path) -> dict | None:
                 "fileChanges": entry.get("file_changes"),
                 **({"stopped": True} if entry.get("stopped") else {}),
             })
+            updated_at = entry.get("timestamp", updated_at)
+        elif entry.get("type") == "task" and isinstance(entry.get("task"), dict):
+            task = entry["task"]
+            task_id = str(task.get("task_id") or "")
+            message = {
+                "role": "system",
+                "content": "",
+                "task": task,
+            }
+            if task_id and task_id in task_indexes:
+                messages[task_indexes[task_id]] = message
+            else:
+                task_indexes[task_id] = len(messages)
+                messages.append(message)
             updated_at = entry.get("timestamp", updated_at)
 
     return {
@@ -493,6 +549,7 @@ def create_app(
     cwd: str | Path | None = None,
     gui_static_dir: str | Path | None = None,
     multi_user: bool = False,
+    mcp_bootstrap_path: str | Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI app with a ScoutAgent instance.
 
@@ -533,14 +590,65 @@ def create_app(
             self.approval_mode = DEFAULT_APPROVAL_MODE
             self.pending_approval_id: str | None = None
             self.pending_approval_diffs: list[Any] = []
+            # Only one approval card can be active for a session. Serialize
+            # parent and worker requests so they cannot overwrite each other.
+            self.approval_lock = asyncio.Lock()
             self.abort_event: asyncio.Event | None = None
+            self.active_turn_id: str | None = None
+            self.accepted_steer_clients: dict[str, str] = {}
             self.active_permission_profile: str | None = None
             self.created_at = time.monotonic()
             self.last_activity = self.created_at
             self.requires_vision = False
+            # Auto-continue when a background sub-agent finishes while idle.
+            self.auto_continue_task: asyncio.Task | None = None
+            self.auto_continue_pending: bool = False
+            # Fan-out for sub-agent / session UI events (SSE subscribers).
+            self.event_subscribers: list[asyncio.Queue] = []
+            # Ordered, bounded replay log.  A browser reconnect must be able to
+            # catch up from an event id instead of relying on polling a stale
+            # task snapshot.
+            self.event_sequence = 0
+            self.event_history: list[dict] = []
+            self.task_store: TaskStore | None = None
+            self.terminal_tasks: dict[int, asyncio.Task] = {}
+            # Local, bounded timing history.  This is intentionally per
+            # session: it helps diagnose perceived slowness without exporting
+            # prompts or user activity into global telemetry.
+            self.turn_metrics: list[dict[str, Any]] = []
+            # Approvals while no /chat stream is open (background sub-agents).
+            self.idle_approval_queue: asyncio.Queue = asyncio.Queue()
+            self.mcp_revision: tuple[int, int] = (-1, -1)
 
         def touch(self) -> None:
             self.last_activity = time.monotonic()
+
+        @property
+        def is_busy(self) -> bool:
+            return self.abort_event is not None
+
+        def broadcast_event(self, event: dict) -> None:
+            self.event_sequence += 1
+            event = {**event, "event_id": self.event_sequence}
+            self.event_history.append(event)
+            if len(self.event_history) > 512:
+                del self.event_history[:-512]
+            dead: list[asyncio.Queue] = []
+            for q in self.event_subscribers:
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        q.put_nowait(event)
+                    except asyncio.QueueFull:
+                        dead.append(q)
+            for q in dead:
+                if q in self.event_subscribers:
+                    self.event_subscribers.remove(q)
 
     # ── State (created on startup) ───────────────────────────────────
     _state: dict[str, Any] = {
@@ -558,9 +666,14 @@ def create_app(
         "maintenance_tasks": [],
         "session_init_locks": {},
         "session_init_reservations": set(),
+        # Active sub-agents consume the same global/per-user capacity pool as
+        # loaded conversation agents. Values are (user, parent session, agent).
+        "active_subagents": set(),
         "pending_turns": set(),
         "session_registry_lock": threading.RLock(),
         "retriever_lock": threading.RLock(),
+        "mcp_store": McpStore(),
+        "mcp_manager": McpManager(),
     }
 
     def _load_base_config() -> AppConfig:
@@ -681,6 +794,25 @@ def create_app(
             or "Execution worker unavailable or isolation probe failed"
         )
         logger.error("Server mode execution sandbox unavailable: %s", _state["init_error"])
+
+    @app.on_event("startup")
+    async def _initialize_mcp_integrations() -> None:
+        """Warm configured remote MCP connections without making startup fatal."""
+        servers = _state["mcp_store"].list_servers()
+        remote = [s for s in servers if s["enabled"] and s["transport"] == "streamable_http"]
+        if not remote:
+            return
+        results = await asyncio.gather(
+            *(asyncio.wait_for(_state["mcp_manager"].connect(s["id"]), timeout=8) for s in remote),
+            return_exceptions=True,
+        )
+        for server, result in zip(remote, results):
+            if isinstance(result, Exception):
+                logger.warning("MCP %s skipped during startup: %s", server["id"], result)
+
+    @app.on_event("shutdown")
+    async def _close_mcp_integrations() -> None:
+        await _state["mcp_manager"].close()
 
     def _session_cwd(user_id: str | int) -> str:
         """Return the cwd to use for session storage and agent init."""
@@ -805,7 +937,276 @@ def create_app(
         agent._messages = restored
         return len(restored)
 
-    def _create_session_state(session_id: str, user_id: str | int, user: User | None) -> SessionState:
+    def _schedule_subagent_auto_continue(session_id: str, user_id: str | int) -> None:
+        """If the parent is idle, run a short turn to integrate sub-agent results."""
+        key = (str(user_id), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            return
+        cfg = getattr(s.agent, "_config", None)
+        multi = getattr(cfg, "multi_agent", None) if cfg is not None else None
+        has_terminal_notes = bool(getattr(s.agent, "has_pending_task_notifications", lambda: False)())
+        # Shell tasks use this same handoff even when multi-agent is disabled;
+        # a completed command must not silently vanish from the main chat.
+        if (multi is None or not getattr(multi, "auto_continue_on_complete", True)) and not has_terminal_notes:
+            return
+        s.auto_continue_pending = True
+        if s.is_busy:
+            # Parent is mid-turn; notifications will be injected on the next stream.
+            return
+        if s.auto_continue_task is not None and not s.auto_continue_task.done():
+            return
+
+        async def _run_auto_continue() -> None:
+            # Brief delay so multiple near-simultaneous completions coalesce.
+            await asyncio.sleep(0.45)
+            current = _state["sessions"].get(key)
+            if current is None:
+                return
+            if current.is_busy:
+                # Keep pending flag so the chat finally-hook can re-schedule.
+                return
+            mgr = getattr(current.agent, "subagent_manager", None)
+            notes = list(getattr(mgr, "_notifications", []) or []) if mgr else []
+            has_terminal_notes = bool(getattr(current.agent, "has_pending_task_notifications", lambda: False)())
+            if not notes and not has_terminal_notes:
+                current.auto_continue_pending = False
+                return
+            current.auto_continue_pending = False
+            turn_key = (str(user_id), session_id)
+            with _state["session_registry_lock"]:
+                if turn_key in _state["pending_turns"] or current.abort_event is not None:
+                    current.auto_continue_pending = True
+                    return
+                _state["pending_turns"].add(turn_key)
+                current.abort_event = asyncio.Event()
+                current.active_turn_id = str(uuid.uuid4())
+            turn_lease = None
+            try:
+                try:
+                    turn_lease = await _state["turn_scheduler"].acquire(
+                        str(user_id), _admission_policy(user_id)
+                    )
+                except Exception:
+                    current.auto_continue_pending = True
+                    return
+                current.broadcast_event({
+                    "type": "parent_auto_turn_started",
+                    "session_id": session_id,
+                    "reason": "subagent_completed",
+                    "turn_id": current.active_turn_id,
+                })
+                # Empty user text → notifications alone form the human message.
+                # Run through the streaming path so /chat/stop can cancel this
+                # otherwise invisible parent turn.
+                async def _collect_reply() -> str:
+                    final = ""
+                    async for event in current.agent.stream(""):
+                        current.broadcast_event({
+                            "type": "parent_auto_event",
+                            "session_id": session_id,
+                            "event": event,
+                        })
+                        if event.get("type") == "response" and event.get("content"):
+                            final = str(event["content"])
+                    return final
+
+                reply_task = asyncio.create_task(_collect_reply())
+                abort_task = asyncio.create_task(current.abort_event.wait())
+                finished, _ = await asyncio.wait(
+                    {reply_task, abort_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if abort_task in finished and current.abort_event.is_set():
+                    reply_task.cancel()
+                    await asyncio.gather(reply_task, return_exceptions=True)
+                    return
+                abort_task.cancel()
+                await asyncio.gather(abort_task, return_exceptions=True)
+                reply = await reply_task
+                if reply:
+                    session_path = _session_file(_session_cwd(user_id), session_id, user_id)
+                    if session_path.exists():
+                        _append_session_entry(session_path, {
+                            "type": "assistant",
+                            "content": reply,
+                            "timestamp": _now_iso(),
+                            "source": "subagent_auto_continue",
+                        })
+                    # Push into the open GUI (session file alone is invisible live).
+                    current.broadcast_event({
+                        "type": "parent_auto_reply",
+                        "session_id": session_id,
+                        "content": reply,
+                        "source": "subagent_auto_continue",
+                    })
+                    logger.info(
+                        "Auto-continued session %s after sub-agent completion",
+                        session_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Sub-agent auto-continue failed for session %s", session_id,
+                )
+            finally:
+                if turn_lease is not None:
+                    await turn_lease.release()
+                with _state["session_registry_lock"]:
+                    _state["pending_turns"].discard(turn_key)
+                current.abort_event = None
+                current.active_turn_id = None
+                current.touch()
+                current.broadcast_event({
+                    "type": "parent_auto_turn_finished",
+                    "session_id": session_id,
+                })
+                # A second worker may have completed while this parent turn
+                # was integrating the first.  The normal /chat finally-hook
+                # is not involved in an automatic turn, so explicitly start
+                # the next coalesced handoff instead of leaving stale prose
+                # such as “Timer 2 is still running”.
+                current.auto_continue_task = None
+                if current.auto_continue_pending:
+                    _schedule_subagent_auto_continue(session_id, user_id)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        s.auto_continue_task = loop.create_task(
+            _run_auto_continue(),
+            name=f"scout-subagent-continue-{session_id}",
+        )
+
+    def _schedule_steer_followup(session_id: str, user_id: str | int) -> None:
+        """Resume a conversation from an accepted steer after its prior turn stops."""
+        key = (str(user_id), session_id)
+        state = _state["sessions"].get(key)
+        if state is None or state.is_busy or not state.agent.pending_steers():
+            return
+        if state.auto_continue_task is not None and not state.auto_continue_task.done():
+            return
+
+        async def _run() -> None:
+            await asyncio.sleep(0.05)
+            current = _state["sessions"].get(key)
+            if current is None or current.is_busy:
+                return
+            pending = current.agent.pending_steers()
+            if not pending:
+                return
+            first = pending[0]
+            if not current.agent.cancel_steer(first["steer_id"]):
+                return
+
+            turn_key = (str(user_id), session_id)
+            with _state["session_registry_lock"]:
+                if turn_key in _state["pending_turns"] or current.abort_event is not None:
+                    current.agent.enqueue_steer(
+                        first["steer_id"],
+                        first["content"],
+                        first.get("attachments"),
+                        client_id=first.get("client_id"),
+                        display_content=first.get("display_content"),
+                    )
+                    return
+                _state["pending_turns"].add(turn_key)
+                current.abort_event = asyncio.Event()
+                current.active_turn_id = str(uuid.uuid4())
+
+            turn_lease = None
+            try:
+                turn_lease = await _state["turn_scheduler"].acquire(
+                    str(user_id), _admission_policy(user_id),
+                )
+                current.broadcast_event({
+                    "type": "parent_auto_turn_started",
+                    "session_id": session_id,
+                    "reason": "steer_followup",
+                    "turn_id": current.active_turn_id,
+                })
+                current.broadcast_event({
+                    "type": "steer_consumed",
+                    "session_id": session_id,
+                    "steer_id": first["steer_id"],
+                    "client_id": first.get("client_id"),
+                    "content": first.get("display_content", first["content"]),
+                })
+                session_path = _session_file(_session_cwd(user_id), session_id, user_id)
+                if session_path.exists():
+                    _append_session_entry(session_path, {
+                        "type": "user",
+                        "content": first.get("display_content", first["content"]),
+                        "attachments": first.get("attachments") or [],
+                        "timestamp": _now_iso(),
+                        "source": "steer_followup",
+                    })
+
+                final = ""
+                async for event in current.agent.stream(
+                    first["content"], first.get("attachments") or None,
+                ):
+                    event_type = event.get("type")
+                    if event_type == "steer_consumed":
+                        current.broadcast_event({
+                            **event,
+                            "session_id": session_id,
+                        })
+                    else:
+                        current.broadcast_event({
+                            "type": "parent_auto_event",
+                            "session_id": session_id,
+                            "event": event,
+                        })
+                    if event_type == "response" and event.get("content"):
+                        final = str(event["content"])
+
+                if final:
+                    if session_path.exists():
+                        _append_session_entry(session_path, {
+                            "type": "assistant",
+                            "content": final,
+                            "timestamp": _now_iso(),
+                            "source": "steer_followup",
+                        })
+                    current.broadcast_event({
+                        "type": "parent_auto_reply",
+                        "session_id": session_id,
+                        "content": final,
+                        "source": "steer_followup",
+                    })
+            except Exception:
+                logger.exception("Steer follow-up failed for session %s", session_id)
+                current.broadcast_event({
+                    "type": "steer_rejected",
+                    "session_id": session_id,
+                    "steer_id": first["steer_id"],
+                    "client_id": first.get("client_id"),
+                    "message": "Could not run queued steer",
+                })
+            finally:
+                if turn_lease is not None:
+                    await turn_lease.release()
+                with _state["session_registry_lock"]:
+                    _state["pending_turns"].discard(turn_key)
+                current.abort_event = None
+                current.active_turn_id = None
+                current.auto_continue_task = None
+                current.touch()
+                current.broadcast_event({
+                    "type": "parent_auto_turn_finished",
+                    "session_id": session_id,
+                })
+                if current.agent.pending_steers():
+                    _schedule_steer_followup(session_id, user_id)
+                elif current.auto_continue_pending:
+                    _schedule_subagent_auto_continue(session_id, user_id)
+
+        state.auto_continue_task = asyncio.get_running_loop().create_task(
+            _run(), name=f"scout-steer-followup-{session_id}",
+        )
+
+    def _create_session_state(session_id: str, user_id: str | int, user: User | None, external_tools: list | None = None) -> SessionState:
         """Construct one session state. Called in a bounded worker thread."""
         key = (str(user_id), session_id)
         if key not in _state["sessions"]:
@@ -820,6 +1221,136 @@ def create_app(
                     return await _permission_elevation_callback(
                         session_id, user_id, reason, domains,
                     )
+
+                def _acquire_subagent_slot(agent_id: str) -> str | None:
+                    uid = str(user_id)
+                    token = (uid, session_id, agent_id)
+                    runtime = _state["base_config"].server
+                    with _state["session_registry_lock"]:
+                        active = _state["active_subagents"]
+                        if token in active:
+                            return None
+                        reservations = _state["session_init_reservations"]
+                        global_used = (
+                            len(_state["sessions"])
+                            + len(reservations)
+                            + len(active)
+                        )
+                        user_used = (
+                            sum(1 for key in _state["sessions"] if key[0] == uid)
+                            + sum(1 for item in reservations if item[0] == uid)
+                            + sum(1 for item in active if item[0] == uid)
+                        )
+                        if user_used >= runtime.max_live_sessions_per_user:
+                            return (
+                                "This account has reached its active thread "
+                                f"capacity ({runtime.max_live_sessions_per_user}). "
+                                "Wait for a conversation or sub-agent to become idle."
+                            )
+                        if global_used >= runtime.max_live_sessions:
+                            return (
+                                "Scout has reached its active thread capacity "
+                                f"({runtime.max_live_sessions}). Try again shortly."
+                            )
+                        active.add(token)
+                    return None
+
+                def _release_subagent_slot(agent_id: str) -> None:
+                    with _state["session_registry_lock"]:
+                        _state["active_subagents"].discard(
+                            (str(user_id), session_id, agent_id)
+                        )
+
+                def _on_subagent_complete(record: Any) -> None:
+                    # May run on the event loop thread from a sub-agent task.
+                    try:
+                        if (
+                            getattr(record, "status", "") == "stopped"
+                            and getattr(record, "stop_initiated_by_parent", False)
+                        ):
+                            # The active supervisor turn already receives the
+                            # stop_subagent tool result. Consume the queued
+                            # lifecycle note so it cannot cause a duplicate
+                            # automatic reply after that turn finishes.
+                            current = _state["sessions"].get(key)
+                            if current is not None:
+                                manager = getattr(
+                                    current.agent, "subagent_manager", None,
+                                )
+                                if manager is not None:
+                                    manager.discard_notification(record.agent_id)
+                            return
+                        # Completed, failed, and user-stopped workers all use
+                        # the same structured pickup path. The lifecycle card
+                        # updates immediately; the parent model gets the
+                        # durable notification without synthetic assistant
+                        # prose being inserted into the transcript.
+                        _schedule_subagent_auto_continue(session_id, user_id)
+                    except Exception:
+                        logger.debug("Failed to schedule sub-agent auto-continue", exc_info=True)
+
+                async def _on_subagent_event(event: dict) -> None:
+                    key_local = (str(user_id), session_id)
+                    state = _state["sessions"].get(key_local)
+                    if state is not None:
+                        state.touch()
+                        state.broadcast_event(event)
+                        # Sub-agent transport events are intentionally noisy for
+                        # the task detail panel.  The main conversation gets a
+                        # small, durable lifecycle record only when work starts
+                        # or reaches a terminal state.
+                        event_type = str(event.get("type") or "")
+                        lifecycle = {
+                            "subagent_started": "queued",
+                            "subagent_status": "running",
+                            "subagent_completed": "completed",
+                            "subagent_failed": "failed",
+                            "subagent_stopped": "cancelled",
+                        }
+                        if event_type in lifecycle:
+                            mgr = getattr(state.agent, "subagent_manager", None)
+                            agent_id = str(event.get("agent_id") or "")
+                            detail = mgr.public_detail(agent_id) if mgr and agent_id else None
+                            if detail:
+                                task = {
+                                    "task_id": agent_id,
+                                    "task_type": "agent",
+                                    "title": detail.get("description") or "Background agent",
+                                    "status": lifecycle[event_type],
+                                    "created_at": detail.get("created_at"),
+                                    "started_at": detail.get("created_at"),
+                                    "finished_at": detail.get("finished_at"),
+                                    "summary": detail.get("summary"),
+                                    "result_preview": detail.get("result_preview"),
+                                    "error": detail.get("error"),
+                                }
+                                if state.task_store is not None:
+                                    task, task_sequence = await asyncio.to_thread(state.task_store.upsert, task)
+                                else:
+                                    task_sequence = 0
+                                path = _session_file(_session_cwd(user_id), session_id, user_id)
+                                if path.exists():
+                                    await asyncio.to_thread(_append_session_entry, path, {
+                                        "type": "task",
+                                        "timestamp": _now_iso(),
+                                        "task": task,
+                                    })
+                                state.broadcast_event({
+                                    "type": "task_event",
+                                    "session_id": session_id,
+                                    "task": task,
+                                    "task_sequence": task_sequence,
+                                })
+                                if event_type in {"subagent_completed", "subagent_failed", "subagent_stopped"}:
+                                    state.broadcast_event({
+                                        "type": "subagent_finished_notice",
+                                        "session_id": session_id,
+                                        "agent_id": agent_id,
+                                        "description": task["title"],
+                                        "status": task["status"],
+                                        "summary": task.get("summary") or task["status"],
+                                        "result_preview": task.get("result_preview") or "",
+                                    })
 
                 session_model = None
                 session_path = _session_file(_session_cwd(user_id), session_id, user_id)
@@ -858,7 +1389,14 @@ def create_app(
                         profile=perm_profile,
                         config=agent_config,
                         request_permissions_fn=_req_perms,
+                        on_subagent_complete=_on_subagent_complete,
+                        external_tools=external_tools,
                     )
+                    if agent.subagent_manager is not None:
+                        agent.subagent_manager.set_event_listener(_on_subagent_event)
+                        agent.subagent_manager.set_resource_gate(
+                            _acquire_subagent_slot, _release_subagent_slot,
+                        )
                 else:
                     agent_config = _base_config_copy()
                     if session_model:
@@ -875,8 +1413,21 @@ def create_app(
                         grant_store=_state["grant_store"],
                         config=agent_config,
                         request_permissions_fn=_req_perms,
+                        on_subagent_complete=_on_subagent_complete,
+                        external_tools=external_tools,
                     )
+                    if agent.subagent_manager is not None:
+                        agent.subagent_manager.set_event_listener(_on_subagent_event)
+                        agent.subagent_manager.set_resource_gate(
+                            _acquire_subagent_slot, _release_subagent_slot,
+                        )
                 s = SessionState(agent, agent_config.agent.model)
+                s.task_store = TaskStore(_session_dir(_session_cwd(user_id), user_id) / f"{session_id}.tasks.sqlite")
+                # In-process monitors are intentionally not resurrected after
+                # a server restart. Surface the truth instead of a permanent
+                # spinner; users can retry a command from the conversation.
+                for task in s.task_store.interrupt_orphaned_running():
+                    s.broadcast_event({"type": "task_event", "session_id": session_id, "task": task})
                 snap = load_session_snapshot(_session_dir(_session_cwd(user_id), user_id), session_id)
                 if snap and snap.get("active_profile"):
                     s.active_permission_profile = snap["active_profile"]
@@ -949,7 +1500,13 @@ def create_app(
             candidates = [
                 (key, state)
                 for key, state in sessions.items()
-                if state.abort_event is None
+                if (
+                    state.abort_event is None
+                    and not (
+                        getattr(state.agent, "subagent_manager", None)
+                        and state.agent.subagent_manager.running_count() > 0
+                    )
+                )
             ]
             remove_keys = {
                 key
@@ -965,7 +1522,12 @@ def create_app(
                 )
                 user_allowed = max(
                     0,
-                    runtime.max_live_sessions_per_user - per_user_reserve,
+                    runtime.max_live_sessions_per_user
+                    - per_user_reserve
+                    - sum(
+                        1 for item in _state["active_subagents"]
+                        if item[0] == user_id
+                    ),
                 )
                 if remaining_user_count > user_allowed:
                     user_lru = sorted(
@@ -985,7 +1547,12 @@ def create_app(
                     )
 
             remaining_count = len(sessions) - len(remove_keys)
-            allowed = max(0, runtime.max_live_sessions - reserve)
+            allowed = max(
+                0,
+                runtime.max_live_sessions
+                - reserve
+                - len(_state["active_subagents"]),
+            )
             if remaining_count > allowed:
                 lru = sorted(
                     (
@@ -1023,6 +1590,13 @@ def create_app(
         with _state["session_registry_lock"]:
             existing = _state["sessions"].get(key)
         if existing is not None:
+            current_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
+            if current_revision != existing.mcp_revision and not existing.is_busy:
+                tools = await _state["mcp_manager"].ensure_user_tools(
+                    user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                )
+                existing.agent.set_external_tools(tools)
+                existing.mcp_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
             existing.touch()
             return existing
 
@@ -1032,6 +1606,13 @@ def create_app(
             with _state["session_registry_lock"]:
                 existing = _state["sessions"].get(key)
             if existing is not None:
+                current_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
+                if current_revision != existing.mcp_revision and not existing.is_busy:
+                    tools = await _state["mcp_manager"].ensure_user_tools(
+                        user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                    )
+                    existing.agent.set_external_tools(tools)
+                    existing.mcp_revision = (_state["mcp_store"].revision(), _state["mcp_manager"].revision)
                 existing.touch()
                 return existing
 
@@ -1045,12 +1626,18 @@ def create_app(
             with _state["session_registry_lock"]:
                 reservations = _state["session_init_reservations"]
                 global_at_capacity = (
-                    len(_state["sessions"]) + len(reservations)
+                    len(_state["sessions"])
+                    + len(reservations)
+                    + len(_state["active_subagents"])
                     >= runtime.max_live_sessions
                 )
                 user_at_capacity = (
                     sum(1 for session_key in _state["sessions"] if session_key[0] == uid)
                     + sum(1 for reservation in reservations if reservation[0] == uid)
+                    + sum(
+                        1 for item in _state["active_subagents"]
+                        if item[0] == uid
+                    )
                     >= runtime.max_live_sessions_per_user
                 )
                 at_capacity = global_at_capacity or user_at_capacity
@@ -1089,12 +1676,18 @@ def create_app(
                         headers={"Retry-After": "5"},
                     ) from exc
                 try:
+                    external_tools = await _state["mcp_manager"].ensure_user_tools(
+                        user_id, approval_callback=lambda cap: _capability_approval_callback(session_id, user_id, cap),
+                    )
+                    mcp_revision = _state["mcp_manager"].revision
                     state = await asyncio.to_thread(
                         _create_session_state,
                         session_id,
                         user_id,
                         user,
+                        external_tools,
                     )
+                    state.mcp_revision = (_state["mcp_store"].revision(), mcp_revision)
                 finally:
                     _state["agent_init_semaphore"].release()
             finally:
@@ -1102,6 +1695,12 @@ def create_app(
                     _state["session_init_reservations"].discard(key)
                 locks.pop(key, None)
             state.touch()
+            manager = getattr(state.agent, "subagent_manager", None)
+            if manager is not None and getattr(manager, "_notifications", None):
+                # A process restart may have occurred after a worker persisted
+                # its result but before the parent consumed it. Resume the
+                # durable queue once the session is back on the event loop.
+                _schedule_subagent_auto_continue(session_id, user_id)
             return state
 
     def _persist_runtime_session_state(
@@ -1139,6 +1738,259 @@ def create_app(
             raise HTTPException(status_code=403, detail="Admin privileges required")
         return user
 
+    def _validate_mcp_definition(body: dict[str, Any]) -> dict[str, Any]:
+        name = str(body.get("name") or "").strip()
+        server_id = str(body.get("id") or name.lower().replace(" ", "-")).strip()
+        transport = str(body.get("transport") or "streamable_http")
+        if not name or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", server_id):
+            raise HTTPException(status_code=400, detail="MCP id must be 2-64 lowercase characters")
+        if transport not in {"streamable_http", "container_stdio"}:
+            raise HTTPException(status_code=400, detail="Unsupported MCP transport")
+        url = str(body.get("url") or "").strip() or None
+        image = str(body.get("image") or "").strip() or None
+        if transport == "streamable_http" and (not url or not url.startswith(("http://", "https://"))):
+            raise HTTPException(status_code=400, detail="Remote MCP servers require an http(s) URL")
+        if transport == "streamable_http" and url:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if not host:
+                raise HTTPException(status_code=400, detail="MCP URL must include a hostname")
+            allow_private = _os.environ.get("SCOUT_MCP_ALLOW_PRIVATE_NETWORK", "").lower() in {"1", "true", "yes"}
+            blocked = host in {"localhost", "metadata.google.internal"} or host.endswith(".local")
+            try:
+                address = ipaddress.ip_address(host)
+                blocked = blocked or address.is_private or address.is_loopback or address.is_link_local
+            except ValueError:
+                if not allow_private:
+                    try:
+                        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
+                        blocked = blocked or any(
+                            (address := ipaddress.ip_address(value)).is_private or address.is_loopback or address.is_link_local
+                            for value in addresses
+                        )
+                    except OSError:
+                        pass
+            if blocked and not allow_private:
+                raise HTTPException(status_code=400, detail="Private or local MCP endpoints are disabled")
+        if transport == "container_stdio" and (not image or "@sha256:" not in image):
+            raise HTTPException(status_code=400, detail="Container MCP servers require an image pinned by digest")
+        availability = str(body.get("availability") or "everyone")
+        if availability not in {"everyone", "selected"}:
+            raise HTTPException(status_code=400, detail="Invalid MCP availability")
+        return {
+            "id": server_id, "name": name, "transport": transport, "url": url, "image": image,
+            "command": body.get("command") or [], "args": body.get("args") or [],
+            "availability": availability, "enabled": bool(body.get("enabled", True)),
+            "auth_mode": str(body.get("auth_mode") or "none"),
+        }
+
+    # Deployment bootstrap uses exactly the same validation path as the admin
+    # API. Invalid or unreachable optional integrations never prevent Scout
+    # itself from starting.
+    if mcp_bootstrap_path:
+        bootstrap = Path(mcp_bootstrap_path)
+        if bootstrap.exists():
+            try:
+                raw = yaml.safe_load(bootstrap.read_text(encoding="utf-8")) or {}
+                items = raw.get("servers", raw) if isinstance(raw, dict) else raw
+                definitions = []
+                for item in items if isinstance(items, list) else []:
+                    try:
+                        definitions.append(_validate_mcp_definition(item))
+                    except HTTPException as exc:
+                        logger.warning("Skipping invalid MCP bootstrap entry: %s", exc.detail)
+                _state["mcp_store"].import_bootstrap(definitions)
+            except Exception:
+                logger.warning("Could not import MCP bootstrap file %s", bootstrap, exc_info=True)
+
+    @app.get("/admin/mcp/servers")
+    async def admin_mcp_servers(admin: User = Depends(require_admin)) -> dict:
+        servers = _state["mcp_store"].list_servers()
+        for server in servers:
+            server["health"] = _state["mcp_manager"].health().get(server["id"], {"status": "not_connected"})
+            server["tools"] = _state["mcp_store"].list_tools(server["id"], include_disabled=True)
+            server["assigned_user_ids"] = _state["mcp_store"].assigned_users(server["id"])
+            server["has_shared_credential"] = _state["mcp_store"].has_shared_credential(server["id"])
+        return {"servers": servers}
+
+    @app.post("/admin/mcp/servers")
+    async def admin_add_mcp_server(body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        definition = _validate_mcp_definition(body)
+        server = _state["mcp_store"].upsert_server(definition)
+        if body.get("shared_credential") is not None:
+            _state["mcp_store"].set_shared_credential(server["id"], str(body["shared_credential"]))
+        for uid in body.get("user_ids") or []:
+            _state["mcp_store"].set_user(server["id"], int(uid), enabled=False)
+        health = {"status": "saved"}
+        if server["transport"] == "streamable_http":
+            try:
+                health = await _state["mcp_manager"].refresh(server["id"])
+            except Exception as exc:
+                health = {"status": "unavailable", "error": str(exc)[:300]}
+        return {"server": server, "health": health, "tools": _state["mcp_store"].list_tools(server["id"])}
+
+    @app.patch("/admin/mcp/servers/{server_id}")
+    async def admin_update_mcp_server(server_id: str, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        current = _state["mcp_store"].get_server(server_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        definition = {**current, **body, "id": server_id}
+        definition = _validate_mcp_definition(definition)
+        server = _state["mcp_store"].upsert_server(definition)
+        if "shared_credential" in body:
+            _state["mcp_store"].set_shared_credential(server_id, body.get("shared_credential"))
+        if "enabled" in body:
+            _state["mcp_store"].set_server_enabled(server_id, bool(body["enabled"]))
+        health = {"status": "saved"}
+        try:
+            if not server["enabled"]:
+                await _state["mcp_manager"].disconnect(server_id)
+                health = {"status": "disabled"}
+            elif server["transport"] == "streamable_http":
+                health = await _state["mcp_manager"].refresh(server_id)
+        except Exception as exc:
+            health = {"status": "unavailable", "error": str(exc)[:300]}
+        return {"server": server, "health": health}
+
+    @app.delete("/admin/mcp/servers/{server_id}")
+    async def admin_delete_mcp_server(server_id: str, admin: User = Depends(require_admin)) -> dict:
+        if not _state["mcp_store"].delete_server(server_id):
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        await _state["mcp_manager"].disconnect(server_id)
+        return {"status": "deleted", "id": server_id}
+
+    @app.post("/admin/mcp/servers/{server_id}/refresh")
+    async def admin_refresh_mcp_server(server_id: str, admin: User = Depends(require_admin)) -> dict:
+        server = _state["mcp_store"].get_server(server_id)
+        if not server:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if server["transport"] == "container_stdio":
+            return {"health": {"status": "requires_user_connection"}, "tools": _state["mcp_store"].list_tools(server_id)}
+        try:
+            health = await _state["mcp_manager"].refresh(server_id)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"MCP connection failed: {exc}") from exc
+        return {"health": health, "tools": _state["mcp_store"].list_tools(server_id)}
+
+    @app.patch("/admin/mcp/servers/{server_id}/tools/{tool_name}")
+    async def admin_update_mcp_tool(server_id: str, tool_name: str, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        if not _state["mcp_store"].set_tool_policy(server_id, tool_name, enabled=body.get("enabled"), read_only=body.get("read_only")):
+            raise HTTPException(status_code=404, detail="MCP tool not found")
+        return {"tools": _state["mcp_store"].list_tools(server_id, include_disabled=True)}
+
+    @app.put("/admin/mcp/servers/{server_id}/users/{user_id}")
+    async def admin_set_mcp_user(server_id: str, user_id: int, body: dict[str, Any], admin: User = Depends(require_admin)) -> dict:
+        server = _state["mcp_store"].get_server(server_id)
+        if not server:
+            raise HTTPException(status_code=404, detail="MCP server not found")
+        if server["availability"] != "selected":
+            raise HTTPException(status_code=409, detail="User assignments apply only to selected integrations")
+        assigned = bool(body.get("assigned", body.get("enabled", False)))
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(user_id))
+        _state["mcp_store"].set_user_assignment(server_id, user_id, assigned)
+        return {"server_id": server_id, "user_id": user_id, "assigned": assigned}
+
+    @app.get("/mcp/integrations")
+    async def user_mcp_integrations(user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        result = []
+        for server in _state["mcp_store"].list_for_user(uid):
+            server["tools"] = _state["mcp_store"].list_tools(server["id"])
+            server["health"] = _state["mcp_manager"].health().get(server["id"], {"status": "not_connected"})
+            result.append(server)
+        return {"integrations": result}
+
+    @app.put("/mcp/integrations/{server_id}/enabled")
+    async def user_set_mcp_enabled(server_id: str, body: dict[str, Any], user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, enabled=bool(body.get("enabled", False)))
+        return {"status": "ok", "enabled": bool(body.get("enabled", False))}
+
+    @app.post("/mcp/integrations/{server_id}/credentials")
+    async def user_set_mcp_credentials(server_id: str, body: dict[str, Any], user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        credential = str(body.get("credential") or "").strip()
+        if not credential:
+            raise HTTPException(status_code=400, detail="credential is required")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, credential=credential, enabled=True)
+        return {"status": "ok", "connected": False}
+
+    @app.delete("/mcp/integrations/{server_id}/credentials")
+    async def user_delete_mcp_credentials(server_id: str, user: User | None = Depends(get_user_context)) -> dict:
+        uid = user.id if user else "default"
+        if not _state["mcp_store"].allowed_for_user(server_id, uid):
+            raise HTTPException(status_code=404, detail="MCP integration not available")
+        await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
+        _state["mcp_store"].set_user(server_id, uid, credential="", enabled=False)
+        return {"status": "ok"}
+
+    async def _wait_for_approval(
+        s: SessionState,
+        event_data: dict[str, Any],
+        *,
+        diffs: list[Any] | None = None,
+    ) -> ApprovalResponse:
+        """Publish and await one serialized approval request for a session."""
+        async with s.approval_lock:
+            approval_id = str(event_data["approval_id"])
+            approval_event = asyncio.Event()
+            s.approval_event = approval_event
+            s.approval_response = None
+            s.pending_approval_id = approval_id
+            s.pending_approval_diffs = list(diffs or [])
+            s.touch()
+
+            # The chat stream and the durable session-event stream are separate
+            # clients. Publish to both when present. If neither is connected,
+            # retain one event for the next session-event subscriber.
+            delivered = False
+            if s.approval_queue is not None:
+                await s.approval_queue.put(event_data)
+                delivered = True
+            if s.event_subscribers:
+                s.broadcast_event(event_data)
+                delivered = True
+            if not delivered:
+                await s.idle_approval_queue.put(event_data)
+
+            try:
+                await approval_event.wait()
+                response = s.approval_response
+                if response is None:
+                    return ApprovalResponse(
+                        approval_id=approval_id,
+                        action="no",
+                        feedback="Approval was cancelled",
+                    )
+                return response
+            finally:
+                retained: list[dict[str, Any]] = []
+                while True:
+                    try:
+                        queued = s.idle_approval_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    if queued.get("approval_id") != approval_id:
+                        retained.append(queued)
+                for queued in retained:
+                    s.idle_approval_queue.put_nowait(queued)
+                if s.approval_response is None:
+                    s.broadcast_event({
+                        "type": "approval_cancelled",
+                        "approval_id": approval_id,
+                    })
+                if s.approval_event is approval_event:
+                    s.approval_event = None
+                    s.approval_response = None
+                    s.pending_approval_id = None
+                    s.pending_approval_diffs = []
+
     async def _approval_callback(
         session_id: str, user_id: str | int, tool_name: str, diffs: list, args: dict,
     ) -> tuple[str, str]:
@@ -1160,12 +2012,27 @@ def create_app(
         if not approval_required(s.approval_mode, kind):
             return ("yes", "")
 
-        # No queue means we're not in an SSE /chat flow (e.g. /init-skill).
-        # Auto-approve since there's no UI to show the approval request.
-        if s.approval_queue is None:
-            return ("yes", "")
-
         approval_id = str(uuid.uuid4())
+        sub_id = ""
+        sub_desc = ""
+        if isinstance(args, dict):
+            sub_id = str(args.get("_scout_subagent_id") or "")
+            sub_desc = str(args.get("_scout_subagent_description") or "")
+
+        # No live UI channel at all → only auto-approve non-subagent local tools
+        # (e.g. /init-skill). Background sub-agents must never silent-approve.
+        has_ui = (
+            s.approval_queue is not None
+            or bool(s.event_subscribers)
+        )
+        if not has_ui and not sub_id:
+            return ("yes", "")
+        if not has_ui and sub_id:
+            # Block until a UI connects or the wait is abandoned via stop.
+            logger.info(
+                "Sub-agent %s approval waiting for UI (session %s)",
+                sub_id, session_id,
+            )
 
         diff_entries = []
         for d in diffs:
@@ -1188,21 +2055,11 @@ def create_app(
             "diffs": diff_entries,
             "can_share": _state["multi_user"] and is_user_admin(user_id) and kind == "file_changes",
         }
+        if sub_id:
+            event_data["subagent_id"] = sub_id
+            event_data["subagent_description"] = sub_desc
 
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        s.pending_approval_id = approval_id
-        s.pending_approval_diffs = list(diffs)
-
-        await s.approval_queue.put(event_data)
-
-        await s.approval_event.wait()
-
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
-        s.pending_approval_id = None
-        s.pending_approval_diffs = []
+        resp = await _wait_for_approval(s, event_data, diffs=diffs)
 
         if resp.action == "edit":
             # Wait for the CLI to finish editing and signal us
@@ -1255,7 +2112,11 @@ def create_app(
         return (resp.action, resp.feedback)
 
     async def _capability_approval_callback(
-        session_id: str, user_id: str | int, cap: CapabilityRequest,
+        session_id: str,
+        user_id: str | int,
+        cap: CapabilityRequest,
+        subagent_id: str = "",
+        subagent_description: str = "",
     ) -> tuple[str, str]:
         """Request user approval for a narrowly scoped capability."""
         key = (str(user_id), session_id)
@@ -1266,13 +2127,13 @@ def create_app(
         if not approval_required(s.approval_mode, "capability"):
             # The orchestrator records the scoped grant from this response.
             return ("allow_session", "")
-        if s.approval_queue is None:
+        if s.approval_queue is None and not s.event_subscribers and not subagent_id:
             return ("deny", "No active approval channel")
 
         approval_id = str(uuid.uuid4())
         event_data = {
             "type": "approval_request",
-            "kind": "capability",
+            "kind": "mcp_tool" if cap.capability == "mcp_tool" else "capability",
             "approval_id": approval_id,
             "capability": {
                 "capability": cap.capability,
@@ -1281,13 +2142,10 @@ def create_app(
                 "command_summary": cap.command_summary,
             },
         }
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        await s.approval_queue.put(event_data)
-        await s.approval_event.wait()
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
+        if subagent_id:
+            event_data["subagent_id"] = subagent_id
+            event_data["subagent_description"] = subagent_description
+        resp = await _wait_for_approval(s, event_data)
         if resp.action in {"deny", "no"}:
             return ("deny", resp.feedback)
         if resp.action == "allow_once":
@@ -1342,13 +2200,7 @@ def create_app(
                 "network_domains": domains,
             },
         }
-        s.approval_event = asyncio.Event()
-        s.approval_response = None
-        await s.approval_queue.put(event_data)
-        await s.approval_event.wait()
-        resp: ApprovalResponse = s.approval_response
-        s.approval_event = None
-        s.approval_response = None
+        resp = await _wait_for_approval(s, event_data)
         if resp.action in {"deny", "no"}:
             return f"[REQUEST DENIED] {resp.feedback}".strip()
 
@@ -1525,6 +2377,7 @@ def create_app(
             )
 
         retry_after = _state["base_config"].server.request_queue_timeout_seconds
+        admission_started_monotonic = time.monotonic()
         turn_key = (str(uid), req.session_id)
         with _state["session_registry_lock"]:
             if turn_key in _state["pending_turns"] or s.abort_event is not None:
@@ -1574,6 +2427,7 @@ def create_app(
             session_became_busy = s.abort_event is not None
             if not session_became_busy:
                 s.abort_event = asyncio.Event()
+                s.active_turn_id = str(uuid.uuid4())
         if session_became_busy:
             await turn_lease.release()
             raise HTTPException(
@@ -1589,8 +2443,19 @@ def create_app(
 
         cwd = _session_cwd(uid)
         session_path = _session_file(cwd, req.session_id, uid)
+        turn_started_wall = time.time()
+        turn_started_monotonic = time.monotonic()
+        turn_metric: dict[str, Any] = {
+            "started_at": turn_started_wall,
+            "queue_wait_ms": round((turn_started_monotonic - admission_started_monotonic) * 1000),
+            "time_to_first_visible_ms": None,
+            "duration_ms": None,
+            "outcome": "completed",
+            "events": 0,
+        }
         async def _generate_admitted():
             event_count = 0
+            first_visible_at: float | None = None
 
             stream_task: asyncio.Task | None = None
             # Bound the final agent-to-SSE bridge as well as execution output.
@@ -1598,13 +2463,63 @@ def create_app(
             # this queue for the lifetime of a long tool-heavy turn.
             agent_events: asyncio.Queue = asyncio.Queue(maxsize=256)
             first_assistant_response: str | None = None
+            terminal_calls: dict[str, dict] = {}
+
+            async def _publish_terminal_task(task: dict) -> None:
+                if s.task_store is not None:
+                    task, task_sequence = await asyncio.to_thread(s.task_store.upsert, task)
+                else:
+                    task_sequence = 0
+                if session_path.exists():
+                    await asyncio.to_thread(_append_session_entry, session_path, {
+                        "type": "task", "timestamp": _now_iso(), "task": task,
+                    })
+                s.broadcast_event({"type": "task_event", "session_id": req.session_id, "task": task, "task_sequence": task_sequence})
+
+            async def _watch_terminal(process_id: int, task_id: str, title: str) -> None:
+                """Own a long shell process after the LLM turn has moved on."""
+                service = getattr(agent, "execution_service", None)
+                try:
+                    while service is not None:
+                        result = await service.write_stdin(process_id, "", yield_time_ms=30_000)
+                        text = result.text
+                        if "Process running with session ID" in text:
+                            continue
+                        failed = text.startswith("[EXEC ERROR]") or "Process exited with code -" in text
+                        status = "failed" if failed else "completed"
+                        summary = "Command failed" if failed else "Command finished"
+                        await _publish_terminal_task({
+                            "task_id": task_id, "task_type": "terminal", "title": title,
+                            "status": status, "created_at": None,
+                            "started_at": None, "finished_at": time.time(),
+                            "summary": summary,
+                            "result_preview": text[-600:], "error": text[-300:] if failed else None,
+                        })
+                        agent.queue_task_notification(
+                            f"Terminal task '{title}' {status}. {summary}. Output:\n{text[-1200:]}"
+                        )
+                        _schedule_subagent_auto_continue(req.session_id, uid)
+                        return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    await _publish_terminal_task({"task_id": task_id, "task_type": "terminal", "title": title, "status": "interrupted", "created_at": None, "started_at": None, "finished_at": time.time(), "summary": "Terminal monitor interrupted", "error": str(exc)})
+                    agent.queue_task_notification(
+                        f"Terminal task '{title}' was interrupted: {exc}"
+                    )
+                    _schedule_subagent_auto_continue(req.session_id, uid)
+                finally:
+                    s.terminal_tasks.pop(process_id, None)
 
             def session_event(payload: dict) -> dict:
                 return {**payload, "session_id": req.session_id}
 
             event_count += 1
             yield ServerSentEvent(
-                data=json.dumps(session_event({"type": "accepted"})),
+                data=json.dumps(session_event({
+                    "type": "accepted",
+                    "turn_id": s.active_turn_id,
+                })),
                 event="accepted",
             )
 
@@ -1635,6 +2550,11 @@ def create_app(
 
                     for task in still_pending:
                         task.cancel()
+                    if still_pending:
+                        await asyncio.gather(
+                            *still_pending,
+                            return_exceptions=True,
+                        )
 
                     for task in finished:
                         result = task.result()
@@ -1642,6 +2562,26 @@ def create_app(
                         if task is agent_get:
                             kind, payload = result
                             if kind == "event":
+                                if first_visible_at is None and payload.get("type") in {
+                                    "status", "response_delta", "response", "tool_call", "thinking",
+                                }:
+                                    first_visible_at = time.monotonic()
+                                    turn_metric["time_to_first_visible_ms"] = round(
+                                        (first_visible_at - turn_started_monotonic) * 1000,
+                                    )
+                                if payload.get("type") == "tool_call" and payload.get("name") == "exec_command":
+                                    terminal_calls[str(payload.get("tool_call_id") or "")] = payload.get("args") or {}
+                                if payload.get("type") == "tool_result" and payload.get("name") == "exec_command":
+                                    match = re.search(r"Process running with session ID\\s+(\\d+)", str(payload.get("output") or ""))
+                                    if match:
+                                        process_id = int(match.group(1))
+                                        args = terminal_calls.get(str(payload.get("tool_call_id") or ""), {})
+                                        title = str(args.get("description") or args.get("cmd") or "Background command")[:100]
+                                        task_id = f"terminal-{process_id}"
+                                        now = time.time()
+                                        await _publish_terminal_task({"task_id": task_id, "task_type": "terminal", "title": title, "status": "running", "created_at": now, "started_at": now, "finished_at": None, "summary": "Running command"})
+                                        if process_id not in s.terminal_tasks:
+                                            s.terminal_tasks[process_id] = asyncio.create_task(_watch_terminal(process_id, task_id, title))
                                 if payload.get("file_changes"):
                                     now = _now_iso()
                                     for change_set in payload.get("file_changes") or []:
@@ -1649,6 +2589,8 @@ def create_app(
                                             change_set["created_at"] = now
                                 if payload.get("type") == "response" and payload.get("content"):
                                     first_assistant_response = payload["content"]
+                                if payload.get("type") == "steer_consumed":
+                                    s.broadcast_event(session_event(payload))
                                 event_count += 1
                                 logger.debug(
                                     "SSE event #%d: type=%s",
@@ -1659,6 +2601,7 @@ def create_app(
                                     event=payload["type"],
                                 )
                             elif kind == "error":
+                                turn_metric["outcome"] = "error"
                                 exc = payload
                                 from ..agent.exceptions import ProviderRateLimitError
                                 if isinstance(exc, ProviderRateLimitError):
@@ -1685,6 +2628,7 @@ def create_app(
                                 done = True
 
                         elif task is abort_get:
+                            turn_metric["outcome"] = "interrupted"
                             logger.info("Chat interrupted by user (session %s)", req.session_id)
                             # Drain any already-queued agent events (partial tools /
                             # text) so the client can keep them, then signal stop.
@@ -1740,6 +2684,7 @@ def create_app(
                     except (asyncio.CancelledError, Exception):
                         pass
                 logger.info("SSE stream finished (%d events emitted)", event_count)
+                turn_metric["events"] = event_count
 
         async def _generate():
             # The outer boundary is active before the first SSE yield, so a
@@ -1748,12 +2693,139 @@ def create_app(
                 async for event in _generate_admitted():
                     yield event
             finally:
+                turn_metric["duration_ms"] = round((time.monotonic() - turn_started_monotonic) * 1000)
+                s.turn_metrics.append(dict(turn_metric))
+                if len(s.turn_metrics) > 100:
+                    del s.turn_metrics[:-100]
                 s.approval_queue = None
                 s.abort_event = None
+                s.active_turn_id = None
                 s.touch()
                 await turn_lease.release()
+                if agent.pending_steers():
+                    _schedule_steer_followup(req.session_id, uid)
+                # If sub-agents finished while this turn was busy, pick them up.
+                if s.auto_continue_pending:
+                    _schedule_subagent_auto_continue(req.session_id, uid)
 
         return EventSourceResponse(_generate())
+
+    @app.post("/sessions/{session_id}/steer")
+    async def steer_chat(
+        session_id: str,
+        req: SteerRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Queue input behind the active turn; it may be promoted to a steer."""
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None or state.abort_event is None or not state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "NO_ACTIVE_TURN", "message": "There is no active turn to steer."},
+            )
+        if req.expected_turn_id != state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "TURN_MISMATCH", "message": "The active turn changed before this steer arrived."},
+            )
+        message = req.message.strip()
+        if not message and not req.attachments and not req.chat_image_ids:
+            raise HTTPException(status_code=400, detail="Steer input must not be empty")
+
+        existing_id = state.accepted_steer_clients.get(req.client_id)
+        if existing_id:
+            return {
+                "status": "accepted",
+                "steer_id": existing_id,
+                "turn_id": state.active_turn_id,
+                "duplicate": True,
+            }
+
+        sdir = _session_dir(_session_cwd(uid), uid)
+        try:
+            private_images = [
+                str(path) for path in resolve_assets(sdir, session_id, req.chat_image_ids)
+            ]
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat image not found")
+        all_attachments = [*req.attachments, *private_images]
+        enriched = message
+        if req.attachments:
+            notes = await asyncio.to_thread(build_attachment_notes, req.attachments)
+            if notes:
+                enriched = f"{message}\n\n{notes}"
+
+        steer_id = str(uuid.uuid4())
+        accepted = state.agent.enqueue_steer(
+            steer_id,
+            enriched,
+            all_attachments,
+            client_id=req.client_id,
+            display_content=message,
+        )
+        if not accepted:
+            raise HTTPException(status_code=409, detail="Duplicate steer")
+        state.accepted_steer_clients[req.client_id] = steer_id
+        if len(state.accepted_steer_clients) > 128:
+            oldest = next(iter(state.accepted_steer_clients))
+            state.accepted_steer_clients.pop(oldest, None)
+        state.touch()
+        return {
+            "status": "queued",
+            "steer_id": steer_id,
+            "turn_id": state.active_turn_id,
+        }
+
+    @app.post("/sessions/{session_id}/steers/{steer_id}/activate")
+    async def activate_chat_steer(
+        session_id: str,
+        steer_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Promote queued input to a steer by interrupting the active turn."""
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None or state.abort_event is None or not state.active_turn_id:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "NO_ACTIVE_TURN", "message": "There is no active turn to steer."},
+            )
+        if not any(item["steer_id"] == steer_id for item in state.agent.pending_steers()):
+            raise HTTPException(status_code=404, detail="Queued message not found")
+
+        state.abort_event.set()
+        if state.approval_event is not None and not state.approval_event.is_set():
+            state.approval_response = ApprovalResponse(
+                approval_id="",
+                action="no",
+                feedback="Interrupted by user steer",
+            )
+            state.approval_event.set()
+        if state.edit_done_event is not None and not state.edit_done_event.is_set():
+            state.edit_done_event.set()
+        state.touch()
+        return {"status": "interrupting", "steer_id": steer_id}
+
+    @app.delete("/sessions/{session_id}/steers/{steer_id}")
+    async def cancel_chat_steer(
+        session_id: str,
+        steer_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        state = _state["sessions"].get((str(uid), session_id))
+        if state is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not state.agent.cancel_steer(steer_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This steer has already been consumed or is no longer pending.",
+            )
+        for client_id, accepted_id in list(state.accepted_steer_clients.items()):
+            if accepted_id == steer_id:
+                state.accepted_steer_clients.pop(client_id, None)
+        return {"status": "cancelled", "steer_id": steer_id}
 
     @app.post("/chat/stop")
     async def stop_chat(session_id: str, user: User | None = Depends(get_user_context)) -> dict:
@@ -1781,6 +2853,264 @@ def create_app(
             return {"status": "ok", "message": "Interruption signaled"}
         return {"status": "ok", "message": "No active task to stop"}
 
+    @app.get("/sessions/{session_id}/subagents")
+    async def list_session_subagents(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """List sub-agents for a live session (status snapshot for UI / ops)."""
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            return {"session_id": session_id, "subagents": [], "live": False}
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            return {"session_id": session_id, "subagents": [], "live": True, "enabled": False}
+        return {
+            "session_id": session_id,
+            "live": True,
+            "enabled": mgr.enabled,
+            "running": mgr.running_count(),
+            "total": mgr.total_count(),
+            "retain_seconds": mgr.terminal_retain_seconds,
+            "subagents": mgr.public_snapshot(),
+        }
+
+    @app.get("/sessions/{session_id}/subagents/{agent_id}")
+    async def get_session_subagent(
+        session_id: str,
+        agent_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        detail = mgr.public_detail(agent_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Sub-agent not found")
+        return {"session_id": session_id, "subagent": detail}
+
+    @app.get("/sessions/{session_id}/tasks")
+    async def list_session_tasks(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Unified task snapshot. Sub-agents are the first task provider.
+
+        The endpoint deliberately has a task-shaped response so terminal task
+        providers can join without forcing clients to learn another panel API.
+        """
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        mgr = getattr(s.agent, "subagent_manager", None)
+        status_map = {
+            "pending": "queued", "running": "running", "completed": "completed",
+            "failed": "failed", "stopped": "cancelled",
+        }
+        tasks = s.task_store.list() if s.task_store is not None else []
+        task_ids = {task["task_id"] for task in tasks}
+        for agent in (mgr.public_snapshot() if mgr else []):
+            if agent["agent_id"] in task_ids:
+                continue
+            tasks.append({
+                "task_id": agent["agent_id"],
+                "task_type": "agent",
+                "title": agent.get("description") or "Background agent",
+                "status": status_map.get(agent.get("status"), "interrupted"),
+                "created_at": agent.get("created_at"),
+                "started_at": agent.get("created_at"),
+                "finished_at": agent.get("finished_at"),
+                "summary": agent.get("summary"),
+                "result_preview": agent.get("result_preview"),
+                "error": agent.get("error"),
+            })
+        return {"session_id": session_id, "tasks": tasks}
+
+    @app.get("/sessions/{session_id}/diagnostics")
+    async def session_diagnostics(
+        session_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Opt-in local responsiveness diagnostics for a conversation."""
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        tasks = s.task_store.list() if s.task_store is not None else []
+        return {
+            "session_id": session_id,
+            "turns": list(s.turn_metrics[-50:]),
+            "tasks": tasks,
+            "event_replay_depth": len(s.event_history),
+        }
+
+    @app.post("/sessions/{session_id}/tasks/{task_id}/stop")
+    async def stop_session_task(
+        session_id: str,
+        task_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Stop a running background terminal task owned by this session."""
+        uid = user.id if user else "default"
+        s = await _get_session_state(session_id, uid, user)
+        task = next((item for item in (s.task_store.list() if s.task_store else []) if item["task_id"] == task_id), None)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.get("task_type") != "terminal":
+            raise HTTPException(status_code=400, detail="Only terminal tasks can be stopped here")
+        if task.get("status") not in ("queued", "running"):
+            return {"status": "ok", "message": "Task already finished"}
+        match = re.fullmatch(r"terminal-(\d+)", task_id)
+        if match is None:
+            raise HTTPException(status_code=400, detail="Invalid terminal task id")
+        service = getattr(s.agent, "execution_service", None)
+        stopped = bool(service and await service.cancel_process(int(match.group(1))))
+        if not stopped:
+            raise HTTPException(status_code=409, detail="Terminal process is no longer available")
+        watcher = s.terminal_tasks.pop(int(match.group(1)), None)
+        if watcher is not None:
+            watcher.cancel()
+        now = time.time()
+        stopped_task = {
+            **task, "status": "cancelled", "finished_at": now,
+            "summary": "Stopped by user", "error": None,
+        }
+        if s.task_store is not None:
+            stopped_task, sequence = await asyncio.to_thread(s.task_store.upsert, stopped_task)
+        else:
+            sequence = 0
+        s.broadcast_event({"type": "task_event", "session_id": session_id, "task": stopped_task, "task_sequence": sequence})
+        return {"status": "ok", "task": stopped_task}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/message")
+    async def message_session_subagent(
+        session_id: str,
+        agent_id: str,
+        body: dict,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        message = str((body or {}).get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        result = await mgr.send_message(agent_id, message, source="user")
+        s.touch()
+        return {"status": "ok", "result": result}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/stop")
+    async def stop_session_subagent(
+        session_id: str,
+        agent_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        result = await mgr.stop(agent_id)
+        s.touch()
+        return {"status": "ok", "result": result}
+
+    @app.post("/sessions/{session_id}/subagents/{agent_id}/retain")
+    async def retain_session_subagent(
+        session_id: str,
+        agent_id: str,
+        body: dict,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Pause eviction while the UI is viewing this agent (Claude retain)."""
+        uid = user.id if user else "default"
+        key = (str(uid), session_id)
+        s = _state["sessions"].get(key)
+        if s is None:
+            raise HTTPException(status_code=404, detail="Session not live")
+        mgr = getattr(s.agent, "subagent_manager", None)
+        if mgr is None:
+            raise HTTPException(status_code=404, detail="Multi-agent disabled")
+        retain = bool((body or {}).get("retain", True))
+        ok = mgr.set_retain_open(agent_id, retain)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Sub-agent not found")
+        return {"status": "ok", "retain": retain}
+
+    @app.get("/sessions/{session_id}/subagent-events")
+    async def stream_session_subagent_events(
+        session_id: str,
+        after: int = 0,
+        user: User | None = Depends(get_user_context),
+    ) -> EventSourceResponse:
+        """SSE stream of sub-agent lifecycle + tool events for the Agents panel."""
+        uid = user.id if user else "default"
+        # Ensure session exists so spawn can happen after connect.
+        s = await _get_session_state(session_id, uid, user)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        s.event_subscribers.append(queue)
+        s.touch()
+
+        # Snapshot current agents
+        mgr = getattr(s.agent, "subagent_manager", None)
+        snapshot = {
+            "type": "subagents_snapshot",
+            "session_id": session_id,
+            "subagents": mgr.public_snapshot() if mgr else [],
+        }
+
+        async def _gen():
+            try:
+                yield ServerSentEvent(
+                    data=json.dumps(snapshot),
+                    event="subagents_snapshot",
+                )
+                # Replay events emitted after the client's last confirmed id.
+                # The snapshot is authoritative for list state; replay restores
+                # completion/approval notifications that happened mid-refresh.
+                for event in s.event_history:
+                    if int(event.get("event_id") or 0) > after:
+                        yield ServerSentEvent(
+                            data=json.dumps(event),
+                            event=event.get("type") or "message",
+                            id=str(event.get("event_id")),
+                        )
+                # Drain any idle approvals waiting without a chat stream
+                while True:
+                    try:
+                        pending = s.idle_approval_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    yield ServerSentEvent(
+                        data=json.dumps(pending),
+                        event=pending.get("type") or "approval_request",
+                    )
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    except asyncio.TimeoutError:
+                        yield ServerSentEvent(data="{}", event="ping")
+                        continue
+                    yield ServerSentEvent(
+                        data=json.dumps(event),
+                        event=event.get("type") or "message",
+                    )
+            finally:
+                if queue in s.event_subscribers:
+                    s.event_subscribers.remove(queue)
+
+        return EventSourceResponse(_gen())
 
     @app.get("/test-sse")
     async def test_sse() -> EventSourceResponse:
@@ -1836,6 +3166,7 @@ def create_app(
         exec_health: dict | None = _state.get("execution_health")
         with _state["session_registry_lock"]:
             live_sessions = list(_state["sessions"].values())
+            active_subagent_count = len(_state["active_subagents"])
         for s in live_sessions:
             svc = s.agent.execution_service
             if svc:
@@ -1881,6 +3212,10 @@ def create_app(
                 resident = [proxy for proxy in proxies if proxy.is_resident]
                 body["resources"] = {
                     "live_sessions": len(live_sessions),
+                    "active_subagents": active_subagent_count,
+                    "active_thread_slots_used": (
+                        len(live_sessions) + active_subagent_count
+                    ),
                     "max_live_sessions": _state["base_config"].server.max_live_sessions,
                     "max_live_sessions_per_user": _state["base_config"].server.max_live_sessions_per_user,
                     "initializing_sessions": len(_state["session_init_reservations"]),
@@ -1912,11 +3247,30 @@ def create_app(
     @app.get("/admin/execution-health")
     async def execution_health(admin: User = Depends(require_admin)) -> dict:
         """Admin-only execution backend health and metrics."""
-        metrics = {"worker_starts": 0, "timeouts": 0, "denied_capabilities": 0}
+        # Every key the auditor maintains, so a counter it tracks can never go
+        # missing from this response. The old default listed three of six, which
+        # silently hid worker crashes, cleanup failures and promotion conflicts.
+        metrics = {
+            "worker_starts": 0,
+            "worker_crashes": 0,
+            "timeouts": 0,
+            "denied_capabilities": 0,
+            "cleanup_failures": 0,
+            "promotion_conflicts": 0,
+        }
         health_info = None
+        sampled_sessions = 0
         for s in _state["sessions"].values():
             svc = s.agent.execution_service
-            if svc:
+            if not svc:
+                continue
+            # Counters live on each session's ExecutionService, so reading one
+            # session — as this route used to — reported an arbitrary fraction of
+            # activity as if it were the whole server. Sum across all of them.
+            for key, value in svc.auditor.metrics.items():
+                metrics[key] = metrics.get(key, 0) + value
+            sampled_sessions += 1
+            if health_info is None:
                 h = await svc.health()
                 health_info = {
                     "available": h.available,
@@ -1929,8 +3283,6 @@ def create_app(
                     "oneshot": h.oneshot,
                     "worker_reachable": h.worker_reachable,
                 }
-                metrics = svc.auditor.metrics
-                break
         if health_info is None:
             cached = _state.get("execution_health")
             if cached:
@@ -1960,7 +3312,96 @@ def create_app(
         return {
             "execution": health_info,
             "metrics": metrics,
+            # How many services contributed, so a reader can tell "zero" apart
+            # from "nothing was running to count".
+            "metrics_sessions": sampled_sessions,
             "admission": await _state["turn_scheduler"].snapshot(),
+        }
+
+    @app.get("/admin/sessions")
+    async def admin_sessions(admin: User = Depends(require_admin)) -> dict:
+        """Live sessions — who is connected right now, and who is working.
+
+        Everything here is already in memory; it simply had no reader. Ages are
+        returned as elapsed seconds rather than timestamps because
+        `SessionState.created_at`/`last_activity` come from `time.monotonic()`,
+        which has no relationship to wall-clock time.
+        """
+        now = time.monotonic()
+        rows = []
+        for (user_id, session_id), s in _state["sessions"].items():
+            rows.append({
+                "user_id": user_id,
+                "session_id": session_id,
+                "model": s.model,
+                "age_seconds": round(now - s.created_at, 1),
+                "idle_seconds": round(now - s.last_activity, 1),
+                "is_busy": s.is_busy,
+                "active_turn_id": s.active_turn_id,
+                "subscribers": len(s.event_subscribers),
+                "approval_mode": s.approval_mode,
+                "permission_profile": s.active_permission_profile,
+                "pending_approval": s.pending_approval_id is not None,
+                "turns_recorded": len(s.turn_metrics),
+            })
+        rows.sort(key=lambda r: r["idle_seconds"])
+        return {
+            "sessions": rows,
+            "total": len(rows),
+            "busy": sum(1 for r in rows if r["is_busy"]),
+        }
+
+    @app.get("/admin/executions")
+    async def admin_executions(
+        limit: int = 100,
+        since_seconds: float | None = None,
+        admin: User = Depends(require_admin),
+    ) -> dict:
+        """Page the durable execution audit log.
+
+        `since_seconds` is a lookback window rather than an absolute timestamp so
+        the caller does not have to reason about clock skew between browser and
+        server.
+        """
+        limit = max(1, min(500, limit))
+        since = time.time() - since_seconds if since_seconds else None
+
+        auditor = None
+        for s in _state["sessions"].values():
+            svc = s.agent.execution_service
+            if svc:
+                auditor = svc.auditor
+                break
+        if auditor is None:
+            # No live service, but the table outlives every service — read it
+            # directly rather than reporting an empty history.
+            from ..execution.audit import ExecutionAuditor
+            auditor = ExecutionAuditor()
+
+        entries, total = auditor.query(limit=limit, since=since)
+        return {
+            "executions": [
+                {
+                    "execution_id": e.execution_id,
+                    "user_id": e.user_id,
+                    "session_id": e.session_id,
+                    "runtime": e.runtime,
+                    "command_summary": e.command_summary,
+                    "start_time": e.start_time,
+                    "end_time": e.end_time,
+                    "duration_seconds": (
+                        round(e.end_time - e.start_time, 3) if e.end_time else None
+                    ),
+                    "status": e.status,
+                    "error_category": e.error_category,
+                    "changed_paths": e.changed_paths,
+                    "approval_outcome": e.approval_outcome,
+                }
+                for e in entries
+            ],
+            "total": total,
+            "limit": limit,
+            "truncated": total > len(entries),
         }
 
     @app.get("/admin/config/effective")
@@ -2102,13 +3543,14 @@ def create_app(
                 status_code=409,
                 detail="No pending approval request for this session",
             )
+        if not s.pending_approval_id or req.approval_id != s.pending_approval_id:
+            raise HTTPException(
+                status_code=409,
+                detail="This approval request is no longer active",
+            )
         s.approval_response = req
         s.approval_event.set()
         return {"status": "ok", "approval_id": req.approval_id, "action": req.action}
-
-    class EditDoneRequest(BaseModel):
-        approval_id: str
-        session_id: str
 
     @app.post("/edit-done")
     async def edit_done(req: EditDoneRequest, user: User | None = Depends(get_user_context)) -> dict:
@@ -2150,8 +3592,16 @@ def create_app(
         return {"sessions": sessions}
 
     @app.post("/sessions")
-    async def create_session(model: str | None = None, user: User | None = Depends(get_user_context)) -> dict:
-        """Create a new session and return its ID."""
+    async def create_session(
+        req: SessionCreateRequest | None = None,
+        model: str | None = None,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Create a session with its initial approval policy already persisted."""
+        initial_mode = req.approval_mode if req else DEFAULT_APPROVAL_MODE
+        if initial_mode not in APPROVAL_MODES:
+            raise HTTPException(status_code=400, detail="Invalid approval mode")
+        selected_model = req.model if req and req.model is not None else model
         uid = user.id if user else "default"
         cwd = _session_cwd(uid)
         session_id = str(uuid.uuid4())
@@ -2164,11 +3614,16 @@ def create_app(
             "projectDir": str(Path(cwd).resolve()),
             "createdAt": _now_iso(),
             "title": DEFAULT_SESSION_TITLE,
-            "model": model,
+            "model": selected_model,
         }
         path = _session_file(cwd, session_id, uid)
         path.write_text(json.dumps(header) + "\n", encoding="utf-8")
-        return {"sessionId": session_id}
+        save_session_snapshot(
+            sdir,
+            session_id,
+            approval_mode=initial_mode,
+        )
+        return {"sessionId": session_id, "approvalMode": initial_mode}
 
     @app.put("/sessions/{session_id}")
     async def ensure_session(session_id: str, model: str | None = None, user: User | None = Depends(get_user_context)) -> dict:
@@ -2421,9 +3876,6 @@ def create_app(
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Chat image not found")
         return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable"})
-
-    class ForkSessionRequest(BaseModel):
-        from_message_index: int
 
     @app.post("/sessions/{session_id}/fork")
     async def fork_session(
@@ -2901,16 +4353,6 @@ def create_app(
             "entries": list_memory_entries(uid, personal, _state["multi_user"]),
         }
 
-    class MemoriesRequest(BaseModel):
-        content: str = ""
-        entry: str = ""
-        remove_index: int | None = None
-        summary: str | None = None
-
-    class MemoryPreferencesRequest(BaseModel):
-        use_memories: bool
-        generate_memories: bool
-
     def _memory_preferences_response(user: User | None) -> dict:
         defaults = _base_config_copy().memories
         stored = (
@@ -3091,6 +4533,19 @@ def create_app(
     if gui_static_dir:
         gui_path = Path(gui_static_dir)
         if gui_path.is_dir():
+            # Utility screens use real browser paths so they can be bookmarked
+            # and carry query parameters. Return the SPA shell for those paths;
+            # the React app owns the actual tab/query routing.
+            gui_index = gui_path / "index.html"
+
+            @app.get("/admin", include_in_schema=False)
+            async def admin_gui_route() -> FileResponse:
+                return FileResponse(gui_index)
+
+            @app.get("/settings", include_in_schema=False)
+            async def settings_gui_route() -> FileResponse:
+                return FileResponse(gui_index)
+
             from starlette.staticfiles import StaticFiles
 
             app.mount("/", StaticFiles(directory=str(gui_path), html=True))

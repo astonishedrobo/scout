@@ -33,6 +33,7 @@ class CapabilityRequest:
         "shared_write",
         "preview_port",
         "gpu",
+        "mcp_tool",
     ]
     reason: str
     scope: dict

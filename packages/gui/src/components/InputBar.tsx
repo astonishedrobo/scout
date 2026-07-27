@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import {
   ArrowUp,
   Plus,
@@ -16,7 +16,8 @@ import {
   Hand,
   ShieldCheck,
   ShieldAlert,
-  MessageSquare,
+  MessageSquareText,
+  CornerDownRight,
   Trash2,
 } from "lucide-react";
 import { AnchoredPopover } from "./ui/AnchoredPopover";
@@ -24,6 +25,7 @@ import type { ApprovalMode, ChatImage, ResponseAnnotation } from "scout-core";
 import type { UploadResult } from "../hooks/useUploads";
 import { formatAnnotatedFollowUp } from "../hooks/useResponseAnnotations";
 import { AttachmentCard, isImageAttachment } from "./AttachmentCard";
+import { ICON_SIZE, ICON_STROKE } from "./ui/iconSystem";
 
 interface SlashCommand {
   name: string;
@@ -58,7 +60,14 @@ interface InputBarProps {
   approvalMode: ApprovalMode;
   onSelectApprovalMode: (mode: ApprovalMode) => Promise<void> | void;
   approvalModeChanging?: boolean;
-  isMultiUser?: boolean;
+  modelDisabled?: boolean;
+  pendingSteers?: Array<{
+    steerId: string;
+    content: string;
+    status: "sending" | "pending" | "steering";
+  }>;
+  onActivateSteer?: (steerId: string) => void;
+  onCancelSteer?: (steerId: string) => void;
   token?: string | null;
   uploadingCount?: number;
   /** Workspace upload. When used from the chat plus menu, successful results
@@ -87,6 +96,10 @@ export function InputBar({
   approvalMode,
   onSelectApprovalMode,
   approvalModeChanging = false,
+  modelDisabled = false,
+  pendingSteers = [],
+  onActivateSteer,
+  onCancelSteer,
   token,
   uploadingCount = 0,
   onUpload,
@@ -113,12 +126,15 @@ export function InputBar({
   const [showAt, setShowAt] = useState(false);
   const [atIndex, setAtIndex] = useState(0);
   const [atFiles, setAtFiles] = useState<FileEntry[]>([]);
+  // Without these, a typo'd @foo looked exactly like a failed request.
+  const [atState, setAtState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [atPrefix, setAtPrefix] = useState("");
   const [atStartPos, setAtStartPos] = useState(0);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [fileAttachments, setFileAttachments] = useState<UploadResult[]>([]);
   const [chatImages, setChatImages] = useState<ChatImage[]>([]);
   const [pastingImages, setPastingImages] = useState(false);
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const [showAnnotationReview, setShowAnnotationReview] = useState(false);
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
   const [annotationComment, setAnnotationComment] = useState("");
@@ -168,6 +184,7 @@ export function InputBar({
       setAtStartPos(before.length - atMatch[0].length + atMatch[1].length);
       setShowAt(true);
       setAtIndex(0);
+      setAtState("loading");
 
       const timer = setTimeout(() => {
         const id = ++fetchIdRef.current;
@@ -185,28 +202,50 @@ export function InputBar({
                 typeof f === "string" ? { path: f, abs_path: f, scope: "workspace" } : f,
               );
               setAtFiles(entries);
+              setAtState("ready");
             }
           })
           .catch(() => {
-            if (fetchIdRef.current === id) setAtFiles([]);
+            if (fetchIdRef.current === id) {
+              setAtFiles([]);
+              setAtState("error");
+            }
           });
       }, 200);
       return () => clearTimeout(timer);
     } else {
       setShowAt(false);
       setAtFiles([]);
+      setAtState("idle");
     }
   }, [value, baseUrl, token]);
 
   const minH = welcomeMode ? 76 : 44;
-  const maxH = welcomeMode ? 180 : 160;
-
-  useEffect(() => {
+  const resizeTextarea = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
+    // Grow naturally until roughly 30% of the viewport, with a comfortable
+    // desktop ceiling. Once capped, keep the prompt internally scrollable.
+    const viewportCap = Math.round(window.innerHeight * (welcomeMode ? 0.32 : 0.30));
+    const maxH = Math.min(240, Math.max(120, viewportCap));
     ta.style.height = "auto";
-    ta.style.height = Math.max(Math.min(ta.scrollHeight, maxH), minH) + "px";
-  }, [value, minH, maxH]);
+    const nextHeight = Math.max(Math.min(ta.scrollHeight, maxH), minH);
+    ta.style.height = `${nextHeight}px`;
+    const capped = ta.scrollHeight > maxH;
+    ta.style.overflowY = capped ? "auto" : "hidden";
+    // Browsers retain a stale scroll offset after shrinking/growing a textarea,
+    // which can hide its first line after the first newline.
+    if (!capped) ta.scrollTop = 0;
+  }, [minH, welcomeMode]);
+
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [value, resizeTextarea]);
+
+  useEffect(() => {
+    window.addEventListener("resize", resizeTextarea);
+    return () => window.removeEventListener("resize", resizeTextarea);
+  }, [resizeTextarea]);
 
   const acceptSlashCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -451,6 +490,7 @@ export function InputBar({
     if (files.length === 0) return;
     e.preventDefault();
     setPastingImages(true);
+    setPasteError(null);
     try {
       const sessionId = await ensureSession();
       const uploaded: ChatImage[] = [];
@@ -466,6 +506,12 @@ export function InputBar({
         uploaded.push(await resp.json() as ChatImage);
       }
       setChatImages((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      // A failed image paste used to leave no trace at all: no image appeared
+      // and nothing said why.
+      setPasteError(
+        err instanceof Error && err.message ? err.message : "Could not attach the pasted image.",
+      );
     } finally {
       setPastingImages(false);
     }
@@ -480,8 +526,10 @@ export function InputBar({
   const visionBlocked = (hasImageAttachment || chatImages.length > 0) && capabilities[currentModel]?.vision !== "supported";
   const shortModel = currentModel ? (currentModel.split("/").pop() ?? currentModel) : "No model";
 
+  // Shared by the attach, slash and @-file menus. Vertical padding comes from
+  // `density-menu-row` so every composer menu tightens together; see globals.css.
   const popoverMenuItem =
-    "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium hover:bg-scout-lift/80 transition-colors text-left";
+    "w-full flex items-center gap-3 px-3 density-menu-row rounded-control text-label font-medium hover:bg-scout-lift/80 transition-colors text-left";
 
   const sendBtnClass = "flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 transition-all";
   const approvalLabel = approvalMode === "ask_always"
@@ -499,11 +547,11 @@ export function InputBar({
     <div
       ref={containerRef}
       className={`relative w-full shrink-0 ${
-        embedded ? "" : "max-w-[46rem] mx-auto px-4 bg-scout-canvas/95 py-3"
+        embedded ? "" : "safe-bottom mx-auto max-w-[46rem] bg-scout-canvas/95 px-4 py-3"
       } ${welcomeMode && !embedded ? "pt-4 pb-6" : ""}`}
     >
       {uploadingCount > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pb-2 text-xs text-scout-muted">
+        <div className="flex items-center gap-1.5 px-1 pb-2 text-caption text-scout-muted">
           <Loader2 size={12} className="animate-spin" />
           <span>
             {uploadingCount} file{uploadingCount > 1 ? "s" : ""} still uploading
@@ -511,31 +559,92 @@ export function InputBar({
         </div>
       )}
 
+      {pendingSteers.length > 0 && (
+        <div className="relative z-10 mx-3 -mb-px overflow-hidden rounded-t-card border border-b-0 border-scout-hairline-faint bg-scout-lift/90">
+          {pendingSteers.map((steer, index) => (
+            <div
+              key={steer.steerId}
+              className={`flex min-h-9 items-center gap-2 px-3 py-1.5 text-caption ${
+                index > 0 ? "border-t border-scout-hairline-faint" : ""
+              }`}
+            >
+              <CornerDownRight size={12} className="shrink-0 text-scout-muted/80" />
+              <span className="min-w-0 flex-1 truncate text-scout-text">
+                {steer.content || "Attachment"}
+              </span>
+              {steer.status === "pending" ? (
+                <button
+                  type="button"
+                  onClick={() => onActivateSteer?.(steer.steerId)}
+                  className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 font-medium text-scout-muted transition-colors hover:bg-scout-panel/70 hover:text-scout-text"
+                  aria-label="Steer current turn with this message"
+                >
+                  <CornerDownRight size={12} />
+                  Steer
+                </button>
+              ) : (
+                <span className="flex shrink-0 items-center gap-1.5 font-medium text-scout-muted">
+                  <Loader2 size={11} className="animate-spin" />
+                  {steer.status === "sending" ? "Queuing…" : "Steering…"}
+                </span>
+              )}
+              {steer.status === "pending" && (
+                <button
+                  type="button"
+                  onClick={() => onCancelSteer?.(steer.steerId)}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-scout-muted transition-colors hover:bg-scout-panel/70 hover:text-scout-text"
+                  aria-label="Cancel steer"
+                  title="Cancel steer"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pasteError && (
+        <div
+          className="mb-1.5 flex items-start gap-2 rounded-card border border-scout-error/25 bg-scout-error-muted px-3 py-2 text-caption text-scout-text"
+          role="alert"
+        >
+          <span className="min-w-0 flex-1">{pasteError}</span>
+          <button
+            type="button"
+            onClick={() => setPasteError(null)}
+            className="shrink-0 font-medium text-scout-muted hover:text-scout-text"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div
-      className={`relative flex flex-col overflow-visible rounded-[26px] border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-hairline focus-within:ring-1 focus-within:ring-scout-text/10 ${disabled ? "opacity-60" : ""}`}
+      className={`relative flex flex-col overflow-visible rounded-composer border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-1 focus-within:ring-scout-muted/20 ${disabled ? "opacity-60" : ""}`}
       >
         {showAnnotationReview && annotations.length > 0 && (
-          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 rounded-card border border-scout-hairline bg-scout-panel p-3 shadow-pop">
-            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+          <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-40 rounded-surface border border-scout-hairline-faint bg-scout-panel/98 p-2 shadow-pop backdrop-blur-xl">
+            <div className="max-h-56 divide-y divide-scout-hairline-faint overflow-y-auto">
               {annotations.map((annotation, index) => (
-                <div key={annotation.id} className="rounded-btn p-2 hover:bg-scout-lift/40">
+                <div key={annotation.id} className="rounded-control px-2.5 py-2.5 transition-colors hover:bg-scout-lift/35">
                   <div className="flex items-start gap-2.5">
-                    <span className="mt-0.5 text-[13px] font-medium text-scout-muted">{index + 1}.</span>
+                    <span className="mt-0.5 text-label font-medium text-scout-muted">{index + 1}.</span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-scout-muted">Selected text:</p>
-                      <button type="button" onClick={() => { setEditingAnnotationId(annotation.id); setAnnotationComment(annotation.comment); }} className="mt-0.5 block w-full text-left text-[13px] leading-snug text-scout-text hover:underline">{annotation.quote}</button>
+                      <p className="text-caption font-medium text-scout-muted">Selected text:</p>
+                      <button type="button" onClick={() => { setEditingAnnotationId(annotation.id); setAnnotationComment(annotation.comment); }} className="mt-0.5 block w-full text-left text-label leading-snug text-scout-text hover:underline">{annotation.quote}</button>
                     </div>
                     <button type="button" onClick={() => onRemoveAnnotation?.(annotation.id)} className="rounded p-1 text-scout-error/80 hover:bg-scout-error-muted hover:text-scout-error" aria-label={`Remove annotation ${index + 1}`}><Trash2 size={13} /></button>
                   </div>
                   {editingAnnotationId === annotation.id ? (
                     <div className="mt-2 pl-5">
-                      <textarea value={annotationComment} onChange={(event) => setAnnotationComment(event.target.value)} rows={2} placeholder="Add an optional comment…" className="w-full resize-none rounded-btn border border-scout-hairline-faint bg-scout-panel px-2 py-1.5 text-xs text-scout-text outline-none" />
-                      <div className="mt-1.5 flex justify-end gap-1.5"><button type="button" onClick={() => setEditingAnnotationId(null)} className="rounded-btn px-2 py-1 text-xs text-scout-muted hover:bg-scout-lift">Cancel</button><button type="button" onClick={() => { onUpdateAnnotation?.(annotation.id, { comment: annotationComment }); setEditingAnnotationId(null); }} className="rounded-btn bg-scout-text px-2 py-1 text-xs font-semibold text-scout-bg">Save</button></div>
+                      <textarea value={annotationComment} onChange={(event) => setAnnotationComment(event.target.value)} rows={2} placeholder="Add an optional comment…" className="w-full resize-none rounded-btn border border-scout-hairline-faint bg-scout-panel px-2 py-1.5 text-caption text-scout-text outline-none" />
+                      <div className="mt-1.5 flex justify-end gap-1.5"><button type="button" onClick={() => setEditingAnnotationId(null)} className="rounded-btn px-2 py-1 text-caption text-scout-muted hover:bg-scout-lift">Cancel</button><button type="button" onClick={() => { onUpdateAnnotation?.(annotation.id, { comment: annotationComment }); setEditingAnnotationId(null); }} className="rounded-btn bg-scout-text px-2 py-1 text-caption font-semibold text-scout-bg">Save</button></div>
                     </div>
                   ) : annotation.comment.trim() ? (
                     <div className="mt-1.5 pl-6">
-                      <p className="text-xs font-medium text-scout-muted">User comment:</p>
-                      <p className="mt-0.5 text-[13px] leading-snug text-scout-text">{annotation.comment}</p>
+                      <p className="text-caption font-medium text-scout-muted">User comment:</p>
+                      <p className="mt-0.5 text-label leading-snug text-scout-text">{annotation.comment}</p>
                     </div>
                   ) : null}
                 </div>
@@ -545,12 +654,12 @@ export function InputBar({
         )}
         {annotations.length > 0 && (
           <div className="flex items-center px-4 pt-3">
-            <div className="flex h-9 items-center rounded-full border border-scout-hairline-faint bg-scout-lift/70 text-[14px] font-semibold text-scout-text">
-              <button type="button" onClick={() => setShowAnnotationReview((open) => !open)} className="flex h-full items-center gap-2 rounded-l-full pl-3.5 pr-1.5 hover:bg-scout-lift" aria-expanded={showAnnotationReview}>
-                <MessageSquare size={15} strokeWidth={1.8} />
+            <div className="flex h-8 items-center rounded-full border border-scout-hairline-faint bg-scout-lift/40 text-label font-semibold text-scout-text">
+              <button type="button" onClick={() => setShowAnnotationReview((open) => !open)} className="flex h-full items-center gap-1.5 rounded-l-full pl-2.5 pr-1 hover:bg-scout-lift/70" aria-expanded={showAnnotationReview}>
+                <MessageSquareText size={ICON_SIZE.feature} className="text-scout-muted" />
                 <span>{annotations.length} annotation{annotations.length === 1 ? "" : "s"}</span>
               </button>
-              <button type="button" onClick={() => { annotations.forEach((annotation) => onRemoveAnnotation?.(annotation.id)); setShowAnnotationReview(false); }} className="mr-1 flex h-7 w-7 items-center justify-center rounded-full text-scout-muted hover:bg-scout-input-bg hover:text-scout-text" aria-label="Clear annotations">
+              <button type="button" onClick={() => { annotations.forEach((annotation) => onRemoveAnnotation?.(annotation.id)); setShowAnnotationReview(false); }} className="mr-0.5 flex h-6 w-6 items-center justify-center rounded-full text-scout-muted hover:bg-scout-input-bg hover:text-scout-text" aria-label="Clear annotations">
                 <X size={14} />
               </button>
             </div>
@@ -586,12 +695,12 @@ export function InputBar({
                   : "How can I help you?"
           }
           rows={1}
-          className={`flex-1 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
+          className={`block w-full shrink-0 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${
             welcomeMode ? "pt-3 pb-1" : "pt-4 pb-2"
           } ${
-            welcomeMode ? "text-base" : "text-[15px]"
+            welcomeMode ? "text-body" : "text-prose"
           }`}
-          style={{ minHeight: minH, maxHeight: maxH }}
+          style={{ minHeight: minH }}
         />
 
         <div className="flex items-center justify-between px-3 pb-3 pt-0">
@@ -611,8 +720,8 @@ export function InputBar({
               ref={approvalBtnRef}
               type="button"
               onClick={() => setShowApprovalMenu((open) => !open)}
-              disabled={approvalModeChanging || disabled}
-              className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1.5 text-[13px] font-medium transition-colors hover:bg-scout-lift disabled:opacity-45 ${
+              disabled={approvalModeChanging}
+              className={`flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1.5 text-label font-medium transition-colors hover:bg-scout-lift disabled:opacity-45 ${
                 approvalMode === "full_access"
                   ? "text-scout-warning"
                   : "text-scout-muted hover:text-scout-text"
@@ -642,39 +751,43 @@ export function InputBar({
             <button
               ref={modelBtnRef}
               onClick={() => setShowModelMenu((p) => !p)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-pill text-[13px] font-bold text-scout-text/80 hover:text-scout-text hover:bg-scout-lift/80 border border-transparent transition-all"
+              disabled={modelDisabled}
+              className="flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1.5 text-label font-semibold text-scout-text/80 transition-colors hover:bg-scout-lift/80 hover:text-scout-text disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="truncate max-w-[160px]">{shortModel}</span>
               <ChevronDown size={14} className={`transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
             </button>
 
-            {isLoading ? (
+            {isLoading && (
               <button
                 onClick={onStop}
-                className={`${sendBtnClass} bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]`}
+                className={`${sendBtnClass} border border-scout-hairline bg-scout-lift/80 text-scout-muted transition-colors hover:border-scout-error/35 hover:bg-scout-error-muted hover:text-scout-error active:scale-[0.98]`}
                 aria-label="Stop execution"
+                title="Stop"
               >
-                <Square size={13} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                onClick={() => void handleSubmit()}
-                disabled={disabled || pastingImages || (!hasText && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || visionBlocked}
-                className={`${sendBtnClass} ${
-                  (hasText || fileAttachments.length > 0 || chatImages.length > 0 || annotations.length > 0) && !disabled && !visionBlocked
-                    ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
-                    : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
-                }`}
-                aria-label="Send message"
-              >
-                <ArrowUp size={18} strokeWidth={2.3} />
+                <Square size={11} fill="currentColor" />
               </button>
             )}
+            <button
+              onClick={() => void handleSubmit()}
+              disabled={disabled || pastingImages || (!hasText && fileAttachments.length === 0 && chatImages.length === 0 && annotations.length === 0) || visionBlocked}
+              className={`${sendBtnClass} ${
+                (hasText || fileAttachments.length > 0 || chatImages.length > 0 || annotations.length > 0) && !disabled && !visionBlocked
+                  ? "bg-scout-text text-scout-bg hover:opacity-90 active:scale-[0.98]"
+                  : "bg-scout-input-bg/80 text-scout-muted border border-scout-hairline-faint cursor-not-allowed"
+              }`}
+              aria-label={isLoading ? "Steer current turn" : "Send message"}
+              title={isLoading ? "Steer" : "Send"}
+            >
+              {isLoading
+                ? <CornerDownRight size={ICON_SIZE.primary} strokeWidth={ICON_STROKE.primary} />
+                : <ArrowUp size={ICON_SIZE.primary} strokeWidth={ICON_STROKE.primary} />}
+            </button>
           </div>
         </div>
       </div>
       {visionBlocked && (
-        <div className="flex items-center gap-2 px-2 pt-2 text-xs text-scout-warning">
+        <div className="flex items-center gap-2 px-2 pt-2 text-caption text-scout-warning">
           <AlertTriangle size={13} />
           <span className="flex-1">This model cannot view images.</span>
           <button onClick={() => setShowModelMenu(true)} className="font-semibold hover:underline">Change model</button>
@@ -693,9 +806,9 @@ export function InputBar({
         anchorRef={approvalBtnRef}
         placement="top-start"
         maxHeight={360}
-        className="w-[min(28rem,calc(100vw-1rem))] p-2"
+        className="density-menu w-[min(28rem,calc(100vw-1rem))]"
       >
-        <div className="px-2 pb-1.5 pt-1 text-xs font-medium text-scout-muted">
+        <div className="density-menu-note px-2 text-caption font-medium text-scout-muted">
           How should Scout actions be approved?
         </div>
         {([
@@ -728,18 +841,22 @@ export function InputBar({
                 setShowApprovalMenu(false);
                 void Promise.resolve(onSelectApprovalMode(option.mode)).catch(() => {});
               }}
-              className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${active ? "bg-scout-lift" : "hover:bg-scout-lift/70"}`}
+              // `items-start` stays: the row is two lines, so the icon and the check
+              // must align to the title rather than to the block's centre.
+              className={`density-menu-row flex w-full items-start gap-2.5 rounded-control px-3 text-left transition-colors ${active ? "bg-scout-lift" : "hover:bg-scout-lift/70"}`}
             >
-              <Icon size={18} className="mt-0.5 shrink-0 text-scout-muted" />
+              <Icon size={15} className="mt-0.5 shrink-0 text-scout-muted" />
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-scout-text">{option.label}</span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-scout-muted">{option.description}</span>
+                <span className="block text-label font-semibold text-scout-text">{option.label}</span>
+                <span className="block text-caption text-scout-muted">{option.description}</span>
               </span>
-              {active && <Check size={17} className="mt-0.5 shrink-0 text-scout-text" />}
+              {active && <Check size={14} className="mt-0.5 shrink-0 text-scout-text" />}
             </button>
           );
         })}
-        <p className="px-3 pb-1 pt-2 text-[11px] leading-relaxed text-scout-muted/80">
+        {/* `text-micro` already carries a 1.4 leading; `leading-relaxed` on top of
+            it added ~5px to each of this note's two lines for no gain. */}
+        <p className="density-menu-note px-3 text-micro text-scout-muted/80">
           Protected files, account permissions, and hard safety rules always remain enforced.
         </p>
       </AnchoredPopover>
@@ -750,7 +867,7 @@ export function InputBar({
         anchorRef={containerRef}
         placement="top-start"
         matchAnchorWidth
-        className="p-1.5"
+        className="density-menu"
       >
         {filteredCommands.map((cmd, i) => (
           <button
@@ -759,20 +876,20 @@ export function InputBar({
             onMouseEnter={() => setSlashIndex(i)}
             className={`${popoverMenuItem} ${i === slashIndex ? "bg-scout-lift" : ""}`}
           >
-            <span className="font-mono text-scout-text font-semibold text-[13px]">{cmd.name}</span>
-            <span className="text-scout-muted text-xs font-normal">{cmd.description}</span>
+            <span className="font-mono text-scout-text font-semibold text-label">{cmd.name}</span>
+            <span className="text-scout-muted text-caption font-normal">{cmd.description}</span>
           </button>
         ))}
       </AnchoredPopover>
 
       <AnchoredPopover
-        open={showAt && atFiles.length > 0 && !showSlash}
+        open={showAt && !showSlash && (atFiles.length > 0 || atState !== "ready")}
         onClose={() => setShowAt(false)}
         anchorRef={containerRef}
         placement="top-start"
         matchAnchorWidth
         maxHeight={240}
-        className="p-1.5"
+        className="density-menu"
       >
         {atFiles.map((file, i) => (
           <button
@@ -782,14 +899,23 @@ export function InputBar({
             className={`${popoverMenuItem} ${i === atIndex ? "bg-scout-lift" : ""}`}
           >
             <FileText size={14} className="text-scout-muted shrink-0" />
-            <span className="font-mono text-scout-text truncate text-xs flex-1">{file.path}</span>
+            <span className="font-mono text-scout-text truncate text-caption flex-1">{file.path}</span>
             {file.scope && (
-              <span className="text-[10px] px-1 rounded-btn border border-scout-hairline text-scout-muted shrink-0">
+              <span className="text-micro px-1 rounded-btn border border-scout-hairline text-scout-muted shrink-0">
                 {file.scope}
               </span>
             )}
           </button>
         ))}
+        {atFiles.length === 0 && (
+          <p className="px-2.5 py-2 text-caption text-scout-muted">
+            {atState === "loading"
+              ? "Searching files…"
+              : atState === "error"
+                ? "Could not reach the server to search files."
+                : `No files matching “${atPrefix}”.`}
+          </p>
+        )}
       </AnchoredPopover>
 
       <AnchoredPopover
@@ -797,7 +923,7 @@ export function InputBar({
         onClose={() => setShowPlusMenu(false)}
         anchorRef={plusBtnRef}
         placement="bottom-start"
-        className="w-52 p-1.5"
+        className="density-menu w-52"
       >
         <button onClick={insertAtSymbol} className={popoverMenuItem}>
           <AtSign size={16} className="text-scout-muted" />
@@ -823,7 +949,7 @@ export function InputBar({
         onClose={() => setShowModelMenu(false)}
         anchorRef={modelBtnRef}
         placement="bottom-end"
-        className="w-72 p-1.5"
+        className="density-menu w-72"
       >
         {models.map((m) => {
           const isActive = m === currentModel;
@@ -841,7 +967,7 @@ export function InputBar({
                 onSelectModel(m);
                 setShowModelMenu(false);
               }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-[13px] font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`w-full flex items-center gap-2.5 px-3 density-menu-row rounded-btn text-label font-medium text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 isActive
                   ? "text-scout-text bg-scout-lift"
                   : "text-scout-text/70 hover:bg-scout-input-bg hover:text-scout-text"
@@ -852,7 +978,7 @@ export function InputBar({
                 {name}
               </span>
               {vision === "supported" && <Camera size={14} className="text-scout-muted shrink-0" />}
-              {vision === "unverified" && <span className="text-[10px] text-scout-muted">Unverified</span>}
+              {vision === "unverified" && <span className="text-micro text-scout-muted">Unverified</span>}
               {isActive && <Check size={15} className="shrink-0 text-scout-text" />}
             </button>
           );

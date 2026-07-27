@@ -7,40 +7,78 @@
     position: absolute;
     pointer-events: none;
     z-index: 1;
-    border-radius: 2px;
-    background: rgb(var(--scout-cyan) / 0.28);
-    box-shadow: inset 0 -1px 0 rgb(var(--scout-cyan) / 0.78);
+    border-radius: 3px;
+    background: rgb(var(--scout-cyan) / 0.18);
+    box-shadow: inset 0 -1.5px 0 rgb(var(--scout-cyan) / 0.82);
   }
 
   .annotation-marker {
     position: absolute;
     z-index: 3;
     display: inline-flex;
-    height: 23px;
-    min-width: 23px;
+    /* 28px: the marker is the annotation's only hit target, and 23px was under
+       the minimum. */
+    height: 28px;
+    min-width: 28px;
     align-items: center;
     justify-content: center;
-    border: 2px solid rgb(var(--scout-panel));
+    border: 1px solid rgb(var(--scout-hairline));
     border-radius: 9999px;
-    background: rgb(37 136 238);
-    color: white;
+    /* Was a hardcoded rgb(37 136 238) that appears in no theme palette — the
+       one element in the app that ignored theming entirely. It pairs with the
+       cyan highlight above. */
+    background: rgb(var(--scout-panel));
+    color: rgb(var(--scout-cyan));
     font-size: 11px;
     font-weight: 700;
     line-height: 1;
-    box-shadow: 0 2px 7px rgb(0 0 0 / 0.24);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.045);
+    transition: transform var(--dur-fast) var(--ease-swift), background-color var(--dur-fast) ease;
   }
 
-  .annotation-marker:hover { transform: scale(1.06); }
+  .annotation-marker:hover {
+    transform: translateY(-1px);
+    background: rgb(var(--scout-lift));
+  }
 
   .annotation-selection-action {
     width: auto;
-    background: rgb(var(--scout-panel));
+    background: rgb(var(--scout-panel) / 0.98);
     color: rgb(var(--scout-text));
     border: 1px solid rgb(var(--scout-hairline));
     box-shadow: var(--shadow-pop);
+    backdrop-filter: blur(16px);
+    animation: fade-in-up var(--dur-fast) var(--ease-swift) both;
   }
 
   .annotation-selection-action:hover { background: rgb(var(--scout-lift)); }
+}
+
+/*
+ * Theme swatches for the Appearance previews.
+ *
+ * A preview has to show a theme OTHER than the active one, so it cannot read
+ * the :root palette — which is why SettingsPanel hardcoded nine hex values that
+ * had already drifted from the real tokens (it showed a cream #faf5ec for a
+ * light canvas that is actually #f9fafb). These live here, beside the palettes
+ * they mirror, so the drift is visible in one file.
+ */
+@layer components {
+  .swatch-light {
+    --swatch-canvas: #f9fafb;
+    --swatch-panel: #ffffff;
+    --swatch-accent: #f5c518;
+  }
+  .swatch-dark {
+    --swatch-canvas: #131415;
+    --swatch-panel: #212224;
+    --swatch-accent: #facc15;
+  }
+  .swatch-soft {
+    --swatch-canvas: #232426;
+    --swatch-panel: #323336;
+    --swatch-accent: #c7c9cc;
+  }
 }
 
 @layer base {
@@ -51,6 +89,109 @@
    * Pre-blended translucent fills (*-muted, *-faint) stay as rgba() and are
    * mapped plainly in the config.
    */
+
+  /*
+   * Motion tokens — theme-independent, so they live in a plain :root and are
+   * never redeclared per theme. `--ease-swift` is the house easing (a soft
+   * overshoot-free decelerate); exits deliberately run shorter than their
+   * matching entrances, which reads as responsive rather than sluggish.
+   * Mirrored into Tailwind as `ease-swift` / `duration-fast|base|panel|…`.
+   */
+  :root {
+    --ease-swift: cubic-bezier(0.2, 0.8, 0.25, 1);
+    --dur-fast: 150ms;
+    --dur-base: 200ms;
+    --dur-panel: 240ms;
+    --dur-drawer: 260ms;
+    --dur-glide: 300ms;
+    /* Exit counterparts. */
+    --dur-panel-out: 180ms;
+    --dur-drawer-out: 220ms;
+    --dur-backdrop-out: 160ms;
+    --dur-collapse-out: 150ms;
+  }
+
+  /*
+   * Type scale — theme-independent.
+   *
+   * These five were previously declared identically inside all three theme
+   * blocks (`light`, `dark`, `soft`), 15 declarations for 5 values, which made
+   * the scale look theme-dependent when it never was. Declared once here.
+   */
+  :root {
+    --text-body: 16px;
+    --text-prose: 15px;
+    --text-label: 13px;
+    --text-caption: 12px;
+    --text-micro: 11px;
+  }
+
+  /*
+   * Density tokens — theme-independent, like the motion tokens above.
+   *
+   * The governing rule: density moves the space *between* things, not the space
+   * *inside* things. Gaps, section spacing and container padding scale; row
+   * interiors, hit targets and control sizes do not, because shrinking button
+   * and row paddings would push touch targets under the 44px minimum. The one
+   * exception is the welcome screen, which is the only surface with real slack.
+   *
+   * `--leading-prose` is the highest-leverage token here: leading governs far
+   * more of a long conversation's height than any gap, and because it is a
+   * unitless ratio it changes no font size. Do not take it below 1.4 — wrapped
+   * prose at 15px stops reading as dense and starts reading as cramped.
+   *
+   * Font size is deliberately NOT on this axis: "fit more on screen" and "I can
+   * read this" are different needs, and coupling them forces anyone who wants
+   * tighter spacing into smaller text.
+   *
+   * Consumed through the `.thread-*` / `.density-*` utilities below, and switched
+   * by `[data-density]`, which `useDensity` stamps at module load.
+   */
+  :root {
+    --space-thread: 1.75rem;
+    --pad-thread: 2rem;
+    --space-section: 2rem;
+    --pad-surface: 2rem;
+    --space-list: 0.125rem;
+    /* Separation between groups in a navigation column — the settings nav's
+       Personal/Integrations/Workspace bands and the sidebar's Today/Yesterday
+       date bands. This, not row padding, is where the left column's slack is. */
+    --space-group: 1rem;
+    --pad-group-label: 0.625rem;
+    --space-welcome: 1.25rem;
+    --leading-prose: 1.6;
+    --pad-table-chrome: 0.5rem;
+    --welcome-offset: 2rem;
+    /* Floor, not decoration: PixelPet is 40px and strolls this ledge above the
+       composer. Below 1.5rem he overlaps the hero. */
+    --welcome-headroom: 2.25rem;
+    /* Popover menus — the composer's approval, model, attach, slash and @-file
+       menus. The comfortable values are today's hard-coded ones, so comfortable is
+       the baseline and only compact actually moves. Row padding scales here, unlike
+       `SettingsRow`, because these rows are two-line and stay above the ~44px
+       minimum; a 28px settings row would not. */
+    --pad-menu: 0.375rem;
+    --pad-menu-row: 0.375rem;
+    --space-menu-note: 0.375rem;
+  }
+
+  :root[data-density="compact"] {
+    --space-thread: 1rem;
+    --pad-thread: 1.25rem;
+    --space-section: 1.25rem;
+    --pad-surface: 1.25rem;
+    --space-list: 0;
+    --space-group: 0.5rem;
+    --pad-group-label: 0.25rem;
+    --space-welcome: 0.75rem;
+    --leading-prose: 1.45;
+    --pad-table-chrome: 0.25rem;
+    --welcome-offset: 1.25rem;
+    --welcome-headroom: 1.5rem;
+    --pad-menu: 0.25rem;
+    --pad-menu-row: 0.25rem;
+    --space-menu-note: 0.25rem;
+  }
 
   /* Light mode — an intentionally quiet neutral canvas. Borders only define
      genuine boundaries; they are not used as a substitute for hierarchy. */
@@ -90,34 +231,37 @@
     --scout-warning-muted: rgba(161, 98, 7, 0.12);
     --scout-cyan: 14 116 144;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-canvas);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(255, 255, 255, 0.55);
     --glass-bg-strong: rgba(255, 255, 255, 0.75);
     --glass-border: rgba(24, 27, 32, 0.08);
     --glass-highlight: rgba(255, 255, 255, 0.9);
     --glass-card-bg: rgba(255, 255, 255, 0.45);
-    --ambient:
-      radial-gradient(1150px 750px at 10% -12%, rgba(172, 148, 250, 0.16), transparent 62%),
-      radial-gradient(1050px 700px at 94% 0%, rgba(240, 168, 104, 0.13), transparent 60%),
-      radial-gradient(950px 750px at 58% 115%, rgba(240, 193, 79, 0.1), transparent 62%);
     --shadow-pop:
-      0 20px 56px rgba(25, 31, 42, 0.1),
-      0 1px 4px rgba(25, 31, 42, 0.04);
-    --shadow-card-hover: 0 10px 24px rgba(25, 31, 42, 0.08);
-    --shadow-composer: 0 8px 26px rgba(25, 31, 42, 0.075), 0 1px 2px rgba(25, 31, 42, 0.04);
+      0 14px 36px rgba(25, 31, 42, 0.09),
+      0 2px 8px rgba(25, 31, 42, 0.04);
+    --shadow-card-hover: 0 6px 16px rgba(25, 31, 42, 0.065);
+    --shadow-composer: 0 6px 20px rgba(25, 31, 42, 0.065), 0 1px 2px rgba(25, 31, 42, 0.03);
     --radius-pill: 9999px;
-    --radius-hero: 20px;
-    --radius-card: 16px;
-    --radius-btn: 10px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
-    --text-body: 16px;
-    --text-caption: 12px;
+    --radius-composer: 20px;
+    --radius-message: 18px;
+    --radius-surface: 14px;
+    --radius-control: 9px;
+    --radius-hero: var(--radius-composer);
+    --radius-card: var(--radius-surface);
+    --radius-btn: var(--radius-control);
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Full-strength hues.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 120 127 138;
+    --scout-syn-keyword: 109 40 217;
+    --scout-syn-string: 21 128 61;
+    --scout-syn-number: 180 83 9;
+    --scout-syn-function: 29 78 216;
+    --scout-syn-type: 15 118 110;
+    --scout-syn-operator: 133 77 14;
+    --scout-syn-punctuation: 120 127 138;
   }
 
   /* Dark mode — neutral graphite with enough separation for navigation, but
@@ -159,35 +303,37 @@
     --scout-warning-muted: rgba(251, 191, 36, 0.12);
     --scout-cyan: 34 211 238;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-panel);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(22, 23, 26, 0.5);
     --glass-bg-strong: rgba(22, 23, 26, 0.72);
     --glass-border: rgba(255, 255, 255, 0.1);
     --glass-highlight: rgba(255, 255, 255, 0.09);
     --glass-card-bg: rgba(255, 255, 255, 0.045);
-    --ambient:
-      radial-gradient(1150px 750px at 10% -12%, rgba(168, 142, 250, 0.17), transparent 62%),
-      radial-gradient(1050px 700px at 94% 0%, rgba(228, 148, 82, 0.13), transparent 60%),
-      radial-gradient(850px 620px at 50% 46%, rgba(178, 156, 247, 0.055), transparent 65%),
-      radial-gradient(950px 750px at 58% 115%, rgba(250, 204, 21, 0.07), transparent 62%);
     --shadow-pop:
-      0 28px 80px rgba(0, 0, 0, 0.34),
-      0 1px 0 rgba(255, 255, 255, 0.04) inset;
-    --shadow-card-hover: 0 16px 42px rgba(0, 0, 0, 0.24);
-    --shadow-composer: 0 10px 30px rgba(0, 0, 0, 0.18), 0 1px 0 rgba(255, 255,255,0.035) inset;
+      0 18px 48px rgba(0, 0, 0, 0.3),
+      0 1px 0 rgba(255, 255, 255, 0.035) inset;
+    --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.2);
+    --shadow-composer: 0 7px 22px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255,255,0.03) inset;
     --radius-pill: 9999px;
-    --radius-hero: 20px;
-    --radius-card: 16px;
-    --radius-btn: 10px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
-    --text-body: 16px;
-    --text-caption: 12px;
+    --radius-composer: 20px;
+    --radius-message: 18px;
+    --radius-surface: 14px;
+    --radius-control: 9px;
+    --radius-hero: var(--radius-composer);
+    --radius-card: var(--radius-surface);
+    --radius-btn: var(--radius-control);
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Full-strength hues.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 139 144 153;
+    --scout-syn-keyword: 196 164 255;
+    --scout-syn-string: 126 231 135;
+    --scout-syn-number: 255 171 112;
+    --scout-syn-function: 121 184 255;
+    --scout-syn-type: 110 231 221;
+    --scout-syn-operator: 246 196 118;
+    --scout-syn-punctuation: 143 148 157;
   }
 
   /* Soft gray — a neutral, low-contrast workspace for long sessions. */
@@ -227,31 +373,35 @@
     --scout-warning-muted: rgba(205, 194, 146, 0.14);
     --scout-cyan: 178 185 187;
     --scout-bg: var(--scout-canvas);
-    --scout-surface: var(--scout-panel);
-    --scout-surface-hover: var(--scout-lift);
-    --scout-sidebar-bg: var(--scout-panel);
-    --scout-sidebar-hover: var(--scout-lift);
-    --scout-border: var(--scout-hairline);
-    --scout-text-primary: var(--scout-text);
-    --scout-text-secondary: var(--scout-muted);
     --glass-bg: rgba(40, 41, 43, 0.58);
     --glass-bg-strong: rgba(40, 41, 43, 0.76);
     --glass-border: rgba(255, 255, 255, 0.07);
     --glass-highlight: rgba(255, 255, 255, 0.045);
     --glass-card-bg: rgba(255, 255, 255, 0.03);
-    --ambient:
-      radial-gradient(1100px 700px at 12% -8%, rgba(195, 195, 202, 0.06), transparent 60%),
-      radial-gradient(1000px 650px at 92% 4%, rgba(205, 190, 174, 0.05), transparent 58%);
-    --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.28);
-    --shadow-card-hover: 0 12px 28px rgba(0, 0, 0, 0.2);
-    --shadow-composer: 0 10px 28px rgba(0, 0, 0, 0.2);
+    --shadow-pop: 0 16px 42px rgba(0, 0, 0, 0.25);
+    --shadow-card-hover: 0 7px 20px rgba(0, 0, 0, 0.17);
+    --shadow-composer: 0 7px 22px rgba(0, 0, 0, 0.17);
     --radius-pill: 9999px;
-    --radius-hero: 16px;
-    --radius-card: 12px;
-    --radius-btn: 8px;
-    --text-display: clamp(2.15rem, 5vw, 3.25rem);
-    --text-body: 16px;
-    --text-caption: 12px;
+    --radius-composer: 18px;
+    --radius-message: 16px;
+    --radius-surface: 12px;
+    --radius-control: 8px;
+    --radius-hero: var(--radius-composer);
+    --radius-card: var(--radius-surface);
+    --radius-btn: var(--radius-control);
+
+    /* Syntax highlighting. A dedicated palette rather than reusing the brand
+       tokens: `soft` deliberately desaturates those to near-neutral, which would
+       collapse code into one colour in the DEFAULT theme. Held closer to neutral here to match the theme.
+       Consumed by MarkdownRenderer's Prism theme. */
+    --scout-syn-comment: 143 146 150;
+    --scout-syn-keyword: 185 172 219;
+    --scout-syn-string: 162 197 162;
+    --scout-syn-number: 214 184 140;
+    --scout-syn-function: 160 186 212;
+    --scout-syn-type: 151 194 189;
+    --scout-syn-operator: 205 186 152;
+    --scout-syn-punctuation: 150 153 158;
   }
 
   * {
@@ -271,7 +421,7 @@
   }
 
   ::selection {
-    background: rgba(158, 158, 158, 0.25);
+    background: rgb(var(--scout-muted) / 0.28);
   }
 
   body {
@@ -282,7 +432,7 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     min-width: 320px;
-    min-height: 100vh;
+    min-height: 100dvh;
     overscroll-behavior: none;
   }
 
@@ -306,13 +456,14 @@
 
 @layer components {
   /*
-   * Matte glass system. Two tiers, chosen by cost:
-   *  - .glass-chrome — real backdrop blur. Reserve for persistent chrome
-   *    (sidebar, header, composer, modals): few, large, mostly static layers.
-   *  - .glass-card — matte translucency + inner highlight, NO backdrop-filter.
-   *    Safe to use on any number of cards; costs nothing.
-   * Blur radius stays modest (14px) — matte frost, not liquid gloss, and far
-   * cheaper to composite than 30px+.
+   * Matte glass, for persistent chrome only (sidebar, header, composer,
+   * modals): few, large, mostly static layers. Blur radius stays modest
+   * (14px) — matte frost, not liquid gloss, and far cheaper to composite
+   * than 30px+.
+   * A second `.glass-card` tier (translucency without backdrop-filter, for
+   * cheap per-card use) was specified but never adopted by any component; it
+   * was removed rather than left as dead weight. The --glass-card-bg token is
+   * kept, since reviving that tier only needs the one rule back.
    */
   .glass-chrome {
     background: var(--glass-bg);
@@ -321,51 +472,30 @@
     box-shadow: inset 0 1px 0 var(--glass-highlight);
   }
 
-  .glass-chrome-strong {
-    background: var(--glass-bg-strong);
-    -webkit-backdrop-filter: blur(18px) saturate(1.5);
-    backdrop-filter: blur(18px) saturate(1.5);
-    box-shadow: inset 0 1px 0 var(--glass-highlight);
-  }
-
-  .glass-card {
-    background: var(--glass-card-bg);
-    border: 1px solid var(--glass-border);
-    box-shadow: inset 0 1px 0 var(--glass-highlight);
-  }
-
   /* No backdrop-filter support (or user opted out of transparency):
      fall back to solid panels so text never sits on unblurred noise. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .glass-chrome,
-    .glass-chrome-strong {
+    .glass-chrome {
       background: rgb(var(--scout-panel));
     }
   }
   @media (prefers-reduced-transparency: reduce) {
-    .glass-chrome,
-    .glass-chrome-strong {
+    .glass-chrome {
       background: rgb(var(--scout-panel));
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
-    .glass-card {
-      background: rgb(var(--scout-lift));
-    }
   }
 
+  /* The 620 weight is only renderable on a variable font — it used to sit on a
+     `ui-sans-serif` stack with no variable font loaded, so it silently snapped
+     to the nearest static weight (600/700). Now that Inter Variable's wght axis
+     is actually loaded, inherit the sans stack instead of overriding it. */
   .font-display {
-    font-family: ui-sans-serif, system-ui, sans-serif;
     font-weight: 620;
     letter-spacing: -0.04em;
     line-height: 1.05;
     text-wrap: balance;
-  }
-
-  .text-display {
-    font-size: var(--text-display);
-    line-height: 1.05;
-    letter-spacing: -0.04em;
   }
 
   .text-body {
@@ -380,6 +510,32 @@
     letter-spacing: -0.02em;
   }
 
+  /* The rest of the scale. Before these existed, everything between caption and
+     body was an arbitrary `text-[Npx]` — 173 of them across seven sizes in the
+     10–16px band, plus text-xs/text-sm on top, so `text-[13px]` and `text-sm`
+     were each chosen ~60 times for visually identical results. */
+  /* Leading is density-aware here and nowhere else: this is the only token in
+     the scale used for wrapped multi-line copy, so it is the only one where the
+     ratio governs real height. `.text-body` / `.text-label` / `.text-micro` stay
+     literal — they label single-line controls and would only risk clipping
+     descenders. */
+  .text-prose {
+    font-size: var(--text-prose);
+    line-height: var(--leading-prose);
+    letter-spacing: -0.01em;
+  }
+
+  .text-label {
+    font-size: var(--text-label);
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+  }
+
+  .text-micro {
+    font-size: var(--text-micro);
+    line-height: 1.4;
+  }
+
   /* Historically 300; light weights read as unfinished at UI sizes. */
   .font-light-ui {
     font-weight: 400;
@@ -390,14 +546,120 @@
   .hover-reveal {
     @apply opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity;
   }
+
+  /* Keeps the bottom-most surface clear of the iOS home bar / Android gesture
+     area. Adds to whatever padding the element already has. */
+  .safe-bottom {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  .safe-x {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
   @media (pointer: coarse) {
     .hover-reveal {
       opacity: 1;
     }
   }
 
+  /* The panel tab strip scrolls horizontally, and the global 6px scrollbar rule
+     would draw a bar across the bottom of a 46px chrome band. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Density-aware spacing. See the `--space-thread` tokens in the base layer for
+     why only the reading surfaces opt in. `> * + *` rather than `gap`, because the
+     thread's children include absolutely-positioned overlays that must not be
+     spaced. */
+  .thread-flow > * + * {
+    margin-top: var(--space-thread);
+  }
+  .thread-pad {
+    padding-top: var(--pad-thread);
+    padding-bottom: var(--pad-thread);
+  }
+
+  /* Transient room below the thread so a just-sent message can rise to the top of
+     the viewport. Sized in JS from measurement (see `useThreadAnchor`), so no
+     height here.
+
+     `overflow-anchor: none` is load-bearing, not defensive: the browser's own
+     scroll anchoring is on by default and compensates for content resizing by
+     adjusting `scrollTop`. Since this element shrinks on every streamed token,
+     leaving it enabled means the browser fights the anchor we are holding. */
+  .thread-spacer {
+    flex: none;
+    overflow-anchor: none;
+  }
+
+  /* The rest of the density surfaces. Same `> * + *` reasoning as .thread-flow:
+     these containers hold absolutely-positioned children that must not be
+     spaced, so `gap` is wrong. */
+  .density-sections > * + * {
+    margin-top: var(--space-section);
+  }
+  .density-surface {
+    padding-top: var(--pad-surface);
+    padding-bottom: var(--pad-surface);
+  }
+  .density-list > * + * {
+    margin-top: var(--space-list);
+  }
+  .density-groups > * + * {
+    margin-top: var(--space-group);
+  }
+  /* DataTable's fixed overhead — search band, header, caption. This is 40-60px
+     per table regardless of row count, which is what makes it worth reclaiming
+     when several tables stack on one admin page. Row interiors are untouched. */
+  .density-table-chrome {
+    padding-top: var(--pad-table-chrome);
+    padding-bottom: var(--pad-table-chrome);
+  }
+
+  /* Popover menus. `AnchoredPopover` supplies no padding of its own — every caller
+     passes it — so these are what the composer's menus use instead of a literal
+     `p-1.5` / `py-2.5`. `.density-menu` is the shell; `.density-menu-row` is a
+     selectable row; `.density-menu-note` is a heading or footer note, which is
+     separation rather than a target and so may tighten further.
+
+     Padding is the only lever used here. A two-line row is ~37px of text on its
+     own (`.text-label` is 1.45, `.text-caption` 1.5), so the type dominates and
+     padding can only trim the remainder — overriding those leadings with Tailwind
+     utilities would fight a deliberate part of the type scale for a few pixels. */
+  .density-menu {
+    padding: var(--pad-menu);
+  }
+  .density-menu-row {
+    padding-top: var(--pad-menu-row);
+    padding-bottom: var(--pad-menu-row);
+  }
+  .density-menu-note {
+    padding-top: var(--space-menu-note);
+    padding-bottom: var(--space-menu-note);
+  }
+
+  /* Welcome screen, vertically centred.
+     `margin-block: auto` rather than the parent's `justify-content: center`:
+     inside a scroll container, centred flex content cannot be scrolled back up
+     once it overflows, so a short viewport clips the hero irrecoverably. Auto
+     margins collapse instead of going negative, so the block stays reachable.
+     `--welcome-offset` is the minimum breathing room at the extremes, not an
+     anchor — an earlier revision top-anchored the block and left a large void
+     below it, which read worse than centring. */
+  .welcome-block {
+    margin-block: auto;
+    padding-block: var(--welcome-offset);
+    gap: var(--space-welcome);
+  }
+
   .prose-scout pre {
-    @apply bg-scout-code-bg border border-scout-hairline-faint rounded-2xl p-4 overflow-x-auto;
+    /* Matches CodeBlock's shell (rounded-card + hairline) so a bare <pre> and a
+       fenced block are not two different treatments side by side. */
+    @apply bg-scout-code-bg border border-scout-hairline rounded-card p-4 overflow-x-auto;
   }
 
   /* CodeBlock shell already has border/radius — inner pre must stay flush with the header */
@@ -413,7 +675,7 @@
     @apply w-full border-collapse;
   }
   .prose-scout th {
-    @apply text-left font-medium border-b border-scout-border px-3 py-2 text-scout-text;
+    @apply text-left font-medium border-b border-scout-hairline px-3 py-2 text-scout-text;
   }
   .prose-scout td {
     @apply border-b px-3 py-2;
@@ -421,7 +683,7 @@
   }
 
   .prose-scout blockquote {
-    @apply border-l border-scout-border pl-4 italic text-scout-muted;
+    @apply border-l border-scout-hairline pl-4 italic text-scout-muted;
   }
 
   .prose-scout a {
@@ -457,7 +719,7 @@
     @apply my-1.5 leading-relaxed;
   }
   .prose-scout hr {
-    @apply border-scout-border my-4;
+    @apply border-scout-hairline my-4;
   }
 
   .artifact-document {
@@ -523,7 +785,7 @@
 }
 
 .animate-enter {
-  animation: fade-in-up 200ms ease-out both;
+  animation: fade-in-up var(--dur-base) ease-out both;
 }
 
 /* Side panel entrance — final frame must be `transform: none` (see above). */
@@ -539,7 +801,26 @@
 }
 
 .animate-panel-in {
-  animation: panel-in 240ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  animation: panel-in var(--dur-panel) var(--ease-swift) both;
+}
+
+/* Exit mirrors. In every *-out keyframe the `from` frame is the SETTLED state
+   (`transform: none`), so the containing-block hazard described above cannot
+   apply — the element only acquires a transform on its way out, and it is
+   unmounted immediately afterwards. */
+@keyframes panel-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+.animate-panel-out {
+  animation: panel-out var(--dur-panel-out) var(--ease-swift) both;
 }
 
 /* Overlay drawer entrance — slides in from the right edge. */
@@ -553,7 +834,20 @@
 }
 
 .animate-drawer-in {
-  animation: drawer-in 260ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+  animation: drawer-in var(--dur-drawer) var(--ease-swift) both;
+}
+
+@keyframes drawer-out {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.animate-drawer-out {
+  animation: drawer-out var(--dur-drawer-out) var(--ease-swift) both;
 }
 
 @keyframes backdrop-in {
@@ -566,7 +860,88 @@
 }
 
 .animate-backdrop-in {
-  animation: backdrop-in 200ms ease-out both;
+  animation: backdrop-in var(--dur-base) ease-out both;
+}
+
+@keyframes backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-backdrop-out {
+  animation: backdrop-out var(--dur-backdrop-out) ease-out both;
+}
+
+/* Centred modal: scale+fade. CenterModal previously had neither an entrance
+   nor an exit, so both of these are net-new. */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-modal-in {
+  animation: modal-in var(--dur-base) var(--ease-swift) both;
+}
+
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.animate-modal-out {
+  animation: modal-out var(--dur-panel-out) var(--ease-swift) both;
+}
+
+/* Full-bleed overlay exit (Settings). A horizontal slide reads wrong on a
+   page-sized surface, so this is just a fade with a small settle downward.
+   Its entrance is `.animate-enter`. */
+@keyframes fade-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.animate-fade-out {
+  animation: fade-out var(--dur-panel-out) ease-in both;
+}
+
+/* List-row removal. Opacity + a small rise only — animating height on these
+   rows would cost layout every frame for no perceptual gain, and siblings
+   reflowing after the fade completes reads fine at this duration. */
+@keyframes collapse-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+}
+
+.animate-collapse-out {
+  animation: collapse-out var(--dur-collapse-out) ease-out both;
 }
 
 /* Resizable panels are sized via flex-grow on the OUTER [data-panel] element
@@ -574,82 +949,131 @@
    is scoped through the Group. Applied only during the toggle so drags stay
    instant. */
 .panels-gliding > [data-panel] {
-  transition: flex-grow 300ms cubic-bezier(0.2, 0.8, 0.25, 1);
+  transition: flex-grow var(--dur-glide) var(--ease-swift);
+}
+
+/*
+ * Theme crossfade. Switching theme swaps a class on <html>, which repaints
+ * every token at once — a hard cut. This softens it by enabling a colour-only
+ * transition on everything for the duration of the swap.
+ *
+ * The `*` selector is genuinely expensive, which is why the class is applied
+ * ONLY while switching and removed immediately after (see useTheme's
+ * applyTheme). It must never be a permanent rule.
+ *
+ * Colour properties only: transitioning anything geometric here would fight
+ * every layout animation in the app. `no-preference` rather than a
+ * `reduce` override, so reduced-motion users get the instant swap and never
+ * pay the `*` cost at all.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before,
+  .theme-switching *::after {
+    transition:
+      background-color var(--dur-panel-out) ease,
+      border-color var(--dur-panel-out) ease,
+      color var(--dur-panel-out) ease,
+      fill var(--dur-panel-out) ease !important;
+  }
+}
+
+/* The media query above cannot see the Appearance setting, and `.theme-switching`
+   sits on :root itself rather than an ancestor — so the opt-out is a higher
+   specificity override rather than a guard on the query. */
+:root[data-motion="reduce"].theme-switching,
+:root[data-motion="reduce"].theme-switching *,
+:root[data-motion="reduce"].theme-switching *::before,
+:root[data-motion="reduce"].theme-switching *::after {
+  transition: none !important;
+}
+
+/* Loading placeholder. A sweeping highlight over a `lift`-toned block, for
+   waits whose shape is known ahead of time (list rows, file trees) — a spinner
+   there says "something is happening" where a skeleton says "a list is coming".
+   Under reduced motion the sweep stops but the block stays, so the layout
+   still communicates what is loading. */
+@keyframes skeleton-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton {
+  background-color: rgb(var(--scout-lift));
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(var(--scout-muted) / 0.13) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-btn);
+  animation: skeleton-sweep 1.4s linear infinite;
+}
+
+:root[data-motion="reduce"] .skeleton {
+  animation: none;
+  background-image: none;
 }
 
 /* Card hover lift — transform+shadow only, GPU-composited, cheap. */
 .lift-hover {
   transition:
-    transform 150ms ease,
-    box-shadow 150ms ease,
-    background-color 150ms ease;
+    transform var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease,
+    background-color var(--dur-fast) ease;
 }
 .lift-hover:hover {
   transform: translateY(-1.5px);
   box-shadow: var(--shadow-card-hover);
 }
 
-@media (prefers-reduced-motion: reduce) {
+/*
+ * Reduced motion is keyed on `[data-motion="reduce"]`, not on the media query
+ * directly, because it has two sources: the OS preference and the Appearance
+ * setting. `usePrefersReducedMotion` ORs them and stamps the attribute at module
+ * load — before React renders — so nothing paints an animation we then suppress.
+ * A setting the OS could veto would be a setting that does nothing for most
+ * people, so either source alone is enough.
+ */
+:root[data-motion="reduce"] :is(
   .animate-enter,
   .animate-panel-in,
   .animate-drawer-in,
-  .animate-backdrop-in {
-    animation: none;
-  }
-  .panels-gliding > [data-panel] {
-    transition: none;
-  }
-  .lift-hover,
-  .lift-hover:hover {
-    transform: none;
-    transition: none;
-  }
+  .animate-backdrop-in,
+  .animate-modal-in,
+  /* usePresence already unmounts instantly under reduced motion, so these
+     never normally render — belt and braces for any direct consumer. */
+  .animate-panel-out,
+  .animate-drawer-out,
+  .animate-backdrop-out,
+  .animate-modal-out,
+  .animate-fade-out,
+  .animate-collapse-out
+) {
+  animation: none;
+}
+:root[data-motion="reduce"] .panels-gliding > [data-panel] {
+  transition: none;
+}
+:root[data-motion="reduce"] :is(.lift-hover, .lift-hover:hover) {
+  transform: none;
+  transition: none;
 }
 
-@keyframes pulse-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-    transform: scale(0.8);
-  }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
+/* Spinners are SLOWED, not stopped: a frozen spinner reads as a hung app,
+   so the liveness signal has to survive. Decorative pulses just stop. */
+:root[data-motion="reduce"] .animate-spin {
+  animation-duration: 1.6s;
 }
-
-/* Streaming label: a color sweep travelling through the characters. */
-@keyframes text-shimmer {
-  from {
-    background-position: 200% center;
-  }
-  to {
-    background-position: -200% center;
-  }
-}
-.shimmer-text {
-  font-weight: 600;
-  background-image: linear-gradient(
-    90deg,
-    rgb(var(--scout-muted)) 0%,
-    rgb(var(--scout-muted)) 35%,
-    rgb(var(--scout-text)) 50%,
-    rgb(var(--scout-muted)) 65%,
-    rgb(var(--scout-muted)) 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .shimmer-text {
-    animation: none;
-    background: none;
-    color: rgb(var(--scout-muted));
-  }
+:root[data-motion="reduce"] .animate-pulse {
+  animation: none;
+  opacity: 1;
 }
 
 /* Stars orbiting the dazed character's head. The parent flattens this
@@ -665,10 +1089,8 @@
 .dazed-orbit {
   animation: dazed-spin 2.6s linear infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-  .dazed-orbit {
-    animation: none;
-  }
+:root[data-motion="reduce"] .dazed-orbit {
+  animation: none;
 }
 
 /* Warm glass for the sunset login card — a lit-paper-lantern feel. Fixed
@@ -705,11 +1127,9 @@
   animation: login-sky-drift 80s ease-in-out infinite;
   will-change: transform;
 }
-@media (prefers-reduced-motion: reduce) {
-  .login-sky-drift {
-    animation: none;
-    transform: scale(1.08);
-  }
+:root[data-motion="reduce"] .login-sky-drift {
+  animation: none;
+  transform: scale(1.08);
 }
 
 /* ── Welcome scene: drifting pixel clouds + twinkling stars ────── */
@@ -787,16 +1207,11 @@
   image-rendering: pixelated;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cloud-drift,
-  .star-twinkle,
-  .bird-bob,
-  .shooting-star {
-    animation: none;
-  }
-  .shooting-star {
-    opacity: 0;
-  }
+:root[data-motion="reduce"] :is(.cloud-drift, .star-twinkle, .bird-bob, .shooting-star) {
+  animation: none;
+}
+:root[data-motion="reduce"] .shooting-star {
+  opacity: 0;
 }
 
 /* ── Pixel pet ─────────────────────────────────────────────────── */
@@ -941,23 +1356,13 @@
   animation: pet-hop 0.5s ease-in-out infinite;
 }
 
-@media (prefers-reduced-motion: reduce) {
+:root[data-motion="reduce"] :is(
   .pet-breathe,
   .pet-goof,
   .pet-stroll,
   .pet-hop,
   .pet-flap-left,
-  .pet-flap-right {
-    animation: none;
-  }
-}
-
-.thinking-dot:nth-child(1) {
-  animation: pulse-dot 1.4s infinite 0s;
-}
-.thinking-dot:nth-child(2) {
-  animation: pulse-dot 1.4s infinite 0.2s;
-}
-.thinking-dot:nth-child(3) {
-  animation: pulse-dot 1.4s infinite 0.4s;
+  .pet-flap-right
+) {
+  animation: none;
 }

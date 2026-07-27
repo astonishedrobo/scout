@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import type { Message, ResponseAnnotation } from "scout-core";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { AssistantProse } from "./AssistantProse";
 import { Copy, Check, RotateCcw, GitBranch } from "lucide-react";
 import type { Artifact, FileChangeSet } from "scout-core";
 import { ArtifactCards } from "./ArtifactCards";
@@ -25,6 +25,9 @@ interface MessageBubbleProps {
   onAddAnnotation?: (annotation: Omit<ResponseAnnotation, "id" | "createdAt" | "updatedAt">) => void;
   onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
   onRemoveAnnotation?: (id: string) => void;
+  /** Text the copy action should write. Defaults to `message.content`; pass it
+   *  explicitly when the visible prose lives somewhere other than `content`. */
+  copyText?: string;
 }
 
 export function MessageBubble({
@@ -43,6 +46,7 @@ export function MessageBubble({
   onAddAnnotation,
   onUpdateAnnotation,
   onRemoveAnnotation,
+  copyText,
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const hasMemoryUpdate = message.steps?.some(
@@ -52,12 +56,21 @@ export function MessageBubble({
       !/no memory written/i.test(step.output ?? ""),
   );
 
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(message.content).then(() => {
+  // `copyText` exists because ChatView blanks `content` when the prose was
+  // already rendered by the timeline — copying `message.content` then produced
+  // an empty clipboard for the most common kind of turn.
+  const textToCopy = copyText ?? message.content;
+
+  const handleCopy = useCallback(async () => {
+    if (!textToCopy) return;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
-  }, [message.content]);
+    } catch {
+      /* Clipboard unavailable (insecure origin / denied permission). */
+    }
+  }, [textToCopy]);
 
   if (message.role === "user") {
     const additionalRequest = message.annotations?.length
@@ -78,13 +91,13 @@ export function MessageBubble({
               ))}
             </div>
           )}
-          <div className="w-fit max-w-full rounded-card border border-scout-hairline-faint bg-scout-input-bg px-4 py-2.5">
+          <div className="w-fit max-w-full rounded-message bg-scout-input-bg/80 px-3.5 py-2">
             {!!message.annotations?.length && (
-              <div className="mb-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/70 p-2.5">
-                <p className="text-xs font-semibold text-scout-text">{message.annotations.length} annotation{message.annotations.length === 1 ? "" : "s"}</p>
+              <div className="mb-2.5 rounded-control bg-scout-panel/55 px-2.5 py-2">
+                <p className="text-caption font-semibold text-scout-text">{message.annotations.length} annotation{message.annotations.length === 1 ? "" : "s"}</p>
                 <div className="mt-1.5 space-y-1.5">
                   {message.annotations.map((annotation, index) => (
-                    <div key={annotation.id} className="text-xs leading-snug text-scout-muted">
+                    <div key={annotation.id} className="text-caption leading-snug text-scout-muted">
                       <span className="mr-1 font-semibold text-scout-text">{index + 1}.</span>
                       <span>“{annotation.quote}”</span>
                       {annotation.comment.trim() && <span className="text-scout-text"> — {annotation.comment}</span>}
@@ -93,7 +106,7 @@ export function MessageBubble({
                 </div>
               </div>
             )}
-            <p className="text-scout-text text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+            <p className="text-scout-text text-prose leading-relaxed whitespace-pre-wrap break-words">
               {additionalRequest || (message.annotations?.length ? "Please address these notes." : message.content)}
             </p>
           </div>
@@ -103,6 +116,7 @@ export function MessageBubble({
             className="hover-reveal p-2 rounded-btn text-scout-muted hover:text-scout-text
                        hover:bg-scout-lift/80"
               title="Copy message"
+              aria-label="Copy message"
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
             </button>
@@ -115,7 +129,7 @@ export function MessageBubble({
   return (
     <div className="group/assistant">
       {message.stopped && (
-        <div className="mb-2 inline-flex items-center rounded-btn border border-scout-hairline-faint bg-scout-panel/60 px-2 py-0.5 text-[11px] font-medium text-scout-muted">
+        <div className="mb-2 inline-flex items-center rounded-btn border border-scout-hairline-faint bg-scout-panel/60 px-2 py-0.5 text-micro font-medium text-scout-muted">
           Stopped
         </div>
       )}
@@ -130,14 +144,10 @@ export function MessageBubble({
               onUpdate={onUpdateAnnotation}
               onRemove={onRemoveAnnotation}
             >
-              <div className="prose-scout text-[15px] overflow-x-auto">
-                <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
-              </div>
+              <AssistantProse content={message.content} baseUrl={baseUrl} token={token} />
             </AnnotationRegion>
           ) : (
-            <div className="prose-scout text-[15px] overflow-x-auto">
-              <MarkdownRenderer content={message.content} baseUrl={baseUrl} token={token} />
-            </div>
+            <AssistantProse content={message.content} baseUrl={baseUrl} token={token} />
           )}
         </div>
       )}
@@ -159,21 +169,22 @@ export function MessageBubble({
       )}
       {hasMemoryUpdate && <MemoryUpdateChip onOpenMemories={onOpenMemories} className="mt-3" />}
 
-      <div className="flex items-center gap-0.5 mt-2 -ml-1 opacity-0 group-hover/assistant:opacity-100 focus-within:opacity-100 transition-opacity">
+      <div className="group mt-2 -ml-1 flex items-center gap-0.5">
         <button
           onClick={handleCopy}
-          className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                     hover:bg-scout-lift/80 transition-colors"
+          className="hover-reveal rounded-btn p-2 text-scout-muted hover:bg-scout-lift/80 hover:text-scout-text"
           title="Copy response"
+          aria-label="Copy response"
+          disabled={!textToCopy}
         >
           {copied ? <Check size={16} /> : <Copy size={16} />}
         </button>
         {onRetry && (
           <button
             onClick={onRetry}
-            className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                       hover:bg-scout-lift/80 transition-colors"
+            className="hover-reveal rounded-btn p-2 text-scout-muted hover:bg-scout-lift/80 hover:text-scout-text"
             title="Retry"
+            aria-label="Retry this response"
           >
             <RotateCcw size={16} />
           </button>
@@ -181,9 +192,9 @@ export function MessageBubble({
         {onFork && (
           <button
             onClick={onFork}
-            className="p-2 rounded-btn text-scout-muted hover:text-scout-text
-                       hover:bg-scout-lift/80 transition-colors"
+            className="hover-reveal rounded-btn p-2 text-scout-muted hover:bg-scout-lift/80 hover:text-scout-text"
             title="Fork from here"
+            aria-label="Fork the conversation from here"
           >
             <GitBranch size={16} />
           </button>

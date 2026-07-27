@@ -180,11 +180,24 @@ class AgentTurnScheduler:
     async def snapshot(self) -> dict:
         async with self._lock:
             now = self._clock()
+            queued_by_user: dict[str, int] = {}
+            for waiter in self._waiters:
+                queued_by_user[waiter.user_id] = queued_by_user.get(waiter.user_id, 0) + 1
             return {
                 "active_requests": self._active,
                 "max_concurrent_requests": self.max_concurrent,
                 "queued_requests": len(self._waiters),
                 "queued_users": len({w.user_id for w in self._waiters}),
+                # The configured limits travel with the counters they bound.
+                # Without them a reader can show "3 queued" but not whether that
+                # is idle or nearly full, which is the only useful question.
+                "max_queued": self.max_queued,
+                "max_queued_per_user": self.max_queued_per_user,
+                "queue_timeout_seconds": self.queue_timeout_seconds,
+                "priority_aging_seconds": self.priority_aging_seconds,
+                # Per-user breakdowns, copied out under the lock.
+                "active_by_user": dict(self._active_by_user),
+                "queued_by_user": queued_by_user,
                 "oldest_queue_age_seconds": round(
                     max((now - w.enqueued_at for w in self._waiters), default=0.0), 3
                 ),

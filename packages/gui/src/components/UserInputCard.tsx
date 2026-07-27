@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CornerDownLeft, Pencil, X } from "lucide-react";
 import type { UserInputRequest, UserInputQuestion } from "scout-core";
 
@@ -13,31 +13,80 @@ function answerText(question: UserInputQuestion, answer: string) {
 }
 
 export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardProps) {
-  const question = request.questions[0];
+  // Every question is asked, one at a time. This used to render
+  // `questions[0]` only and silently drop the rest of the request.
+  const questions = request.questions ?? [];
+  const [index, setIndex] = useState(0);
+  const [answered, setAnswered] = useState<string[]>([]);
   const [otherMode, setOtherMode] = useState(false);
   const [other, setOther] = useState("");
+  // Answering is a one-way action; without this, double-clicking an option
+  // submitted twice.
+  const [submitting, setSubmitting] = useState(false);
+
+  const question = questions[index];
+  const options = question?.options ?? [];
+  const total = questions.length;
+
+  const submit = useCallback(
+    (answer: string) => {
+      if (!question || submitting) return;
+      const collected = [...answered, answerText(question, answer)];
+      if (index + 1 < total) {
+        setAnswered(collected);
+        setIndex(index + 1);
+        setOtherMode(false);
+        setOther("");
+        return;
+      }
+      setSubmitting(true);
+      onAnswer(collected.join("\n\n"));
+    },
+    [question, submitting, answered, index, total, onAnswer],
+  );
+
+  // The options are numbered 1..n, which promises a number-key shortcut. It was
+  // never wired up.
+  useEffect(() => {
+    if (otherMode || options.length === 0 || submitting) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > options.length) return;
+      e.preventDefault();
+      submit(options[n - 1]!.label);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [otherMode, options, submitting, submit]);
 
   if (!question) return null;
-  const options = question.options ?? [];
 
   return (
-    <div className="w-full max-w-[46rem] mx-auto">
-      <div className="rounded-card bg-scout-panel/95 border border-scout-hairline shadow-card overflow-hidden">
-        <div className="flex items-start gap-3 px-4 py-3">
+    <div className="mx-auto w-full max-w-[46rem]">
+      <div className="overflow-hidden rounded-btn border border-scout-hairline bg-scout-panel/95 shadow-composer">
+        <div className="flex items-start gap-3 px-3.5 py-2.5">
           <div className="min-w-0 flex-1">
-            {question.header && question.header !== "Question" && (
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-scout-muted mb-1">
-                {question.header}
-              </div>
-            )}
-            <div className="text-[15px] leading-snug text-scout-text">
-              {question.question}
+            <div className="mb-1 flex items-center gap-2">
+              {question.header && question.header !== "Question" && (
+                <span className="text-micro font-semibold uppercase tracking-[0.16em] text-scout-muted">
+                  {question.header}
+                </span>
+              )}
+              {total > 1 && (
+                <span className="text-micro font-medium tabular-nums text-scout-muted/80">
+                  {index + 1} of {total}
+                </span>
+              )}
             </div>
+            <div className="text-prose leading-snug text-scout-text">{question.question}</div>
           </div>
           <button
             type="button"
             onClick={onDismiss}
-            className="p-1 rounded-lg text-scout-muted hover:text-scout-text hover:bg-scout-lift transition-colors"
+            className="rounded-btn p-2 text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
             aria-label="Dismiss question"
           >
             <X size={15} />
@@ -46,25 +95,26 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
 
         {options.length > 0 && (
           <div className="px-3 pb-2">
-            {options.map((option, index) => (
+            {options.map((option, optionIndex) => (
               <button
                 type="button"
-                key={`${option.label}-${index}`}
-                onClick={() => onAnswer(answerText(question, option.label))}
-                className="group w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-left border-t border-scout-hairline-faint first:border-t-0 hover:bg-scout-lift transition-colors"
+                key={`${option.label}-${optionIndex}`}
+                disabled={submitting}
+                onClick={() => submit(option.label)}
+                className="group flex w-full items-center gap-2.5 border-t border-scout-hairline-faint px-2.5 py-2 text-left transition-colors first:border-t-0 hover:bg-scout-lift disabled:opacity-50"
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-scout-lift text-[13px] font-medium text-scout-muted group-hover:text-scout-text">
-                  {index + 1}
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-btn bg-scout-lift text-label font-medium text-scout-muted group-hover:text-scout-text">
+                  {optionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm text-scout-text">{option.label}</span>
+                  <span className="block text-label text-scout-text">{option.label}</span>
                   {option.description && (
-                    <span className="block text-xs text-scout-muted leading-snug mt-0.5">
+                    <span className="mt-0.5 block text-caption leading-snug text-scout-muted">
                       {option.description}
                     </span>
                   )}
                 </span>
-                <CornerDownLeft size={14} className="text-scout-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                <CornerDownLeft size={14} className="hover-reveal text-scout-muted" />
               </button>
             ))}
           </div>
@@ -78,19 +128,20 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
                 value={other}
                 onChange={(e) => setOther(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && other.trim()) onAnswer(answerText(question, other.trim()));
+                  if (e.key === "Enter" && other.trim()) submit(other.trim());
                   if (e.key === "Escape" && options.length > 0) setOtherMode(false);
                 }}
                 placeholder="Reply directly..."
-                className="flex-1 bg-scout-lift border border-scout-hairline-faint rounded-xl px-3 py-2 text-sm text-scout-text placeholder:text-scout-muted focus:outline-none focus:ring-2 focus:ring-scout-text/15"
+                aria-label="Your answer"
+                className="flex-1 rounded-btn border border-scout-hairline-faint bg-scout-lift px-3 py-2 text-label text-scout-text placeholder:text-scout-muted focus:outline-none focus:ring-2 focus:ring-scout-text/15"
               />
               <button
                 type="button"
-                disabled={!other.trim()}
-                onClick={() => other.trim() && onAnswer(answerText(question, other.trim()))}
-                className="px-3 py-2 rounded-xl text-sm font-semibold bg-scout-text text-scout-bg disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={!other.trim() || submitting}
+                onClick={() => other.trim() && submit(other.trim())}
+                className="rounded-btn bg-scout-text px-3 py-2 text-label font-semibold text-scout-bg disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Send
+                {index + 1 < total ? "Next" : "Send"}
               </button>
             </div>
           ) : (
@@ -98,17 +149,18 @@ export function UserInputCard({ request, onAnswer, onDismiss }: UserInputCardPro
               <button
                 type="button"
                 onClick={() => setOtherMode(true)}
-                className="flex flex-1 items-center gap-3 px-2.5 py-2 rounded-xl text-left hover:bg-scout-lift transition-colors"
+                className="flex flex-1 items-center gap-2.5 rounded-btn px-2.5 py-2 text-left transition-colors hover:bg-scout-lift"
               >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-scout-lift text-scout-muted">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-btn bg-scout-lift text-scout-muted">
                   <Pencil size={14} />
                 </span>
-                <span className="text-sm text-scout-muted">Something else</span>
+                <span className="text-label text-scout-muted">Something else</span>
               </button>
               <button
                 type="button"
-                onClick={() => onAnswer(answerText(question, "Skip"))}
-                className="px-3 py-1.5 rounded-lg text-sm font-semibold text-scout-text bg-scout-lift hover:bg-scout-lift/80 transition-colors"
+                disabled={submitting}
+                onClick={() => submit("Skip")}
+                className="rounded-btn bg-scout-lift px-3 py-2 text-label font-semibold text-scout-text transition-colors hover:bg-scout-lift/80 disabled:opacity-50"
               >
                 Skip
               </button>

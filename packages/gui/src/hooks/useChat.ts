@@ -11,12 +11,14 @@ export interface PermissionElevationPayload {
 
 export interface ApprovalRequest {
   approvalId: string;
-  kind: "file_changes" | "capability" | "execution_promotion" | "permission_elevation";
+  kind: "file_changes" | "capability" | "mcp_tool" | "execution_promotion" | "permission_elevation";
   toolName: string;
   diffs: FileDiffEntry[];
   capability?: CapabilityRequestPayload;
   permissionRequest?: PermissionElevationPayload;
   canShare: boolean;
+  subagentId?: string;
+  subagentDescription?: string;
 }
 
 interface ChatState {
@@ -25,15 +27,31 @@ interface ChatState {
   streamingText: string;
   currentTool?: string;
   statusMessage?: string;
+  activityStartedAt?: number | null;
   isLoading: boolean;
   error: string | null;
   pendingApproval: ApprovalRequest | null;
   pendingUserInput: UserInputRequest | null;
+  activeTurnId: string | null;
+  pendingSteers: PendingSteer[];
+  consumedSteerIds: string[];
+}
+
+export interface PendingSteer {
+  steerId: string;
+  clientId: string;
+  content: string;
+  attachments: string[];
+  chatImages: ChatImage[];
+  annotations: ResponseAnnotation[];
+  status: "sending" | "pending" | "steering";
 }
 
 const emptyState = (): ChatState => ({
   messages: [], streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: undefined,
-  isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
+  activityStartedAt: null, isLoading: false, error: null, pendingApproval: null, pendingUserInput: null,
+  activeTurnId: null, pendingSteers: [],
+  consumedSteerIds: [],
 });
 
 /** Normalize sandbox / relative paths so the same file maps to one card. */
@@ -86,6 +104,25 @@ function sealSteps(steps: ToolStep[]): ToolStep[] {
         }
       : step,
   );
+}
+
+/**
+ * Whether a tool result represents a failure.
+ *
+ * The server has no error flag on `tool_result` — a tool that failed returns an
+ * ordinary result whose `output` carries the error — so this recognises the
+ * conventions the Python tools actually use (`python/src/scout/agent/tools.py`):
+ * a leading bracketed `[Error …]` / `[Access denied: …]` / `[File not found: …]`
+ * / `[… error: …]` marker, or an explicit `[REQUEST DENIED]`.
+ *
+ * Deliberately anchored to the start and to the bracket form: matching "error"
+ * anywhere would flag every successful grep for the word, and every test run
+ * that prints a passing assertion about errors.
+ */
+function toolFailed(output: string | undefined): boolean {
+  if (!output) return false;
+  const head = output.trimStart().slice(0, 200);
+  return /^\[(?:REQUEST DENIED|Access denied|File not found|Error\b|[A-Za-z ]*error:)/i.test(head);
 }
 
 function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
@@ -155,7 +192,12 @@ function applyEvent(steps: ToolStep[], event: ChatEvent): ToolStep[] {
     const updated = [...steps];
     for (let i = updated.length - 1; i >= 0; i--) {
       if (updated[i].status === "executing" && updated[i].name === (event.name || updated[i].name)) {
-        updated[i] = { ...updated[i], status: "complete", output: event.output || updated[i].output };
+        const output = event.output || updated[i].output;
+        updated[i] = {
+          ...updated[i],
+          status: toolFailed(output) ? "failed" : "complete",
+          output,
+        };
         break;
       }
     }
@@ -171,6 +213,11 @@ export function useChat({
   const statesRef = useRef(states);
   statesRef.current = states;
   const abortRefs = useRef(new Map<string, AbortController>());
+  // Network chunks can arrive far faster than the browser can paint.  Keeping
+  // the canonical turn state in the request closure while flushing the visual
+  // copy once per animation frame makes streaming feel immediate instead of
+  // making React re-render the whole transcript for every token/PTY chunk.
+  const renderFrames = useRef(new Map<string, number>());
   const active = states[sessionId] ?? emptyState();
 
   const update = useCallback((id: string, fn: (state: ChatState) => ChatState) => {
@@ -196,6 +243,28 @@ export function useChat({
     update(sessionId, (state) => ({ ...state, pendingApproval: null }));
   }, [sessionId, update]);
 
+  const receiveApproval = useCallback((
+    event: Record<string, unknown>,
+    targetSessionId = sessionId,
+  ) => {
+    update(targetSessionId, (state) => ({
+      ...state,
+      pendingApproval: {
+        approvalId: String(event.approval_id ?? ""),
+        kind: (event.kind as ApprovalRequest["kind"]) ?? "file_changes",
+        toolName: String(event.tool_name ?? ""),
+        diffs: (event.diffs as FileDiffEntry[]) ?? [],
+        capability: event.capability as CapabilityRequestPayload | undefined,
+        permissionRequest: event.permission_request as PermissionElevationPayload | undefined,
+        canShare: Boolean(event.can_share),
+        subagentId: event.subagent_id ? String(event.subagent_id) : undefined,
+        subagentDescription: event.subagent_description
+          ? String(event.subagent_description)
+          : undefined,
+      },
+    }));
+  }, [sessionId, update]);
+
   const clearUserInput = useCallback(() => {
     update(sessionId, (state) => ({ ...state, pendingUserInput: null }));
   }, [sessionId, update]);
@@ -206,6 +275,9 @@ export function useChat({
 
   const clearSession = useCallback((id: string) => {
     abortRefs.current.get(id)?.abort();
+    const frame = renderFrames.current.get(id);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    renderFrames.current.delete(id);
     setStates((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -213,6 +285,56 @@ export function useChat({
       return next;
     });
   }, []);
+
+  const receiveSteerEvent = useCallback(async (
+    event: Pick<ChatEvent, "type" | "steer_id" | "client_id" | "content" | "message">,
+    targetSessionId = sessionId,
+  ) => {
+    if (event.type === "steer_rejected") {
+      update(targetSessionId, (state) => ({
+        ...state,
+        pendingSteers: state.pendingSteers.filter(
+          (item) => item.steerId !== event.steer_id && item.clientId !== event.client_id,
+        ),
+        error: event.message ?? "Steer was rejected",
+      }));
+      return;
+    }
+    if (event.type !== "steer_consumed" || !event.steer_id) return;
+    const live = statesRef.current[targetSessionId] ?? emptyState();
+    if (live.consumedSteerIds.includes(event.steer_id)) return;
+    const pendingSteer = live.pendingSteers.find(
+      (item) => item.steerId === event.steer_id || item.clientId === event.client_id,
+    );
+    const content = event.content ?? pendingSteer?.content ?? "";
+    update(targetSessionId, (state) => ({
+      ...state,
+      pendingSteers: state.pendingSteers.filter(
+        (item) => item.steerId !== event.steer_id && item.clientId !== event.client_id,
+      ),
+      consumedSteerIds: [...state.consumedSteerIds, event.steer_id!].slice(-128),
+      messages: content
+        ? [...state.messages, {
+            role: "user",
+            content,
+            attachments: pendingSteer?.attachments ?? [],
+            chatImages: pendingSteer?.chatImages ?? [],
+            annotations: pendingSteer?.annotations ?? [],
+          }]
+        : state.messages,
+    }));
+    if (content) {
+      try {
+        await onUserAccepted?.(
+          targetSessionId,
+          content,
+          pendingSteer?.attachments ?? [],
+          pendingSteer?.chatImages ?? [],
+          pendingSteer?.annotations ?? [],
+        );
+      } catch { /* best effort */ }
+    }
+  }, [onUserAccepted, sessionId, update]);
 
   const sendMessage = useCallback(async (
     text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, annotations: ResponseAnnotation[] = [],
@@ -228,7 +350,7 @@ export function useChat({
     // `accepted` event leaves a visible gap where the message exists nowhere.
     const optimisticUser: Message = { role: "user", content: text, attachments, chatImages, annotations };
     update(requestSessionId, (state) => ({
-      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", pendingUserInput: null,
+      ...state, error: null, isLoading: true, streamingSteps: [], streamingText: "", currentTool: undefined, statusMessage: "Waiting for server capacity…", activityStartedAt: Date.now(), pendingUserInput: null,
       messages: [...state.messages, optimisticUser],
     }));
 
@@ -243,8 +365,34 @@ export function useChat({
     const artifacts: Artifact[] = [];
     const fileChanges: FileChangeSet[] = [];
 
+    const flushVisualState = () => {
+      const frame = renderFrames.current.get(requestSessionId);
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame);
+        renderFrames.current.delete(requestSessionId);
+      }
+      update(requestSessionId, (state) => ({
+        ...state,
+        streamingText: finalContent,
+        streamingSteps: [...steps],
+        statusMessage: undefined,
+        currentTool: steps.find((step) => step.status === "executing")?.name,
+      }));
+    };
+    const scheduleVisualState = () => {
+      if (renderFrames.current.has(requestSessionId)) return;
+      const frame = requestAnimationFrame(() => {
+        renderFrames.current.delete(requestSessionId);
+        flushVisualState();
+      });
+      renderFrames.current.set(requestSessionId, frame);
+    };
+
     const commitAssistant = async (opts: { stopped?: boolean } = {}) => {
       if (committed || userInputRequested) return;
+      // Ensure the final committed card includes chunks still waiting for the
+      // next paint; otherwise a fast terminal can lose its final visual tail.
+      flushVisualState();
       const sealed = opts.stopped ? sealSteps(steps) : [...steps];
       steps = sealed;
       if (!finalContent && !sealed.length && !artifacts.length && !fileChanges.length) return;
@@ -267,6 +415,7 @@ export function useChat({
         streamingText: "",
         currentTool: undefined,
         statusMessage: undefined,
+        activityStartedAt: null,
         pendingApproval: opts.stopped ? null : state.pendingApproval,
       }));
       try {
@@ -316,7 +465,9 @@ export function useChat({
               if (!accepted) {
                 accepted = true;
                 update(requestSessionId, (state) => ({
-                  ...state, statusMessage: "Starting agent…",
+                  ...state,
+                  statusMessage: "Starting agent…",
+                  activeTurnId: event.turn_id ?? state.activeTurnId,
                 }));
                 try { onAccepted?.(); } catch { /* best effort */ }
                 try { await onUserAccepted?.(requestSessionId, text, attachments, chatImages, annotations); } catch { /* best effort */ }
@@ -335,6 +486,14 @@ export function useChat({
               streamDone = true;
               break;
             }
+            if (event.type === "steer_consumed" && event.steer_id) {
+              await receiveSteerEvent(event, requestSessionId);
+              continue;
+            }
+            if (event.type === "steer_rejected") {
+              await receiveSteerEvent(event, requestSessionId);
+              continue;
+            }
             if (event.type === "error") {
               // Back-compat: older servers signaled stop as an error.
               if ((event.message ?? "").toLowerCase().includes("interrupted by user")) {
@@ -347,11 +506,7 @@ export function useChat({
               break;
             }
             if (event.type === "approval_request") {
-              update(requestSessionId, (state) => ({ ...state, pendingApproval: {
-                approvalId: event.approval_id ?? "", kind: event.kind ?? "file_changes",
-                toolName: event.tool_name ?? "", diffs: event.diffs ?? [], capability: event.capability,
-                permissionRequest: event.permission_request, canShare: !!event.can_share,
-              } }));
+              receiveApproval(event as unknown as Record<string, unknown>, requestSessionId);
               continue;
             }
             if (event.type === "user_input_request") {
@@ -370,6 +525,7 @@ export function useChat({
                 streamingText: "",
                 statusMessage: undefined,
                 isLoading: false,
+                activityStartedAt: null,
               }));
               if (pausedSteps.length > 0) {
                 try { await onAssistantMessage?.(requestSessionId, "", pausedSteps, [], []); } catch { /* best effort */ }
@@ -383,6 +539,37 @@ export function useChat({
             }
             if (event.type === "status") {
               update(requestSessionId, (state) => ({ ...state, statusMessage: event.message }));
+              continue;
+            }
+            if (event.type === "response_start") {
+              finalContent = "";
+              update(requestSessionId, (state) => ({
+                ...state,
+                streamingText: "",
+                statusMessage: undefined,
+              }));
+              continue;
+            }
+            if (event.type === "response_reset") {
+              const transient = finalContent.trim();
+              if (transient) {
+                steps = applyEvent(steps, {
+                  type: "thinking",
+                  content: transient,
+                });
+              }
+              finalContent = "";
+              update(requestSessionId, (state) => ({
+                ...state,
+                streamingSteps: [...steps],
+                streamingText: "",
+                statusMessage: undefined,
+              }));
+              continue;
+            }
+            if (event.type === "response_delta") {
+              finalContent += event.content ?? "";
+              scheduleVisualState();
               continue;
             }
             if (event.type === "response") {
@@ -411,11 +598,7 @@ export function useChat({
               || event.type === "reflection"
             ) {
               steps = applyEvent(steps, event);
-              update(requestSessionId, (state) => ({
-                ...state, streamingSteps: [...steps],
-                statusMessage: undefined,
-                currentTool: event.type === "tool_call" ? event.name : steps.find((step) => step.status === "executing")?.name,
-              }));
+              scheduleVisualState();
             }
           } catch { /* skip malformed event */ }
         }
@@ -444,6 +627,9 @@ export function useChat({
         }));
       }
     } finally {
+      const frame = renderFrames.current.get(requestSessionId);
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      renderFrames.current.delete(requestSessionId);
       abortRefs.current.delete(requestSessionId);
       update(requestSessionId, (state) => ({
         ...state,
@@ -452,11 +638,222 @@ export function useChat({
         streamingText: "",
         currentTool: undefined,
         statusMessage: undefined,
+        activityStartedAt: null,
+        activeTurnId: null,
         pendingApproval: interrupted ? null : state.pendingApproval,
       }));
     }
     return accepted;
-  }, [baseUrl, sessionId, token, onUserMessage, onUserAccepted, onAssistantMessage, onSessionTitle, update]);
+  }, [baseUrl, sessionId, token, onUserMessage, onUserAccepted, onAssistantMessage, onSessionTitle, receiveApproval, receiveSteerEvent, update]);
+
+  const sendSteer = useCallback(async (
+    text: string,
+    attachments: string[] = [],
+    chatImages: ChatImage[] = [],
+    annotations: ResponseAnnotation[] = [],
+  ) => {
+    const state = statesRef.current[sessionId] ?? emptyState();
+    if (!state.isLoading || !state.activeTurnId) return false;
+    const clientId = crypto.randomUUID();
+    const optimisticId = `pending-${clientId}`;
+    const pending: PendingSteer = {
+      steerId: optimisticId,
+      clientId,
+      content: text,
+      attachments,
+      chatImages,
+      annotations,
+      status: "sending",
+    };
+    update(sessionId, (current) => ({
+      ...current,
+      error: null,
+      pendingSteers: [...current.pendingSteers, pending],
+    }));
+    try {
+      const response = await fetch(`${baseUrl}/sessions/${sessionId}/steer`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          message: text,
+          expected_turn_id: state.activeTurnId,
+          client_id: clientId,
+          attachments,
+          chat_image_ids: chatImages.map((image) => image.id),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.detail?.message ?? body?.detail ?? "Could not steer this turn");
+      }
+      const body = await response.json() as { steer_id: string };
+      update(sessionId, (current) => ({
+        ...current,
+        pendingSteers: current.pendingSteers.map((item) =>
+          item.clientId === clientId
+            ? { ...item, steerId: body.steer_id, status: "pending" }
+            : item,
+        ),
+      }));
+      return true;
+    } catch (error) {
+      update(sessionId, (current) => ({
+        ...current,
+        pendingSteers: current.pendingSteers.filter((item) => item.clientId !== clientId),
+        error: error instanceof Error ? error.message : "Could not steer this turn",
+      }));
+      return false;
+    }
+  }, [baseUrl, sessionId, token, update]);
+
+  const cancelSteer = useCallback(async (steerId: string) => {
+    if (steerId.startsWith("pending-")) return;
+    const response = await fetch(
+      `${baseUrl}/sessions/${sessionId}/steers/${encodeURIComponent(steerId)}`,
+      {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+    if (!response.ok) return;
+    update(sessionId, (state) => ({
+      ...state,
+      pendingSteers: state.pendingSteers.filter((item) => item.steerId !== steerId),
+    }));
+  }, [baseUrl, sessionId, token, update]);
+
+  const activateSteer = useCallback(async (steerId: string) => {
+    if (steerId.startsWith("pending-")) return false;
+    update(sessionId, (state) => ({
+      ...state,
+      pendingSteers: state.pendingSteers.map((item) =>
+        item.steerId === steerId ? { ...item, status: "steering" } : item
+      ),
+    }));
+    const response = await fetch(
+      `${baseUrl}/sessions/${sessionId}/steers/${encodeURIComponent(steerId)}/activate`,
+      {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      update(sessionId, (state) => ({
+        ...state,
+        pendingSteers: state.pendingSteers.map((item) =>
+          item.steerId === steerId ? { ...item, status: "pending" } : item
+        ),
+        error: body?.detail?.message ?? body?.detail ?? "Could not steer this turn",
+      }));
+      return false;
+    }
+    return true;
+  }, [baseUrl, sessionId, token, update]);
+
+  const beginExternalTurn = useCallback((turnId: string, targetSessionId = sessionId) => {
+    update(targetSessionId, (state) => ({
+      ...state,
+      isLoading: true,
+      activeTurnId: turnId || state.activeTurnId,
+      activityStartedAt: state.activityStartedAt ?? Date.now(),
+    }));
+  }, [sessionId, update]);
+
+  const receiveExternalTurnEvent = useCallback((
+    rawEvent: Record<string, unknown>,
+    targetSessionId = sessionId,
+  ) => {
+    const event = rawEvent as ChatEvent;
+    update(targetSessionId, (state) => {
+      if (event.type === "response_start") {
+        return { ...state, streamingText: "", statusMessage: undefined };
+      }
+      if (event.type === "response_reset") {
+        const transient = state.streamingText.trim();
+        return {
+          ...state,
+          streamingSteps: transient
+            ? applyEvent(state.streamingSteps, {
+                type: "thinking",
+                content: transient,
+              })
+            : state.streamingSteps,
+          streamingText: "",
+          statusMessage: undefined,
+        };
+      }
+      if (event.type === "response_delta") {
+        return {
+          ...state,
+          streamingText: state.streamingText + (event.content ?? ""),
+          statusMessage: undefined,
+        };
+      }
+      if (event.type === "response") {
+        return {
+          ...state,
+          streamingText: event.content ?? state.streamingText,
+          statusMessage: undefined,
+        };
+      }
+      if (
+        event.type === "tool_call"
+        || event.type === "tool_output_chunk"
+        || event.type === "tool_result"
+        || event.type === "thinking"
+        || event.type === "assistant_text"
+        || event.type === "reflection"
+      ) {
+        const nextSteps = applyEvent(state.streamingSteps, event);
+        const executing = [...nextSteps].reverse().find((step) => step.status === "executing");
+        return {
+          ...state,
+          streamingSteps: nextSteps,
+          currentTool: executing?.name,
+          statusMessage: undefined,
+        };
+      }
+      return state;
+    });
+  }, [sessionId, update]);
+
+  const commitExternalTurn = useCallback((
+    content: string,
+    targetSessionId = sessionId,
+  ) => {
+    update(targetSessionId, (state) => {
+      const finalContent = content || state.streamingText;
+      if (!finalContent.trim() && state.streamingSteps.length === 0) return state;
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            role: "assistant",
+            content: finalContent,
+            steps: [...state.streamingSteps],
+          },
+        ],
+        streamingSteps: [],
+        streamingText: "",
+        currentTool: undefined,
+        statusMessage: undefined,
+      };
+    });
+  }, [sessionId, update]);
+
+  const finishExternalTurn = useCallback((targetSessionId = sessionId) => {
+    update(targetSessionId, (state) => ({
+      ...state,
+      isLoading: false,
+      activeTurnId: null,
+      activityStartedAt: null,
+    }));
+  }, [sessionId, update]);
 
   const stop = useCallback(async () => {
     // Clear approval UI immediately; server declines pending approval on /chat/stop.
@@ -502,8 +899,13 @@ export function useChat({
   return {
     messages: active.messages, setMessages, setMessagesForSession,
     streamingSteps: active.streamingSteps, currentTool: active.currentTool,
-    streamingText: active.streamingText, statusMessage: active.statusMessage, isLoading: active.isLoading,
+    streamingText: active.streamingText, statusMessage: active.statusMessage,
+    activityStartedAt: active.activityStartedAt, isLoading: active.isLoading,
+    activeTurnId: active.activeTurnId, pendingSteers: active.pendingSteers,
     error: active.error, pendingApproval: active.pendingApproval, pendingUserInput: active.pendingUserInput,
-    clearApproval, clearUserInput, isSessionLoading, clearSession, sendMessage, stop, retryAt, reset,
+    clearApproval, receiveApproval, clearUserInput, isSessionLoading, clearSession,
+    sendMessage, sendSteer, activateSteer, cancelSteer, receiveSteerEvent,
+    beginExternalTurn, receiveExternalTurnEvent, commitExternalTurn,
+    finishExternalTurn, stop, retryAt, reset,
   };
 }

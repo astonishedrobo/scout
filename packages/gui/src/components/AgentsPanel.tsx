@@ -1,0 +1,515 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowUp,
+  Bot,
+  Square,
+  X,
+} from "lucide-react";
+import type {
+  Artifact,
+  FileChangeSet,
+  Message,
+  TaskEvent,
+  ToolStep,
+} from "scout-core";
+import type {
+  SubAgentEvent,
+  SubAgentInfo,
+} from "../hooks/useSubagents";
+import { ActivityOrb } from "./ActivityOrb";
+import { PanelBreadcrumb } from "./ui/PanelBreadcrumb";
+import { IconButton } from "./ui/IconButton";
+import { EmptyState } from "./ui/EmptyState";
+import { ICON_SIZE, ICON_STROKE } from "./ui/iconSystem";
+import { ChatView } from "./ChatView";
+
+interface AgentsPanelProps {
+  active: SubAgentInfo[];
+  done: SubAgentInfo[];
+  selectedId: string | null;
+  detail: SubAgentInfo | null;
+  onSelect: (id: string) => void;
+  onBack: () => void;
+  onStop: (id: string) => Promise<void>;
+  onStopTerminal?: (taskId: string) => Promise<void>;
+  onSend: (id: string, message: string) => Promise<void>;
+  onOpenArtifact?: (artifact: Artifact) => void;
+  onOpenFileChanges?: (changeSet: FileChangeSet) => void;
+  onUndoFileChanges?: (changeSet: FileChangeSet) => void;
+  baseUrl?: string;
+  token?: string | null;
+  terminalTasks?: TaskEvent[];
+}
+
+function isLive(agent?: SubAgentInfo | null) {
+  return agent?.status === "running" || agent?.status === "pending";
+}
+
+function statusLabel(status: string) {
+  if (status === "running" || status === "pending") return "working";
+  if (status === "completed") return "done";
+  return status;
+}
+
+function elapsedLabel(start?: number, end?: number | null, now = Date.now() / 1000) {
+  if (!start) return "";
+  const seconds = Math.max(0, Math.floor((end ?? now) - start));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function AgentRow({
+  agent,
+  onClick,
+}: {
+  agent: SubAgentInfo;
+  onClick: () => void;
+}) {
+  const live = isLive(agent);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  const elapsed = elapsedLabel(agent.created_at, agent.finished_at, now);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-start gap-2.5 rounded-btn px-2.5 py-2 text-left transition-colors hover:bg-scout-lift/60"
+    >
+      {live ? (
+        <ActivityOrb className="-ml-1 -mt-0.5" />
+      ) : (
+        <span
+          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+            agent.status === "failed" ? "bg-scout-error" : "bg-scout-success"
+          }`}
+        />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-label font-medium text-scout-text">
+            {agent.description}
+          </span>
+          <span className="shrink-0 text-micro text-scout-muted">
+            {statusLabel(agent.status)}
+          </span>
+          {elapsed && <span className="shrink-0 text-micro tabular-nums text-scout-muted">{elapsed}</span>}
+        </div>
+        <div className="mt-0.5 line-clamp-2 text-caption text-scout-muted">
+          {agent.summary || agent.last_activity || agent.status}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function TerminalTaskRow({ task, onStop }: { task: TaskEvent; onStop?: () => Promise<void> }) {
+  const live = task.status === "running" || task.status === "queued";
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  const elapsed = elapsedLabel(task.started_at ?? task.created_at, task.finished_at, now);
+  const [stopping, setStopping] = useState(false);
+  return (
+    <div className="flex items-start gap-2.5 rounded-btn px-2.5 py-2">
+      {live ? <ActivityOrb className="-ml-1 -mt-0.5" /> : <span className={`mt-1.5 h-2 w-2 rounded-full ${task.status === "failed" ? "bg-scout-error" : "bg-scout-success"}`} />}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-label font-medium text-scout-text">{task.title}</span>
+          <span className="shrink-0 text-micro text-scout-muted">{live ? "running" : task.status}</span>
+          {elapsed && (
+            <span className="ml-auto shrink-0 text-micro tabular-nums text-scout-muted">{elapsed}</span>
+          )}
+          {live && onStop && (
+            <IconButton
+              label="Stop command"
+              disabled={stopping}
+              onClick={async () => {
+                setStopping(true);
+                try {
+                  await onStop();
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
+              <Square size={13} />
+            </IconButton>
+          )}
+        </div>
+        <div className="line-clamp-2 text-caption text-scout-muted">
+          {task.summary || task.result_preview || "Running command"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function toolStepFromEvent(event: SubAgentEvent): ToolStep {
+  return {
+    kind: "tool",
+    name: String(event.name || "unknown"),
+    args: event.args || {},
+    status: "executing",
+  };
+}
+
+function buildAgentChat(detail: SubAgentInfo) {
+  const messages: Message[] = [];
+  let steps: ToolStep[] = [];
+  let text = "";
+  let artifacts: Artifact[] = [];
+  let fileChanges: FileChangeSet[] = [];
+
+  const flushAssistant = () => {
+    if (!text.trim() && !steps.length && !artifacts.length && !fileChanges.length) return;
+    messages.push({
+      role: "assistant",
+      content: text,
+      steps: [...steps],
+      artifacts: [...artifacts],
+      fileChanges: [...fileChanges],
+    });
+    steps = [];
+    text = "";
+    artifacts = [];
+    fileChanges = [];
+  };
+
+  for (const event of detail.events || []) {
+    const type = event.type;
+    if (type === "subagent_user_message" || type === "subagent_message_queued") {
+      flushAssistant();
+      const content = String(event.content || event.preview || "").trim();
+      if (content) messages.push({ role: "user", content });
+      continue;
+    }
+    if (type === "subagent_response_start") {
+      text = "";
+      continue;
+    }
+    if (type === "subagent_response_reset") {
+      text = "";
+      continue;
+    }
+    if (type === "subagent_text_delta") {
+      text += String(event.content || "");
+      continue;
+    }
+    if (type === "subagent_thinking") {
+      const content = String(event.content || "").trim();
+      if (content) {
+        steps.push({
+          kind: "thinking",
+          name: "think",
+          args: {},
+          status: "complete",
+          title: String(event.title || ""),
+          content,
+          reflection: content,
+        });
+      }
+      continue;
+    }
+    if (type === "subagent_tool_call") {
+      steps.push(toolStepFromEvent(event));
+      continue;
+    }
+    if (type === "subagent_tool_result") {
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (
+          steps[i].kind === "tool"
+          && steps[i].status === "executing"
+          && steps[i].name === String(event.name || steps[i].name)
+        ) {
+          steps[i] = {
+            ...steps[i],
+            status: "complete",
+            output: String(event.output || ""),
+          };
+          break;
+        }
+      }
+      artifacts.push(...(event.artifacts || []));
+      fileChanges.push(...(event.file_changes || []));
+      continue;
+    }
+    if (type === "subagent_text" && event.content) {
+      if (event.final) {
+        text = String(event.content);
+      } else {
+        const content = String(event.content).trim();
+        if (content) {
+          steps.push({
+            kind: "text",
+            name: "text",
+            args: {},
+            status: "complete",
+            content,
+          });
+        }
+      }
+      continue;
+    }
+    if (
+      type === "subagent_completed"
+      || type === "subagent_failed"
+      || type === "subagent_stopped"
+    ) {
+      if (!text.trim() && event.result) text = String(event.result);
+      flushAssistant();
+    }
+  }
+
+  const live = isLive(detail);
+  if (!live) {
+    if (!text.trim() && !messages.some((message) => message.role === "assistant")) {
+      text = detail.result || "";
+    }
+    flushAssistant();
+  }
+
+  return {
+    messages,
+    streamingSteps: live ? steps : [],
+    streamingText: live ? text : "",
+    currentTool: live
+      ? [...steps].reverse().find((step) => step.status === "executing")?.name
+      : undefined,
+  };
+}
+
+export function AgentsPanel({
+  active,
+  done,
+  selectedId,
+  detail,
+  onSelect,
+  onBack,
+  onStop,
+  onStopTerminal,
+  onSend,
+  onOpenArtifact,
+  onOpenFileChanges,
+  onUndoFileChanges,
+  baseUrl = "",
+  token = null,
+  terminalTasks = [],
+}: AgentsPanelProps) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inDetail = Boolean(selectedId && detail);
+  const live = isLive(detail);
+  const canMessage = Boolean(
+    detail && detail.status !== "expired" && detail.can_message !== false,
+  );
+  const chat = useMemo(
+    () => (detail ? buildAgentChat(detail) : null),
+    [detail],
+  );
+
+  useEffect(() => {
+    setDraft("");
+    setError(null);
+  }, [selectedId]);
+
+  const submit = async () => {
+    if (!detail || !draft.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await onSend(detail.agent_id, draft.trim());
+      setDraft("");
+      inputRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-scout-canvas">
+      <PanelBreadcrumb
+        // In detail view the first crumb navigates back, which is what the
+        // ArrowLeft button in the old header did.
+        crumbs={
+          inDetail
+            ? [{ label: "Agents", onClick: onBack }, { label: detail!.description }]
+            : [{ label: "Agents" }]
+        }
+        actions={
+          inDetail && live ? (
+            <IconButton
+              label="Stop agent"
+              disabled={stopping}
+              onClick={async () => {
+                setStopping(true);
+                try {
+                  await onStop(detail!.agent_id);
+                } finally {
+                  setStopping(false);
+                }
+              }}
+            >
+              <Square size={14} />
+            </IconButton>
+          ) : undefined
+        }
+      />
+
+      {!inDetail && (
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+          <div className="sticky top-0 z-10 px-2 pb-1.5 pt-1 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
+            Active
+          </div>
+          {active.length ? (
+            active.map((agent) => (
+              <AgentRow
+                key={agent.agent_id}
+                agent={agent}
+                onClick={() => onSelect(agent.agent_id)}
+              />
+            ))
+          ) : (
+            <EmptyState size="sm" body="Nothing running right now." />
+          )}
+          {terminalTasks.filter((task) => task.status === "running" || task.status === "queued").map((task) => <TerminalTaskRow key={task.task_id} task={task} onStop={onStopTerminal ? () => onStopTerminal(task.task_id) : undefined} />)}
+          <div className="sticky top-0 z-10 mt-4 px-2 pb-1.5 pt-1 text-micro font-medium text-scout-muted/55 backdrop-blur-md">
+            Done{done.length ? ` · ${done.length}` : ""}
+          </div>
+          {done.length ? (
+            done.map((agent) => (
+              <AgentRow
+                key={agent.agent_id}
+                agent={agent}
+                onClick={() => onSelect(agent.agent_id)}
+              />
+            ))
+          ) : (
+            <EmptyState size="sm" body="No finished agents yet." />
+          )}
+          {terminalTasks.filter((task) => !["running", "queued"].includes(task.status)).map((task) => <TerminalTaskRow key={task.task_id} task={task} />)}
+        </div>
+      )}
+
+      {inDetail && detail && chat && (
+        <>
+          <ChatView
+            // Read-only transcript: nothing is sent from here, so no anchoring.
+            sessionId={null}
+            messages={chat.messages}
+            streamingSteps={chat.streamingSteps}
+            streamingText={chat.streamingText}
+            currentTool={chat.currentTool}
+            statusMessage={detail.last_activity || "Working"}
+            activityStartedAt={detail.created_at ? detail.created_at * 1000 : null}
+            isLoading={live}
+            onOpenArtifact={onOpenArtifact}
+            onOpenFileChanges={onOpenFileChanges}
+            onUndoFileChanges={onUndoFileChanges}
+            baseUrl={baseUrl}
+            token={token}
+          />
+          <div className="shrink-0 border-t border-scout-hairline-faint bg-scout-canvas/95 p-2.5">
+            {error && (
+              <div
+                className="mb-1.5 rounded-btn border border-scout-error/25 bg-scout-error-muted px-2.5 py-1.5 text-caption text-scout-error"
+                role="alert"
+              >
+                {error}
+              </div>
+            )}
+            {canMessage ? (
+              <div
+                className={`relative flex flex-col overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel shadow-composer transition-all focus-within:border-scout-muted/50 focus-within:ring-1 focus-within:ring-scout-muted/25 ${
+                  sending ? "opacity-70" : ""
+                }`}
+              >
+                <textarea
+                  ref={inputRef}
+                  aria-label={live ? "Redirect this agent" : "Follow up with this agent"}
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  rows={2}
+                  placeholder={live ? "Redirect or add instructions…" : "Follow up with this agent…"}
+                  className="min-h-[44px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-label leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/70"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void submit();
+                    }
+                  }}
+                />
+                <div className="flex items-center justify-end px-2 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => void submit()}
+                    disabled={sending || !draft.trim()}
+                    className={`flex h-8 w-8 items-center justify-center rounded-full transition active:scale-[0.98] disabled:opacity-35 ${
+                      draft.trim()
+                        ? "bg-scout-text text-scout-bg hover:opacity-90"
+                        : "bg-scout-lift text-scout-muted"
+                    }`}
+                    aria-label="Send to agent"
+                  >
+                    <ArrowUp size={ICON_SIZE.toolbar} strokeWidth={ICON_STROKE.primary} />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-btn border border-scout-hairline-faint bg-scout-panel/60 px-3 py-2 text-caption text-scout-muted">
+                This agent’s context has expired.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function SubagentStatusStrip({
+  active,
+  onOpen,
+}: {
+  active: SubAgentInfo[];
+  onOpen: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!active.length) return null;
+  const label =
+    active.length === 1
+      ? `${active[0].description} · ${active[0].last_activity || "working"}`
+      : `${active.length} tasks working`;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mx-auto mb-1 flex w-full max-w-[46rem] items-center gap-2 px-4 text-left text-caption text-scout-muted hover:text-scout-text"
+    >
+      <ActivityOrb />
+      <span className="truncate">{label}</span>
+      {active.length === 1 && (
+        <span className="shrink-0 tabular-nums text-scout-muted">
+          {elapsedLabel(active[0].created_at, undefined, now)}
+        </span>
+      )}
+      <span className="shrink-0 text-scout-accent-cta">View</span>
+    </button>
+  );
+}

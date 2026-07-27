@@ -101,3 +101,15 @@ def test_cancel_execution_is_scoped_to_execution_user_and_session(monkeypatch):
 
     assert manager.cancel_execution("exec", "u1", "s1") == 1
     assert finished == [matching]
+
+
+def test_cancel_process_is_scoped_to_process_owner(monkeypatch):
+    manager = UnifiedExecManager(ExecutionConfig())
+    matching = SimpleNamespace(execution_id="exec", user_id="u1", session_id="s1")
+    manager._processes = {17: matching}
+    finished = []
+    monkeypatch.setattr(manager, "_finish_entry", finished.append)
+
+    assert not manager.cancel_process(17, "u2", "s1")
+    assert manager.cancel_process(17, "u1", "s1")
+    assert finished == [matching]

@@ -1,7 +1,7 @@
 /**
  * Scout deploy wizard — single-screen Ink app.
  *
- * Steps: Providers → Default model → Access → Review. Each provider on
+ * Steps: Providers → Settings → Integrations → Review. Each provider on
  * the first step is a menu — Enter opens it to nested Model / API key
  * chips, space toggles it on/off. Navigation is never forced through
  * one path: ↑ from the top of any screen focuses the step bar (←/→ to
@@ -13,7 +13,7 @@
 import React, { useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { theme } from "scout-core/theme";
-import { modelId, PROVIDER_IDS, type DeploymentDraft, type ProviderId } from "../deploy.js";
+import { modelId, PROVIDER_IDS, type DeploymentDraft, type McpBootstrapServer, type ProviderId } from "../deploy.js";
 import { CardRow, Field, KeyHints, SelectList, StepTrail, ToggleRow, useTerminalSize, type KeyHint } from "./widgets.js";
 
 export type WizardOutcome = "apply" | "save" | "quit";
@@ -37,7 +37,7 @@ interface DeployAppProps {
   onDone: (outcome: WizardOutcome, draft: DeploymentDraft) => void;
 }
 
-const STEPS = ["Providers", "Settings", "Review"];
+const STEPS = ["Providers", "Settings", "Integrations", "Review"];
 const SETTINGS_FIELDS = 4;
 
 interface ProviderMeta {
@@ -140,6 +140,11 @@ export const DeployApp: React.FC<DeployAppProps> = ({
   const [workspaceText, setWorkspaceText] = useState(initialDraft.workspaceRoot);
   const [dataText, setDataText] = useState(initialDraft.dataDir);
   const [accessFocus, setAccessFocus] = useState(0);
+  const [mcpName, setMcpName] = useState("");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [mcpImage, setMcpImage] = useState("");
+  const [mcpCommand, setMcpCommand] = useState("");
+  const [mcpFocus, setMcpFocus] = useState(0);
   const [warning, setWarning] = useState("");
   const [fieldError, setFieldError] = useState("");
   // Step bar focus: ↑ from a screen's top row lands here.
@@ -161,10 +166,10 @@ export const DeployApp: React.FC<DeployAppProps> = ({
   const defaultExplicit = enabled.some((id) => providerDone(id) && modelId(id, draft.providers[id].model) === draft.defaultModel);
   const reviewReady = configComplete && (configuredCount < 2 || defaultExplicit);
 
-  const step = screen === "access" ? 1 : screen === "review" ? 2 : 0;
-  const reachable = [true, true, reviewReady];
+  const step = screen === "access" ? 1 : screen === "mcp" || screen.startsWith("mcp-add") ? 2 : screen === "review" ? 3 : 0;
+  const reachable = [true, true, configComplete, reviewReady];
 
-  const onFieldScreen = screen.startsWith("key:") || screen === "access" || (screen.startsWith("model:") && customModel);
+  const onFieldScreen = screen.startsWith("key:") || screen === "access" || screen.startsWith("mcp-add") || (screen.startsWith("model:") && customModel);
 
   const modelOptions = useMemo(() => {
     if (!meta || !currentProvider) return [];
@@ -195,6 +200,13 @@ export const DeployApp: React.FC<DeployAppProps> = ({
     }
     if (target.startsWith("key:")) setKeyText(from.providers[target.split(":")[1] as ProviderId].apiKey);
     if (target === "access") setAccessFocus(0);
+    if (target.startsWith("mcp-add")) {
+      setMcpName("");
+      setMcpUrl("");
+      setMcpImage("");
+      setMcpCommand("");
+      setMcpFocus(0);
+    }
     setScreen(target);
   };
 
@@ -204,7 +216,9 @@ export const DeployApp: React.FC<DeployAppProps> = ({
     if (screen.startsWith("model:") || screen.startsWith("key:")) return enterScreen(`menu:${currentProvider}`);
     if (screen.startsWith("menu:")) return enterScreen("providers");
     if (screen === "access") return enterScreen("providers");
-    if (screen === "review") return enterScreen("access");
+    if (screen.startsWith("mcp-add")) return enterScreen("mcp");
+    if (screen === "mcp") return enterScreen("access");
+    if (screen === "review") return enterScreen("mcp");
     finish("quit"); // providers
   };
 
@@ -220,6 +234,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
     }
     if (stepIndex === 0) return enterScreen("providers");
     if (stepIndex === 1) return enterScreen("access");
+    if (stepIndex === 2) return enterScreen("mcp");
     const next = { ...draft };
     // Single configured provider: its model is the default, no d needed.
     if (!defaultExplicit) {
@@ -238,6 +253,10 @@ export const DeployApp: React.FC<DeployAppProps> = ({
     setPortText(String(fresh.port));
     setWorkspaceText(fresh.workspaceRoot);
     setDataText(fresh.dataDir);
+    setMcpName("");
+    setMcpUrl("");
+    setMcpImage("");
+    setMcpCommand("");
     setCustomModel(false);
     setWarning("");
     setFieldError("");
@@ -257,7 +276,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
   // collide with typing. Esc backs out of field screens (selector screens
   // handle Esc themselves).
   useInput((input, key) => {
-    if (key.ctrl && input === "n") return jumpTo(Math.min(step + 1, 2));
+    if (key.ctrl && input === "n") return jumpTo(Math.min(step + 1, 3));
     if (key.ctrl && input === "p") return jumpTo(Math.max(step - 1, 0));
     if (barFocus) {
       if (key.leftArrow) return setBarCursor((prev) => (prev + STEPS.length - 1) % STEPS.length);
@@ -274,6 +293,17 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       if (key.downArrow) {
         setFieldError("");
         return setAccessFocus(Math.min(SETTINGS_FIELDS - 1, accessFocus + 1));
+      }
+    }
+    if (screen.startsWith("mcp-add")) {
+      const fields = screen === "mcp-add-container" ? 3 : 2;
+      if (key.upArrow) {
+        setFieldError("");
+        return mcpFocus === 0 ? focusBar() : setMcpFocus(mcpFocus - 1);
+      }
+      if (key.downArrow) {
+        setFieldError("");
+        return setMcpFocus(Math.min(fields - 1, mcpFocus + 1));
       }
     }
     if (key.upArrow && onFieldScreen) return focusBar();
@@ -385,7 +415,72 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       next.defaultModel = modelId(first, next.providers[first].model);
     }
     persist(next);
-    enterScreen("review", next);
+    enterScreen("mcp", next);
+  };
+
+  const mcpId = (name: string) => {
+    const base = name.toLowerCase().trim().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "mcp";
+    let id = base.slice(0, 64);
+    let suffix = 2;
+    while (draft.mcpServers.some((server) => server.id === id)) id = `${base.slice(0, 60)}-${suffix++}`;
+    return id;
+  };
+
+  const addMcp = () => {
+    const isContainer = screen === "mcp-add-container";
+    const lastField = isContainer ? 2 : 1;
+    if (mcpFocus < lastField) return setMcpFocus(mcpFocus + 1);
+    const name = mcpName.trim();
+    if (!name) {
+      setMcpFocus(0);
+      return setFieldError("Integration name is required.");
+    }
+    let server: McpBootstrapServer;
+    if (isContainer) {
+      const image = mcpImage.trim();
+      if (!image.includes("@sha256:") || !/@sha256:[a-fA-F0-9]{64}$/.test(image)) {
+        setMcpFocus(1);
+        return setFieldError("Use an immutable image pinned by a 64-character sha256 digest.");
+      }
+      const parts = mcpCommand.trim().split(/\s+/).filter(Boolean);
+      server = {
+        id: mcpId(name), name, transport: "container_stdio", image,
+        command: parts.length ? [parts[0]!] : [], args: parts.slice(1),
+        availability: "everyone", enabled: true, auth_mode: "none",
+      };
+    } else {
+      const url = mcpUrl.trim();
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return setFieldError("Enter a valid http(s) MCP URL.");
+      }
+      if (!["http:", "https:"].includes(parsed.protocol)) return setFieldError("MCP URL must use http or https.");
+      server = {
+        id: mcpId(name), name, transport: "streamable_http", url,
+        availability: "everyone", enabled: true, auth_mode: "none",
+      };
+    }
+    const next = { ...draft, mcpServers: [...draft.mcpServers, server] };
+    persist(next);
+    enterScreen("mcp", next);
+  };
+
+  const submitMcp = (index: number) => {
+    if (index === draft.mcpServers.length) return enterScreen("mcp-add-remote");
+    if (index === draft.mcpServers.length + 1) return enterScreen("mcp-add-container");
+    if (index === draft.mcpServers.length + 2) return jumpTo(3);
+    const next = {
+      ...draft,
+      mcpServers: draft.mcpServers.map((server, i) => i === index ? { ...server, enabled: !server.enabled } : server),
+    };
+    persist(next);
+  };
+
+  const removeMcp = (index: number) => {
+    if (index >= draft.mcpServers.length) return;
+    persist({ ...draft, mcpServers: draft.mcpServers.filter((_, i) => i !== index) });
   };
 
   /* ── Screens ─────────────────────────────────────────── */
@@ -581,6 +676,92 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       );
     }
 
+    if (screen === "mcp") {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text color={theme.text.primary} bold>
+            MCP integrations <Text color={theme.text.secondary} bold={false}>· optional</Text>
+          </Text>
+          <Text color={theme.text.secondary}>
+            Install remote tools for this deployment. Enter toggles an integration; d removes it.
+          </Text>
+          <SelectList
+            key={`mcp-${generation}-${draft.mcpServers.map((server) => `${server.id}:${server.enabled}`).join(",")}`}
+            options={[
+              ...draft.mcpServers.map((server) => ({
+                label: server.name,
+                detail: server.url ?? server.image,
+                badge: server.enabled ? "enabled" : "disabled",
+              })),
+              { label: "Add remote MCP server…", detail: "Streamable HTTP" },
+              { label: "Add container MCP server…", detail: "isolated stdio · advanced" },
+              { label: "Continue to review", detail: `${draft.mcpServers.filter((server) => server.enabled).length} enabled` },
+            ]}
+            onSubmit={submitMcp}
+            onMark={removeMcp}
+            onBack={goBack}
+            onUp={focusBar}
+            isActive={widgetsActive}
+          />
+        </Box>
+      );
+    }
+
+    if (screen.startsWith("mcp-add")) {
+      const isContainer = screen === "mcp-add-container";
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text color={theme.text.primary} bold>Add {isContainer ? "container" : "remote"} MCP server</Text>
+          <Field
+            label="Integration name"
+            value={mcpName}
+            placeholder="e.g. Linear"
+            focused={widgetsActive && mcpFocus === 0}
+            error={mcpFocus === 0 ? fieldError : undefined}
+            onChange={(value) => { setMcpName(value); setFieldError(""); }}
+            onSubmit={addMcp}
+          />
+          {isContainer ? (
+            <>
+              <Field
+                label="Container image — digest pin required"
+                value={mcpImage}
+                placeholder="ghcr.io/example/server@sha256:…"
+                focused={widgetsActive && mcpFocus === 1}
+                error={mcpFocus === 1 ? fieldError : undefined}
+                onChange={(value) => { setMcpImage(value); setFieldError(""); }}
+                onSubmit={addMcp}
+              />
+              <Field
+                label="Command and arguments — optional"
+                value={mcpCommand}
+                placeholder="node /app/server.js"
+                focused={widgetsActive && mcpFocus === 2}
+                error={mcpFocus === 2 ? fieldError : undefined}
+                onChange={(value) => { setMcpCommand(value); setFieldError(""); }}
+                onSubmit={addMcp}
+              />
+            </>
+          ) : (
+            <Field
+              label="Streamable HTTP URL"
+              value={mcpUrl}
+              placeholder="https://example.com/mcp"
+              focused={widgetsActive && mcpFocus === 1}
+              error={mcpFocus === 1 ? fieldError : undefined}
+              onChange={(value) => { setMcpUrl(value); setFieldError(""); }}
+              onSubmit={addMcp}
+            />
+          )}
+          <Text color={theme.text.secondary}>
+            {isContainer
+              ? "Runs without network, caps, or root; mounts that user's workspace only."
+              : "Authentication is configured after launch in Admin → Tools or by each user in Settings → Integrations."}
+          </Text>
+        </Box>
+      );
+    }
+
     // review
     const summary: [string, string][] = [
       ...enabled.map((id): [string, string] => [META[id].label, modelId(id, draft.providers[id].model)]),
@@ -589,6 +770,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       ["Admin users", draft.adminUsers || "first registered user"],
       ["Workspace", `${draft.workspaceRoot} — users/ + shared/, owned by UID 1000`],
       ["Server data", draft.dataDir || "Docker volume (scout-data)"],
+      ["MCP tools", draft.mcpServers.length ? `${draft.mcpServers.filter((server) => server.enabled).length} enabled` : "none"],
       ["Draft", draftPath],
     ];
     return (
@@ -643,7 +825,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       : onFieldScreen
         ? [
             { keys: "↵", label: "continue" },
-            ...(screen === "access" ? [{ keys: "↑/↓", label: "field" }] : []),
+            ...(screen === "access" || screen.startsWith("mcp-add") ? [{ keys: "↑/↓", label: "field" }] : []),
             ...stepHints,
             { keys: "esc", label: "back" },
           ]
@@ -657,6 +839,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
               : [
                   { keys: screen.startsWith("menu:") || screen === "review" ? "←/→" : "↑/↓", label: "select" },
                   { keys: "↵", label: "confirm" },
+                  ...(screen === "mcp" ? [{ keys: "d", label: "remove" }] : []),
                   ...(screen.startsWith("model:") ? [{ keys: "d", label: "set default" }] : []),
                 ]),
             ...stepHints,

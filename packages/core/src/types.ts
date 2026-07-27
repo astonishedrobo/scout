@@ -40,9 +40,38 @@ export interface ScoutConfig {
 
 // ── Chat messages ────────────────────────────────────────────────
 
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+
+/** Durable lifecycle record rendered inline in the conversation. */
+export interface TaskEvent {
+  task_id: string;
+  task_type: "agent" | "terminal";
+  title: string;
+  status: TaskStatus;
+  created_at?: number;
+  started_at?: number;
+  finished_at?: number | null;
+  summary?: string;
+  result_preview?: string;
+  error?: string;
+}
+
+/** Compact chronological completion signal, separate from a task's live card. */
+export interface TaskNotice {
+  task_id: string;
+  title: string;
+  status: TaskStatus;
+  summary?: string;
+  result_preview?: string;
+}
+
 export interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
+  /** A durable background-work lifecycle row. */
+  task?: TaskEvent;
+  /** Claude-style terminal notification when a background task ends. */
+  taskNotice?: TaskNotice;
   /** Completed tool steps (populated after streaming ends). */
   steps?: ToolStep[];
   artifacts?: Artifact[];
@@ -82,7 +111,7 @@ export interface ChatImage {
   url: string;
 }
 
-export type ArtifactRenderer = "markdown" | "html" | "image" | "csv" | "json" | "code" | "text";
+export type ArtifactRenderer = "markdown" | "html" | "image" | "csv" | "json" | "code" | "text" | "pdf";
 
 export interface Artifact {
   id: string;
@@ -98,7 +127,12 @@ export interface Artifact {
 
 // ── Chat events (server → client via SSE) ────────────────────────
 
-export type ToolStepStatus = "executing" | "complete" | "interrupted";
+/**
+ * `failed` is derived on the client (see `toolFailed` in useChat): the server
+ * reports a failed tool as an ordinary result with the error text in `output`,
+ * so without this a failed exec_command was pixel-identical to a successful one.
+ */
+export type ToolStepStatus = "executing" | "complete" | "interrupted" | "failed";
 /** Chronological turn blocks. `reflection` is a legacy alias for `thinking`. */
 export type ActivityStepKind = "tool" | "thinking" | "text" | "reflection";
 
@@ -165,13 +199,21 @@ export interface ChatEvent {
     | "tool_call"
     | "tool_result"
     | "tool_output_chunk"
+    | "response_start"
+    | "response_reset"
+    | "response_delta"
     | "response"
     | "error"
     | "interrupted"
     | "approval_request"
     | "user_input_request"
-    | "session_title";
+    | "session_title"
+    | "steer_consumed"
+    | "steer_rejected";
   session_id?: string;
+  turn_id?: string;
+  steer_id?: string;
+  client_id?: string;
   name?: string;
   args?: Record<string, unknown>;
   output?: string;

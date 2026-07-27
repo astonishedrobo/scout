@@ -622,10 +622,14 @@ export const App: React.FC<AppProps> = ({ cwd, configPath }) => {
 
         // Restore server-side agent context
         if (baseUrl) {
-          const simple = restored.map((m) => ({
-            role: m.role,
-            content: m.content,
-          }));
+          const simple = restored
+            .filter((m): m is typeof m & { role: "user" | "assistant" } =>
+              m.role === "user" || m.role === "assistant"
+            )
+            .map((m) => ({
+              role: m.role,
+              content: m.content,
+            }));
           await restoreServerSession(baseUrl, simple);
         }
 

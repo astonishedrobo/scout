@@ -1,11 +1,3 @@
-// Single source of truth for version + shortcuts, rendered by both
-// HelpDialog and SettingsPanel so the two never drift apart.
+// The shortcut list moved to `shortcuts.ts`, which is also what registers the
+// live accelerators — so a key cannot be documented one way and behave another.
 export const APP_VERSION = "v0.1.0";
-
-export const SHORTCUTS = [
-  { keys: "Enter", desc: "Send message" },
-  { keys: "Shift + Enter", desc: "New line in input" },
-  { keys: "/", desc: "Open commands menu" },
-  { keys: "@", desc: "Reference a file" },
-  { keys: "Esc", desc: "Dismiss dropdowns" },
-];

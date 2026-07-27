@@ -1,18 +1,16 @@
 import { useState } from "react";
-import { Check, CheckCheck, XCircle, MessageSquare, Share2, Shield } from "lucide-react";
+import { Check, CheckCheck, XCircle, MessageSquareText, Share2, Shield } from "lucide-react";
 import type { ApprovalRequest } from "../hooks/useChat";
 import { CenterModal } from "./ui/CenterModal";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { DiffViewer } from "./DiffViewer";
+import { Badge } from "./ui/Badge";
 
 interface ApprovalModalProps {
   request: ApprovalRequest;
   onRespond: (action: string, feedback?: string, saveExecpolicy?: boolean) => void;
 }
-
-const actionBtn =
-  "flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-transparent transition-all";
 
 export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
   const [suggestMode, setSuggestMode] = useState(false);
@@ -35,34 +33,34 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             <Shield size={18} />
           </div>
           <div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
-            <p className="text-sm text-scout-text">{pr.reason}</p>
+            <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
+            <p className="text-label text-scout-text">{pr.reason}</p>
           </div>
           {pr.network_domains && pr.network_domains.length > 0 && (
             <div>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Network domains</span>
-              <p className="text-sm font-mono text-scout-muted">{pr.network_domains.join(", ")}</p>
+              <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Network domains</span>
+              <p className="text-label font-mono text-scout-muted">{pr.network_domains.join(", ")}</p>
             </div>
           )}
           <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline-faint">
-            <button
+            <Button
               onClick={() => onRespond("allow_once")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
+              tone="success" variant="filled" surface="panel"
             >
               <Check size={16} /> Allow Once
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => onRespond("allow_session")}
-              className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
+              variant="filledInverse" surface="panel"
             >
               <CheckCheck size={16} /> Allow for Session
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => onRespond("deny")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
+              tone="danger" variant="filled" surface="panel" className="ml-auto"
             >
               <XCircle size={16} /> Deny
-            </button>
+            </Button>
           </div>
         </div>
       </CenterModal>
@@ -85,28 +83,28 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             <Shield size={18} />
           </div>
           <div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Capability</span>
-            <p className="text-sm font-mono text-scout-text">{cap.capability}</p>
+            <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Capability</span>
+            <p className="text-label font-mono text-scout-text">{cap.capability}</p>
           </div>
           <div>
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
-            <p className="text-sm text-scout-text">{cap.reason}</p>
+            <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Reason</span>
+            <p className="text-label text-scout-text">{cap.reason}</p>
           </div>
           {cap.command_summary && (
             <div>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Command</span>
-              <p className="text-sm font-mono text-scout-muted">{cap.command_summary}</p>
+              <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Command</span>
+              <p className="text-label font-mono text-scout-muted">{cap.command_summary}</p>
             </div>
           )}
           {Object.keys(cap.scope).length > 0 && (
             <div>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-scout-muted">Scope</span>
-              <pre className="text-xs font-mono bg-scout-code-bg rounded-xl p-2 mt-1 overflow-x-auto border border-scout-hairline-faint">
+              <span className="text-micro font-semibold uppercase tracking-wider text-scout-muted">Scope</span>
+              <pre className="text-caption font-mono bg-scout-code-bg rounded-btn p-2 mt-1 overflow-x-auto border border-scout-hairline-faint">
                 {JSON.stringify(cap.scope, null, 2)}
               </pre>
             </div>
           )}
-          <p className="text-xs text-scout-muted">
+          <p className="text-caption text-scout-muted">
             Approving grants this capability only — execution remains sandboxed.
           </p>
           {cap.command_summary && (
@@ -117,28 +115,28 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
                 onChange={(e) => setSaveExecpolicy(e.target.checked)}
                 className="accent-scout-text w-3.5 h-3.5"
               />
-              <span className="text-xs text-scout-muted">Save to execpolicy (always allow this prefix)</span>
+              <span className="text-caption text-scout-muted">Save to execpolicy (always allow this prefix)</span>
             </label>
           )}
           <div className="flex flex-wrap gap-2 pt-2 border-t border-scout-hairline-faint">
-            <button
+            <Button
               onClick={() => onRespond("allow_once")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
+              tone="success" variant="filled" surface="panel"
             >
               <Check size={16} /> Allow Once
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => onRespond("allow_session", undefined, saveExecpolicy)}
-              className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
+              variant="filledInverse" surface="panel"
             >
               <CheckCheck size={16} /> Allow for Session
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => onRespond("deny")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
+              tone="danger" variant="filled" surface="panel" className="ml-auto"
             >
               <XCircle size={16} /> Deny
-            </button>
+            </Button>
           </div>
         </div>
       </CenterModal>
@@ -157,12 +155,12 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
       closeOnBackdrop={false}
     >
       {isPromotion && (
-        <p className="px-5 pt-4 text-sm text-scout-muted">
+        <p className="px-5 pt-4 text-label text-scout-muted">
           Promote staged execution output to your workspace? Files below were created in an isolated staging area.
         </p>
       )}
 
-      <div className="px-5 py-4 space-y-4 max-h-[50vh] overflow-y-auto">
+      <div className="space-y-4 px-5 py-4">
         {request.diffs.map((entry, i) => {
           const statusColor =
             entry.status === "added"
@@ -174,14 +172,14 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
             entry.status === "added" ? "NEW" : entry.status === "deleted" ? "DELETE" : "MODIFIED";
 
           return (
-            <section key={i} className="overflow-hidden rounded-card border border-scout-hairline-faint bg-scout-panel/60">
-              <div className="flex items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/75 px-3 py-2.5">
-                <span className={`text-[11px] font-semibold tracking-wide px-2 py-0.5 rounded-lg border border-scout-hairline-faint ${statusColor}`}>
+            <section key={i} className="overflow-hidden rounded-btn border border-scout-hairline-faint bg-scout-panel/50">
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-scout-hairline-faint bg-scout-panel/95 px-3 py-2.5 backdrop-blur-sm">
+                <Badge uppercase className={`border border-scout-hairline-faint ${statusColor}`}>
                   {statusLabel}
-                </span>
-                <span className="min-w-0 truncate text-xs text-scout-text font-mono">{entry.path}</span>
+                </Badge>
+                <span className="min-w-0 truncate text-caption text-scout-text font-mono">{entry.path}</span>
               </div>
-              <DiffViewer diff={entry.diff} maxHeight="14rem" />
+              <DiffViewer diff={entry.diff} maxHeight="14rem" showFilenames={false} />
             </section>
           );
         })}
@@ -190,45 +188,45 @@ export function ApprovalModal({ request, onRespond }: ApprovalModalProps) {
       <div className="px-5 py-4 border-t border-scout-hairline-faint">
         {!suggestMode ? (
           <div className="flex flex-wrap gap-2">
-            <button
+            <Button
               onClick={() => onRespond("yes")}
-              className={`${actionBtn} bg-scout-success-muted text-scout-success border-scout-success/15 hover:border-scout-success/30`}
+              tone="success" variant="filled" surface="panel"
             >
               <Check size={16} /> {isPromotion ? "Promote" : "Approve"}
-            </button>
+            </Button>
             {!isPromotion && (
-              <button
+              <Button
                 onClick={() => onRespond("always")}
-                className={`${actionBtn} bg-scout-lift/80 text-scout-text border-scout-hairline-faint hover:bg-scout-lift`}
+                variant="filledInverse" surface="panel"
               >
                 <CheckCheck size={16} /> Always Approve
-              </button>
+              </Button>
             )}
             {request.canShare && !isPromotion && (
-              <button
+              <Button
                 onClick={() => onRespond("shared")}
-                className={`${actionBtn} bg-scout-lift/80 text-scout-cyan border-scout-hairline-faint hover:bg-scout-lift`}
+                tone="info" variant="filled" surface="panel"
                 title="Move into the shared team repo"
               >
                 <Share2 size={16} /> Approve &amp; Save to Shared
-              </button>
+              </Button>
             )}
-            <button
+            <Button
               onClick={() => setSuggestMode(true)}
-              className={`${actionBtn} text-scout-muted hover:text-scout-text hover:bg-scout-lift/80`}
+              variant="filledInverse" surface="panel"
             >
-              <MessageSquare size={16} /> Suggest Changes
-            </button>
-            <button
+              <MessageSquareText size={16} /> Suggest Changes
+            </Button>
+            <Button
               onClick={() => onRespond("no")}
-              className={`${actionBtn} bg-scout-error-muted text-scout-error border-scout-error/15 hover:border-scout-error/30 ml-auto`}
+              tone="danger" variant="filled" surface="panel" className="ml-auto"
             >
               <XCircle size={16} /> Reject
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">
-            <p className="text-sm text-scout-text">Describe the changes you&apos;d like:</p>
+            <p className="text-label text-scout-text">Describe the changes you&apos;d like:</p>
             <div className="flex gap-2">
               <Input
                 autoFocus

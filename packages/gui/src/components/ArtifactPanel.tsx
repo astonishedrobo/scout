@@ -1,45 +1,62 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Artifact } from "scout-core";
-import { Check, Copy, Download, RefreshCw, X } from "lucide-react";
+import { Check, Copy, Download, RefreshCw } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PixelDazed } from "./PixelArt";
 import { PixelPet } from "./PixelPet";
-import { PanelExpandButton } from "./ui/PanelExpandButton";
+import { PanelBreadcrumb, pathCrumbs } from "./ui/PanelBreadcrumb";
+import { IconButton } from "./ui/IconButton";
+import { Badge } from "./ui/Badge";
+import { SourceViewer } from "./SourceViewer";
 
 const artifactScrollPositions = new Map<string, number>();
+const preferredRichModes = new Map<"markdown" | "html", "preview" | "source">();
 
 export function ArtifactPanel({
   artifact,
   baseUrl,
   token,
-  onClose,
   embedded = false,
   compact = false,
   scope = null,
   contentEndpoint = "/artifacts/content",
-  expanded = false,
-  onToggleExpand,
+  trailingActions,
+  onRefresh,
+  adjacentPane,
+  contentHidden = false,
 }: {
   artifact: Artifact;
   baseUrl: string;
   token: string | null;
-  onClose: () => void;
   embedded?: boolean;
   compact?: boolean;
   /** Disambiguates identical relative paths in personal and shared workspaces. */
   scope?: string | null;
   /** Content API used by chat artifacts or the workspace browser. */
   contentEndpoint?: string;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
+  /**
+   * Controls from the surface hosting this preview, placed first in the
+   * breadcrumb's action row. The workspace browser puts its tree toggle and
+   * refresh here so the nested preview does not need a second breadcrumb.
+   */
+  /** Host actions pinned after the file operations, at the right edge. */
+  trailingActions?: React.ReactNode;
+  /** Optional host refresh, used by the workspace browser to refresh its tree too. */
+  onRefresh?: () => void | Promise<void>;
+  /** Optional pane rendered beside the preview, below the shared full-width header. */
+  adjacentPane?: React.ReactNode;
+  /** Lets compact hosts show the adjacent pane without duplicating the header. */
+  contentHidden?: boolean;
 }) {
   const artifactKey = `${scope ?? "workspace"}:${artifact.path}`;
   const [content, setContent] = useState("");
+  const [previewContent, setPreviewContent] = useState("");
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [viewMode, setViewMode] = useState<"preview" | "source">("preview");
   const scrollRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestRef = useRef(0);
@@ -84,6 +101,7 @@ export function ArtifactPanel({
     setIsRefreshing(true);
     if (!sameArtifact) {
       setContent("");
+      setPreviewContent("");
       setUrl("");
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }
@@ -106,9 +124,9 @@ export function ArtifactPanel({
         if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = nextUrl;
         setUrl(nextUrl);
-        if (artifact.renderer !== "image") {
+        if (artifact.renderer !== "image" && artifact.renderer !== "pdf") {
           const text = await blob.text();
-          const nextContent =
+          const nextPreviewContent =
             artifact.renderer === "html"
               ? await inlineLocalAssets(
                   text,
@@ -121,7 +139,8 @@ export function ArtifactPanel({
                 )
               : text;
           if (requestId !== requestRef.current) return;
-          setContent(nextContent);
+          setContent(text);
+          setPreviewContent(nextPreviewContent);
         }
         requestAnimationFrame(() => {
           if (requestId !== requestRef.current) return;
@@ -142,6 +161,12 @@ export function ArtifactPanel({
     };
   }, [artifact.path, artifact.version, artifactKey, baseUrl, contentEndpoint, token, refresh, artifact.renderer, scope]);
 
+  useEffect(() => {
+    if (artifact.renderer === "markdown" || artifact.renderer === "html") {
+      setViewMode(preferredRichModes.get(artifact.renderer) ?? "preview");
+    }
+  }, [artifactKey, artifact.renderer]);
+
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     window.clearTimeout(restoreTimerRef.current);
@@ -153,7 +178,19 @@ export function ArtifactPanel({
 
   const blocked = artifact.renderer === "html" && hasExternalAssets(content);
   const rendererLabel = artifact.renderer === "markdown" ? "MD" : artifact.renderer.toUpperCase();
-  const canCopy = !!content && artifact.renderer !== "html";
+  const canCopy =
+    !!content &&
+    artifact.renderer !== "image" &&
+    artifact.renderer !== "pdf";
+  const canSwitchView = artifact.renderer === "markdown" || artifact.renderer === "html";
+  const showingSource = canSwitchView && viewMode === "source";
+
+  const toggleView = () => {
+    if (!canSwitchView) return;
+    const next = viewMode === "preview" ? "source" : "preview";
+    preferredRichModes.set(artifact.renderer as "markdown" | "html", next);
+    setViewMode(next);
+  };
 
   const copyContent = () => {
     if (!canCopy) return;
@@ -165,101 +202,122 @@ export function ArtifactPanel({
 
   return (
     <div className={`flex flex-col h-full bg-scout-canvas ${embedded ? "" : "min-h-0"}`}>
-      <div className={`h-[52px] ${compact ? "px-3" : "px-4"} flex items-center gap-2 shrink-0 border-b border-scout-hairline-faint bg-scout-canvas`}>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="truncate text-sm font-medium text-scout-text">{artifact.title}</div>
+      <PanelBreadcrumb
+        crumbs={[
+          ...(scope === "shared"
+            ? [{ label: "Shared" }]
+            : scope === "personal"
+              ? [{ label: "Workspace" }]
+              : []),
+          ...pathCrumbs(artifact.path),
+        ]}
+        meta={
+          <span className="flex items-center gap-1.5">
             {!compact && (
-              <span className="rounded-md border border-scout-hairline-faint px-1.5 py-0.5 text-[10px] font-semibold text-scout-muted">
+              <Badge uppercase className="font-semibold">
                 {rendererLabel}
-              </span>
+              </Badge>
             )}
-          </div>
-          <div className="text-[10px] text-scout-muted truncate">
-            {scope === "shared" ? "Shared / " : ""}{artifact.path} · {formatSize(artifact.size)}
-          </div>
-        </div>
-        {canCopy && (
-          <button
-            onClick={copyContent}
-            className={`inline-flex items-center gap-1.5 rounded-xl bg-scout-input-bg/80 text-xs font-semibold text-scout-text hover:bg-scout-lift/80 transition-colors ${compact ? "p-2" : "px-3 py-2"}`}
-            title="Copy artifact content"
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {!compact && "Copy"}
-          </button>
-        )}
-        {url && (
-          <a
-            href={url}
-            download={artifact.name}
-            className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-            title="Download"
-          >
-            <Download size={17} />
-          </a>
-        )}
-        <button
-          onClick={() => setRefresh((value) => value + 1)}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-          title="Refresh"
+            {formatSize(artifact.size)}
+          </span>
+        }
+        actions={
+          <>
+            {canSwitchView && (
+              <button
+                type="button"
+                onClick={toggleView}
+                className="rounded-control px-2.5 py-1.5 text-caption font-medium text-scout-text transition-colors hover:bg-scout-lift"
+              >
+                {showingSource ? "View preview" : "View source"}
+              </button>
+            )}
+            {canCopy && (
+              <IconButton label="Copy artifact content" onClick={copyContent}>
+                {copied ? <Check size={15} /> : <Copy size={15} />}
+              </IconButton>
+            )}
+            <IconButton
+              label="Refresh"
+              onClick={() => {
+                setRefresh((value) => value + 1);
+                void onRefresh?.();
+              }}
+              disabled={isRefreshing}
+            >
+              <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
+            </IconButton>
+            {url ? (
+              <a
+                href={url}
+                download={artifact.name}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-btn text-scout-muted transition-colors hover:bg-scout-lift hover:text-scout-text"
+                title="Download"
+                aria-label="Download artifact"
+              >
+                <Download size={16} />
+              </a>
+            ) : (
+              <IconButton label="Download" disabled>
+                <Download size={16} />
+              </IconButton>
+            )}
+            {trailingActions}
+          </>
+        }
+      />
+      <div className="flex min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={(event) => {
+            if (restoringScrollRef.current) return;
+            const scrollTop = event.currentTarget.scrollTop;
+            preservedScrollRef.current = scrollTop;
+            artifactScrollPositions.set(artifactKey, scrollTop);
+          }}
+          className={`min-h-0 min-w-0 flex-1 overflow-auto bg-scout-canvas ${
+            contentHidden ? "hidden" : ""
+          } ${
+            showingSource || ["code", "text", "json", "csv", "html", "pdf"].includes(artifact.renderer)
+              ? "p-0"
+              : artifact.renderer === "markdown"
+                ? "px-5 py-8"
+                : "p-4"
+          }`}
         >
-          <RefreshCw size={17} className={isRefreshing ? "animate-spin" : ""} />
-        </button>
-        {onToggleExpand && <PanelExpandButton expanded={expanded} onToggle={onToggleExpand} />}
-        <button
-          onClick={onClose}
-          className="p-2 text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 rounded-btn transition-colors"
-          title={compact ? "Close preview" : "Close"}
-        >
-          <X size={18} />
-        </button>
-      </div>
-      <div
-        ref={scrollRef}
-        onScroll={(event) => {
-          if (restoringScrollRef.current) return;
-          const scrollTop = event.currentTarget.scrollTop;
-          preservedScrollRef.current = scrollTop;
-          artifactScrollPositions.set(artifactKey, scrollTop);
-        }}
-        className={`flex-1 min-h-0 overflow-auto bg-scout-canvas ${
-          artifact.renderer === "markdown" ? "px-5 py-8" : "p-4"
-        }`}
-      >
-        {blocked && (
-          <p className="mb-3 rounded-2xl border border-scout-warning/25 bg-scout-warning-muted p-3 text-xs text-scout-warning">
+        {blocked && !showingSource && (
+          <p className="mb-3 rounded-card border border-scout-warning/25 bg-scout-warning-muted p-3 text-caption text-scout-warning">
             External assets were blocked. HTML previews must be self-contained.
           </p>
         )}
         {error && (
           <div className="flex flex-col items-center gap-3 py-10 text-center">
             <PixelDazed size={72} />
-            <p className="text-sm text-scout-error">{error}</p>
+            <p className="text-label text-scout-error">{error}</p>
           </div>
         )}
         {!error && !url && (
           <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-4">
             <PixelPet working inline size={44} />
-            <p className="text-sm font-semibold text-scout-text">Loading artifact…</p>
+            <p className="text-label font-semibold text-scout-text">Loading artifact…</p>
           </div>
         )}
-        {artifact.renderer === "image" && url && (
+        {!showingSource && artifact.renderer === "image" && url && (
           <div className="flex min-h-full items-start justify-center">
-            <img src={url} alt={artifact.title} className="max-w-full rounded-2xl border border-scout-hairline-faint shadow-pop" />
+            <img src={url} alt={artifact.title} className="max-w-full" />
           </div>
         )}
-        {artifact.renderer === "html" && content && (
+        {!showingSource && artifact.renderer === "html" && previewContent && (
           <iframe
             ref={iframeRef}
             onLoad={() => restoreIframeScroll(iframeRef.current, iframeScrollRef.current)}
             title={artifact.title}
-            srcDoc={sandboxHtml(content, artifact.path, baseUrl)}
+            srcDoc={sandboxHtml(previewContent, artifact.path, baseUrl)}
             sandbox="allow-scripts"
-            className="w-full h-full min-h-[70vh] bg-white rounded-2xl border border-scout-hairline-faint"
+            className="h-full min-h-[70vh] w-full border-0 bg-white"
           />
         )}
-        {artifact.renderer === "markdown" && content && (
+        {!showingSource && artifact.renderer === "markdown" && content && (
           <div className="artifact-document prose-scout mx-auto max-w-[760px]">
             <MarkdownRenderer
               content={content}
@@ -271,13 +329,25 @@ export function ArtifactPanel({
             />
           </div>
         )}
-        {artifact.renderer === "json" && content && (
-          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap">{formatJson(content)}</pre>
+        {artifact.renderer === "pdf" && url && (
+          <object data={url} type="application/pdf" className="h-full min-h-[70vh] w-full">
+            <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 px-8 text-center">
+              <p className="text-label text-scout-muted">This browser cannot display the PDF.</p>
+              <a href={url} download={artifact.name} className="rounded-control bg-scout-text px-3 py-2 text-caption font-semibold text-scout-bg">
+                Download PDF
+              </a>
+            </div>
+          </object>
         )}
         {artifact.renderer === "csv" && content && <CsvPreview content={content} />}
-        {(artifact.renderer === "code" || artifact.renderer === "text") && content && (
-          <pre className="rounded-2xl border border-scout-hairline-faint bg-scout-code-bg p-4 text-xs whitespace-pre-wrap font-mono">{content}</pre>
+        {(showingSource || artifact.renderer === "code" || artifact.renderer === "text" || artifact.renderer === "json") && content && (
+          <SourceViewer
+            content={artifact.renderer === "json" ? formatJson(content) : content}
+            path={artifact.path}
+          />
         )}
+        </div>
+        {adjacentPane}
       </div>
     </div>
   );
@@ -362,15 +432,44 @@ function formatSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const CSV_ROW_LIMIT = 50;
+
+/**
+ * Minimal RFC-4180 split: `line.split(",")` broke every quoted field that
+ * contained a comma, which is exactly why quoting exists.
+ */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cell += '"'; i++; }
+        else quoted = false;
+      } else cell += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") { cells.push(cell); cell = ""; }
+    else cell += ch;
+  }
+  cells.push(cell);
+  return cells;
+}
+
 function CsvPreview({ content }: { content: string }) {
-  const rows = content.trim().split("\n").slice(0, 50).map((line) => line.split(","));
+  const allLines = content.trim().split("\n");
+  const rows = allLines.slice(0, CSV_ROW_LIMIT).map(splitCsvLine);
+  const truncated = allLines.length > CSV_ROW_LIMIT;
   if (rows.length === 0) return null;
   const headers = rows[0] ?? [];
   const body = rows.slice(1);
   return (
-    <div className="overflow-x-auto rounded-2xl border border-scout-hairline-faint bg-scout-panel/70">
-      <table className="w-full text-xs border-collapse">
-        <thead>
+    <div className="min-w-full overflow-x-auto bg-scout-canvas">
+      <table className="w-full text-caption border-collapse">
+        <thead className="sticky top-0 z-10">
           <tr>
             {headers.map((h, i) => (
               <th key={i} className="border-b border-r border-scout-hairline-faint bg-scout-input-bg px-2 py-1.5 text-left font-medium">
@@ -391,6 +490,12 @@ function CsvPreview({ content }: { content: string }) {
           ))}
         </tbody>
       </table>
+      {/* The row cap used to be silent, so a 10k-row file looked like a 50-row file. */}
+      {truncated && (
+        <p className="border-t border-scout-hairline-faint px-2 py-1.5 text-micro text-scout-muted">
+          Showing the first {CSV_ROW_LIMIT} of {allLines.length} rows.
+        </p>
+      )}
     </div>
   );
 }

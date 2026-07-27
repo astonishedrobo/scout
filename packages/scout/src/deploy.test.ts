@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { draftFromEnvironment, managedEnvironment, mergeEnvironment, newDeploymentDraft } from "./deploy.js";
 
 test("deployment environment exposes every enabled provider", () => {
@@ -77,4 +80,21 @@ test("environment merge preserves unrelated settings and drops removed ones", ()
   assert.match(merged, /OPENAI_API_KEY=new/);
   assert.match(merged, /SCOUT_PORT=4300/);
   assert.doesNotMatch(merged, /VLLM_MODEL/);
+});
+
+test("deployment draft loads the existing MCP bootstrap", () => {
+  const root = mkdtempSync(join(tmpdir(), "scout-deploy-"));
+  mkdirSync(join(root, "config"));
+  writeFileSync(join(root, "config", "mcp.yaml"), JSON.stringify({
+    servers: [{
+      id: "linear", name: "Linear", transport: "streamable_http",
+      url: "https://example.test/mcp", availability: "everyone",
+      enabled: true, auth_mode: "none",
+    }],
+  }));
+
+  const draft = draftFromEnvironment(root, new Map());
+  assert.equal(draft.version, 3);
+  assert.equal(draft.mcpServers.length, 1);
+  assert.equal(draft.mcpServers[0]?.id, "linear");
 });

@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, RemoveMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    ToolMessage,
+    RemoveMessage,
+)
 
 from ..config import AppConfig, load_config
 from ..retriever import BM25Retriever, RetrieverProxy
@@ -22,6 +30,7 @@ from .graph import ApprovalFn, CapabilityApprovalFn, PromotionApprovalFn, build_
 from .prompts import build_system_prompt
 from .session import PersistentPythonSession
 from .file_guard import WorkspaceGuard
+from .subagents import SubAgentManager, format_notifications_block
 from .tools import make_tools
 
 logger = logging.getLogger(__name__)
@@ -181,18 +190,29 @@ class ScoutAgent:
         retriever: "BM25Retriever | RetrieverProxy | None" = None,
         user_id: str = "default",
         session_id: str = "default",
+        execution_session_id: str | None = None,
         server_mode: bool = False,
         shared_dir: Path | None = None,
-        grant_store: CapabilityGrantStore | None = None,
+        grant_store: Any | None = None,
         profile: ProfileConfig | None = None,
         request_permissions_fn: Any | None = None,
+        is_subagent: bool = False,
+        parent_subagent_manager: SubAgentManager | None = None,
+        on_subagent_complete: Any | None = None,
+        external_tools: list | None = None,
     ) -> None:
         self._cwd = str(Path(cwd or os.getcwd()).resolve())
         self._guard = guard
         self._user_id = user_id
         self._session_id = session_id
+        self._execution_session_id = execution_session_id or session_id
         self._server_mode = server_mode
         self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
+        self._is_subagent = is_subagent
+        self._external_tools = list(external_tools or [])
+        self._grant_store = grant_store
+        self._capability_approval_callback = capability_approval_callback
+        self._subagent_capability_approval = None
         if config:
             self._config = config
         else:
@@ -212,7 +232,6 @@ class ScoutAgent:
         data_dir = self._resolve_data_dir()
         personal_dir = Path(data_dir)
 
-        from ..execution.grants import CapabilityGrantStore
         from ..execution.service import ExecutionService
 
         # Execution service (primary path for all code execution)
@@ -224,12 +243,19 @@ class ScoutAgent:
             async def promotion_cb(tool_name, diffs, args):
                 return await approval_callback(sid, uid, tool_name, diffs, args)
 
+        capability_cb = None
         if capability_approval_callback and approval_callback_args:
             sid, uid = approval_callback_args[0], approval_callback_args[1]
             _cap_cb = capability_approval_callback
 
             async def capability_cb(cap):
                 return await _cap_cb(sid, uid, cap)
+
+            # Sub-agents reuse the same server capability gate, tagged later.
+            self._subagent_capability_approval = capability_cb
+        elif capability_approval_callback and not approval_callback_args:
+            capability_cb = capability_approval_callback
+            self._subagent_capability_approval = capability_approval_callback
 
         self._execution: ExecutionService | None = None
         if self._config.execution.enabled:
@@ -239,7 +265,7 @@ class ScoutAgent:
                 personal_dir=personal_dir,
                 shared_dir=shared_dir,
                 user_id=str(user_id),
-                session_id=str(session_id),
+                session_id=str(self._execution_session_id),
                 server_mode=server_mode,
                 grant_store=grant_store,
                 capability_approval=capability_cb,
@@ -281,18 +307,61 @@ class ScoutAgent:
                 return await orig_cb(*approval_callback_args, name, diffs, args)
             self._final_approval = wrapped_callback
 
+        # Multi-agent: parents get a manager; nested sub-agents never do.
+        self._subagents: SubAgentManager | None = None
+        if (
+            not is_subagent
+            and parent_subagent_manager is None
+            and self._config.multi_agent.enabled
+        ):
+            persist = None
+            try:
+                # Durable results under the session store when available.
+                from pathlib import Path as _P
+                home = _P.home() / ".config" / "scout" / "sessions"
+                persist = home / str(user_id) / f"subagents-{session_id}.json"
+            except Exception:
+                persist = None
+            self._subagents = SubAgentManager(
+                config=self._config.multi_agent,
+                parent_session_id=str(session_id),
+                parent_user_id=str(user_id),
+                on_complete=on_subagent_complete,
+                persist_path=persist,
+            )
+            self._subagents.bind_parent(self)
+            try:
+                self._subagents.hydrate_from_snapshot()
+            except Exception:
+                logger.debug("subagent hydrate failed", exc_info=True)
+        elif parent_subagent_manager is not None:
+            self._subagents = parent_subagent_manager
+
         self._run_config = {
             "recursion_limit": max(cfg.max_iterations * 3, 50),
-            "run_name": "scout-agent",
-            "tags": ["scout", "server" if server_mode else "local"],
+            "run_name": "scout-agent" if not is_subagent else "scout-subagent",
+            "tags": [
+                "scout",
+                "server" if server_mode else "local",
+                *(["subagent"] if is_subagent else []),
+            ],
             "metadata": {
                 "scout_user_id": str(user_id),
                 "scout_session_id": str(session_id),
                 "scout_model": cfg.model,
                 "scout_server_mode": server_mode,
+                "scout_is_subagent": is_subagent,
             },
         }
         self._messages: list = []
+        # User input submitted while a turn is active. LangGraph nodes run in
+        # worker threads, so keep this queue synchronous and lock-protected.
+        self._pending_steers: deque[dict[str, Any]] = deque()
+        self._inflight_steers: dict[str, dict[str, Any]] = {}
+        self._steer_lock = threading.Lock()
+        # Durable background terminals use the same parent-turn handoff as
+        # sub-agents, without pretending a shell is an agent.
+        self._pending_task_notifications: list[str] = []
         self._focus_path = None
         self._rebuild_graph(focus_path=None)
 
@@ -330,8 +399,12 @@ class ScoutAgent:
             allow_request_permissions=(
                 self._config.permissions.allow_request_permissions
                 and profile.can_request_permissions
+                and not self._is_subagent
             ),
             request_permissions_fn=self._request_permissions_fn,
+            subagent_manager=self._subagents if not self._is_subagent else None,
+            is_subagent=self._is_subagent,
+            external_tools=self._external_tools,
         )
         system_prompt = build_system_prompt(
             self._data_dir,
@@ -355,6 +428,80 @@ class ScoutAgent:
             server_mode=self._server_mode,
         )
 
+    def enqueue_steer(
+        self,
+        steer_id: str,
+        content: str,
+        attachments: list[str] | None = None,
+        *,
+        client_id: str | None = None,
+        display_content: str | None = None,
+    ) -> bool:
+        """Queue one user steer, rejecting duplicate client IDs."""
+        with self._steer_lock:
+            known = [*self._pending_steers, *self._inflight_steers.values()]
+            if client_id and any(item.get("client_id") == client_id for item in known):
+                return False
+            self._pending_steers.append({
+                "steer_id": steer_id,
+                "client_id": client_id,
+                "content": content,
+                "display_content": display_content if display_content is not None else content,
+                "attachments": list(attachments or []),
+            })
+        return True
+
+    def cancel_steer(self, steer_id: str) -> bool:
+        """Remove a steer only while it has not reached a model boundary."""
+        with self._steer_lock:
+            for item in self._pending_steers:
+                if item["steer_id"] == steer_id:
+                    self._pending_steers.remove(item)
+                    return True
+        return False
+
+    def pending_steers(self) -> list[dict[str, Any]]:
+        with self._steer_lock:
+            return [dict(item) for item in self._pending_steers]
+
+    def _drain_steers(self) -> list:
+        from .multimodal import build_human_message
+
+        with self._steer_lock:
+            pending = list(self._pending_steers)
+            self._pending_steers.clear()
+            self._inflight_steers.update(
+                (item["steer_id"], item) for item in pending
+            )
+        messages = []
+        for item in pending:
+            message = build_human_message(item["content"], item["attachments"])
+            message.additional_kwargs = {
+                **message.additional_kwargs,
+                "scout_steer_id": item["steer_id"],
+                "scout_client_id": item.get("client_id"),
+                "scout_display_content": item.get("display_content", item["content"]),
+            }
+            messages.append(message)
+        return messages
+
+    def _ack_steer(self, steer_id: str) -> None:
+        if not hasattr(self, "_steer_lock"):
+            return
+        with self._steer_lock:
+            self._inflight_steers.pop(steer_id, None)
+
+    def _restore_uncommitted_steers(self) -> None:
+        if not hasattr(self, "_steer_lock"):
+            return
+        with self._steer_lock:
+            if not self._inflight_steers:
+                return
+            restored = list(self._inflight_steers.values())
+            self._inflight_steers.clear()
+            for item in reversed(restored):
+                self._pending_steers.appendleft(item)
+
     def set_request_permissions_fn(self, fn) -> None:
         self._request_permissions_fn = fn
         self._rebuild_graph(focus_path=self._focus_path)
@@ -373,6 +520,11 @@ class ScoutAgent:
     def set_model(self, model: str) -> None:
         """Switch models while preserving active conversation messages."""
         self._config.agent.model = model
+        self._rebuild_graph(focus_path=self._focus_path)
+
+    def set_external_tools(self, tools: list) -> None:
+        """Replace user-scoped MCP tools while preserving conversation state."""
+        self._external_tools = list(tools)
         self._rebuild_graph(focus_path=self._focus_path)
 
     def _record_memory_citations(self, text: str) -> None:
@@ -401,8 +553,84 @@ class ScoutAgent:
         self._focus_path = focus
         self._rebuild_graph(focus_path=focus)
 
+    def _pending_user_request_from_history(self) -> str:
+        """Last real user message — used so auto-continue finishes their ask."""
+        from langchain_core.messages import HumanMessage
+
+        for msg in reversed(getattr(self, "_messages", []) or []):
+            if not isinstance(msg, HumanMessage):
+                continue
+            text = _message_text(msg.content).strip()
+            if not text:
+                continue
+            # Skip synthetic system-ish injections
+            if text.startswith("[Sub-agent") or text.startswith("<subagent-notification"):
+                continue
+            return text
+        return ""
+
+    def _inject_pending_subagent_notifications(self, user_message: str) -> str:
+        """Prepend completed sub-agent notifications for the parent model turn."""
+        if getattr(self, "_is_subagent", False):
+            return user_message
+        manager = getattr(self, "_subagents", None)
+        notes = manager.drain_notifications() if manager is not None else []
+        task_notes = list(getattr(self, "_pending_task_notifications", []) or [])
+        self._pending_task_notifications = []
+        if not notes and not task_notes:
+            return user_message
+        pending = self._pending_user_request_from_history()
+        # If this turn already has a real user message, that is the pending request.
+        if user_message.strip() and not user_message.strip().startswith("["):
+            pending = user_message.strip()
+        blocks: list[str] = []
+        if notes:
+            blocks.append(format_notifications_block(notes, pending_user_request=pending))
+        if task_notes:
+            blocks.append("<background-task-notification>\n" + "\n".join(task_notes) + "\n</background-task-notification>")
+        block = "\n\n".join(part for part in blocks if part)
+        if not block:
+            return user_message
+        if user_message.strip():
+            return f"{block}\n\n---\n\n{user_message}"
+        # A cancellation is a lifecycle update, not permission to reconstruct
+        # or finish the cancelled worker's task.
+        if notes and not any(note.status == "completed" for note in notes):
+            return (
+                f"{block}\n\n---\n\n"
+                "Briefly acknowledge this background-agent lifecycle update. "
+                "Do not continue, reconstruct, inspect, or claim completion of "
+                "stopped or failed work unless the user explicitly asks."
+            )
+        # Auto-continue: drive completion of the pending request with successful
+        # results while the authoritative lifecycle rules above remain binding.
+        return (
+            f"{block}\n\n---\n\n"
+            "The user is waiting. Using the sub-agent result(s) above, complete any "
+            "unfinished part of their pending request now (including file writes). "
+            "Prefer the most recent result. Do not ask which version to use for "
+            "revisions of the same deliverable."
+        )
+
+    def queue_task_notification(self, message: str) -> None:
+        """Queue a terminal lifecycle result for the next parent model turn."""
+        if not self._is_subagent and message.strip():
+            self._pending_task_notifications.append(message.strip())
+
+    def has_pending_task_notifications(self) -> bool:
+        return bool(getattr(self, "_pending_task_notifications", []))
+
+    def set_subagent_completion_callback(self, cb: Any) -> None:
+        if self._subagents is not None:
+            self._subagents.set_completion_callback(cb)
+
+    @property
+    def subagent_manager(self) -> SubAgentManager | None:
+        return self._subagents
+
     async def chat(self, user_message: str, attachments: list[str] | None = None) -> str:
         from .multimodal import build_human_message
+        user_message = self._inject_pending_subagent_notifications(user_message)
         self._messages.append(build_human_message(user_message, attachments))
         try:
             result = await self._graph.ainvoke(
@@ -424,6 +652,7 @@ class ScoutAgent:
         import asyncio
 
         from .multimodal import build_human_message
+        user_message = self._inject_pending_subagent_notifications(user_message)
         self._messages.append(build_human_message(user_message, attachments))
         new_messages: list = []
         removed_message_ids: set[str] = set()
@@ -439,15 +668,57 @@ class ScoutAgent:
         if self._execution:
             self._execution.set_output_sink(output_q)
 
-        yield {"type": "status", "message": "Thinking through the request"}
+        yield {"type": "status", "message": "Understanding…"}
 
         async def _drain_graph() -> None:
+            import inspect
+
             try:
-                async for chunk in self._graph.astream(
+                stream_kwargs: dict[str, Any] = {"config": self._run_config}
+                try:
+                    if "stream_mode" in inspect.signature(
+                        self._graph.astream,
+                    ).parameters:
+                        stream_kwargs["stream_mode"] = ["messages", "updates"]
+                except (TypeError, ValueError):
+                    pass
+                async for item in self._graph.astream(
                     {"messages": self._messages, "iteration": 0},
-                    config=self._run_config,
+                    **stream_kwargs,
                 ):
-                    await graph_q.put(("chunk", chunk))
+                    # Multiple stream modes yield ``(mode, payload)``. Keep a
+                    # compatibility path for test doubles and older LangGraph.
+                    if (
+                        isinstance(item, tuple)
+                        and len(item) == 2
+                        and item[0] in {"messages", "updates"}
+                    ):
+                        mode, payload = item
+                        if mode == "updates":
+                            await graph_q.put(("chunk", payload))
+                            continue
+                        if not isinstance(payload, tuple) or len(payload) != 2:
+                            continue
+                        message, metadata = payload
+                        tags = set((metadata or {}).get("tags") or [])
+                        if (
+                            isinstance(message, AIMessageChunk)
+                            and "scout_visible_response" in tags
+                        ):
+                            text = _message_text(message.content)
+                            if text:
+                                await graph_q.put((
+                                    "delta",
+                                    {
+                                        "content": text,
+                                        "message_id": (
+                                            message.id
+                                            or str((metadata or {}).get("langgraph_step") or "")
+                                        ),
+                                    },
+                                ))
+                    else:
+                        await graph_q.put(("chunk", item))
             except Exception as exc:
                 await graph_q.put(("error", exc))
             finally:
@@ -487,19 +758,14 @@ class ScoutAgent:
                             continue
                         visible_text = _message_text(msg.content).strip()
                         if msg.tool_calls:
-                            # User-facing prose that accompanies tool calls belongs
-                            # in the interleaved timeline, not as a collapsed
-                            # "activity group" title.
+                            # A model can stream a short preamble before its
+                            # tool-call JSON is complete. That prose is a plan,
+                            # not a second user-facing answer: the tool card is
+                            # the chronological record. Retract the temporary
+                            # streamed preamble and wait for the post-tool reply.
+                            # This prevents duplicate "I'll do X" paragraphs.
                             if visible_text:
-                                safe_text = strip_citation_block(
-                                    redact_paths(visible_text, self._cwd, self._shared_dir)
-                                )
-                                if safe_text:
-                                    events.append({
-                                        "type": "assistant_text",
-                                        "content": safe_text,
-                                        "tool_call_id": msg.tool_calls[0]["id"],
-                                    })
+                                events.append({"type": "response_reset"})
                             for tc in msg.tool_calls:
                                 args = tc.get("args", {}) or {}
                                 _pending_calls[tc["id"]] = {
@@ -552,6 +818,18 @@ class ScoutAgent:
                             "file_changes": msg.additional_kwargs.get("file_changes", []),
                             "tool_call_id": msg.tool_call_id,
                         })
+                    elif isinstance(msg, HumanMessage):
+                        steer_id = msg.additional_kwargs.get("scout_steer_id")
+                        if steer_id:
+                            self._ack_steer(str(steer_id))
+                            events.append({
+                                "type": "steer_consumed",
+                                "steer_id": str(steer_id),
+                                "client_id": msg.additional_kwargs.get("scout_client_id"),
+                                "content": msg.additional_kwargs.get(
+                                    "scout_display_content", _message_text(msg.content),
+                                ),
+                            })
             return events
 
         def _seal_pending_tools() -> None:
@@ -570,6 +848,7 @@ class ScoutAgent:
                 tool_steps.append((name, pending.get("args", {}), note))
 
         graph_done = False
+        streamed_message_id = ""
         committed = False
         discard_turn = False
         try:
@@ -582,6 +861,8 @@ class ScoutAgent:
                 )
                 for task in pending:
                     task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
                 for task in finished:
                     if task is chunk_get:
@@ -595,6 +876,15 @@ class ScoutAgent:
                         if kind == "chunk":
                             for ev in _process_graph_chunk(payload):
                                 yield ev
+                        elif kind == "delta":
+                            message_id = str(payload.get("message_id") or "")
+                            if message_id != streamed_message_id:
+                                streamed_message_id = message_id
+                                yield {"type": "response_start"}
+                            yield {
+                                "type": "response_delta",
+                                "content": str(payload.get("content") or ""),
+                            }
                         elif kind == "error":
                             raise payload
                         elif kind == "done":
@@ -618,6 +908,7 @@ class ScoutAgent:
             # Drop the user turn that never got a model reply.
             discard_turn = True
             self._messages.pop()
+            self._restore_uncommitted_steers()
             raise
         except Exception:
             # Keep partial progress on tool/model errors (not rate-limit).
@@ -627,6 +918,7 @@ class ScoutAgent:
                     self._messages, new_messages, removed_message_ids
                 )
                 committed = True
+            self._restore_uncommitted_steers()
             if not response_emitted and tool_steps:
                 yield {"type": "response", "content": _build_tool_summary(tool_steps)}
             raise
@@ -643,6 +935,7 @@ class ScoutAgent:
                     self._messages, new_messages, removed_message_ids
                 )
                 committed = True
+            self._restore_uncommitted_steers()
 
     def reset(self) -> None:
         self._messages.clear()
@@ -673,6 +966,11 @@ class ScoutAgent:
         await self.close()
 
     async def close(self) -> None:
+        if self._subagents is not None and not self._is_subagent:
+            try:
+                await self._subagents.stop_all()
+            except Exception:
+                logger.debug("Error stopping sub-agents on close", exc_info=True)
         if self._execution:
             await self._execution.close()
         if self._session:

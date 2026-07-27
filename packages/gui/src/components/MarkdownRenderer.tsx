@@ -1,10 +1,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Copy, Check } from "lucide-react";
-import { useState, useCallback, useEffect, useMemo, memo } from "react";
+import { Loader2, AlertTriangle } from "lucide-react";
+import { useState, useEffect, useMemo, memo } from "react";
 import type { Components } from "react-markdown";
 import { useTheme } from "../hooks/useTheme";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+import { CodeBlock } from "./CodeBlock";
 
 const mermaidCache = new Map<string, string>();
 let mermaidModule: Promise<typeof import("mermaid")> | null = null;
@@ -23,62 +24,39 @@ interface MarkdownRendererProps {
   scope?: string | null;
 }
 
-function CodeBlock({
-  language,
-  children,
-}: {
-  language: string;
-  children: string;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(children);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [children]);
-
-  return (
-    <div className="scout-code-block relative group my-2 rounded-card overflow-hidden border border-scout-hairline">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-scout-panel border-b border-scout-hairline">
-        <span className="text-xs text-scout-muted font-mono">{language || "text"}</span>
-        <button
-          onClick={handleCopy}
-          className="text-scout-muted hover:text-scout-text transition-colors p-0.5"
-        >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-        </button>
-      </div>
-      <pre className="m-0 p-4 bg-scout-code-bg text-scout-text text-[0.8125rem] leading-normal font-mono overflow-x-auto">
-        <code>{children}</code>
-      </pre>
-    </div>
-  );
-}
-
 function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "dark" | "soft" }) {
-  const [svg, setSvg] = useState(() => mermaidCache.get(source) ?? "");
+  // Cache key includes the theme: mermaid bakes colours into the SVG, so a
+  // theme-keyless cache handed back a stale light-mode diagram after a switch.
+  const cacheKey = `${theme}:${source}`;
+  const [svg, setSvg] = useState(() => mermaidCache.get(cacheKey) ?? "");
   const [error, setError] = useState("");
+
   useEffect(() => {
     let active = true;
-    if (!mermaidModule) {
-      mermaidModule = import("mermaid").then((module) => {
-        module.default.initialize({
+    const cached = mermaidCache.get(cacheKey);
+    if (cached) {
+      setSvg(cached);
+      setError("");
+      return;
+    }
+    setSvg("");
+    setError("");
+    if (!mermaidModule) mermaidModule = import("mermaid");
+    mermaidModule
+      .then(({ default: mermaid }) => {
+        // Re-initialize on every render pass rather than once on the cached
+        // module promise: initialize() is global and the theme can change after
+        // the module has loaded.
+        mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
           theme: theme === "light" ? "neutral" : "dark",
         });
-        return module;
-      });
-    }
-    mermaidModule
-      .then(({ default: mermaid }) => {
-        const cached = mermaidCache.get(source);
-        return cached ? { svg: cached } : mermaid.render(`mermaid-${hashSource(source)}`, source);
+        return mermaid.render(`mermaid-${theme}-${hashSource(source)}`, source);
       })
-      .then(({ svg }) => {
-        mermaidCache.set(source, svg);
-        if (active) setSvg(svg);
+      .then(({ svg: rendered }) => {
+        mermaidCache.set(cacheKey, rendered);
+        if (active) setSvg(rendered);
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : String(err));
@@ -86,8 +64,31 @@ function MermaidDiagram({ source, theme }: { source: string; theme: "light" | "d
     return () => {
       active = false;
     };
-  }, [source, theme]);
-  if (error) return <pre className="text-xs text-scout-error whitespace-pre-wrap">{error}</pre>;
+  }, [source, theme, cacheKey]);
+
+  if (error) {
+    return (
+      <div className="my-3 rounded-card border border-scout-error/25 bg-scout-error-muted p-3">
+        <div className="flex items-center gap-2 text-caption font-medium text-scout-text">
+          <AlertTriangle size={14} className="shrink-0 text-scout-error" />
+          Could not render this diagram
+        </div>
+        <pre className="mt-1.5 whitespace-pre-wrap font-mono text-micro text-scout-muted">{error}</pre>
+      </div>
+    );
+  }
+
+  if (!svg) {
+    // Rendering pulls in mermaid on first use; without this the block was an
+    // empty bordered box for as long as that took.
+    return (
+      <div className="my-3 flex items-center gap-2 rounded-card border border-scout-hairline bg-scout-panel px-3 py-6 text-caption text-scout-muted">
+        <Loader2 size={14} className="shrink-0 animate-spin" />
+        Rendering diagram…
+      </div>
+    );
+  }
+
   return (
     <div
       className="my-3 overflow-x-auto rounded-card border border-scout-hairline bg-scout-panel p-3"

@@ -1,41 +1,66 @@
-import { useState, useCallback, useRef, useEffect } from "react";
-import { FolderTree } from "lucide-react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { Bot, FolderTree, GitCompareArrows } from "lucide-react";
 import { useServer } from "./hooks/useServer";
 import { useChat } from "./hooks/useChat";
 import { useConfig } from "./hooks/useConfig";
 import { useTheme } from "./hooks/useTheme";
 import { useSessions } from "./hooks/useSessions";
 import { usePanelPrefs } from "./hooks/usePanelPrefs";
-import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation } from "scout-core";
+import { useRightPanelTabs } from "./hooks/useRightPanelTabs";
+import { useShortcuts } from "./hooks/useShortcuts";
+import { useSubagents } from "./hooks/useSubagents";
+import type { ToolStep, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ApprovalMode } from "scout-core";
+import { useLocalSetting } from "./hooks/useLocalSetting";
 import { WorkspaceShell } from "./components/WorkspaceShell";
 import { BootScreen } from "./components/BootScreen";
+import { ServerErrorScreen } from "./components/ServerErrorScreen";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView, WelcomeContent, SuggestionChips } from "./components/ChatView";
 import { InputBar } from "./components/InputBar";
 import { PixelPet } from "./components/PixelPet";
 import { WelcomeScene } from "./components/WelcomeScene";
 import { ApprovalDock } from "./components/ApprovalDock";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsSurface, type SettingsSectionId } from "./components/SettingsSurface";
 import { InitWizard } from "./components/InitWizard";
 import { HelpDialog } from "./components/HelpDialog";
-import { WarningBanner } from "./components/WarningBanner";
-import { ErrorBanner } from "./components/ErrorBanner";
+import { ErrorBanner, WarningBanner } from "./components/ui/Banner";
 import { useAuth } from "./hooks/useAuth";
 import { useUploads } from "./hooks/useUploads";
 import { Login } from "./components/Login";
-import { AdminPanel } from "./components/AdminPanel";
 import { ArtifactPanel } from "./components/ArtifactPanel";
-import { UploadButton } from "./components/UploadButton";
 import { UserInputCard } from "./components/UserInputCard";
 import { FileChangePanel } from "./components/FileChangePanel";
 import { FileExplorerPanel } from "./components/FileExplorerPanel";
+import { RightPanel } from "./components/RightPanel";
+import type { LauncherItem } from "./components/PanelLauncher";
+import {
+  AgentsPanel,
+  SubagentStatusStrip,
+} from "./components/AgentsPanel";
 import { useApprovalMode } from "./hooks/useApprovalMode";
 import { useResponseAnnotations } from "./hooks/useResponseAnnotations";
-import {
-  headerActionActiveClass,
-  headerActionButtonClass,
-  headerActionIdleClass,
-} from "./components/ui/headerControls";
+
+/** Sections whose canonical URL is `/admin` rather than `/settings`. */
+const ADMIN_SECTIONS = new Set<SettingsSectionId>([
+  "files",
+  "users",
+  "execution",
+  "executions",
+  "mcp",
+  "config",
+]);
+
+/** Allow-list for the `?tab=` deep link, across both route bases. */
+const SETTINGS_SECTION_IDS = new Set<string>([
+  "general",
+  "appearance",
+  "preferences",
+  "memories",
+  "shortcuts",
+  "connections",
+  "models",
+  ...ADMIN_SECTIONS,
+]);
 
 export function App() {
   const { baseUrl, isReady, isMultiUser, error: serverError, warnings: serverWarnings } = useServer();
@@ -43,6 +68,7 @@ export function App() {
 
   const {
     sessions,
+    sessionsLoading,
     currentSessionId,
     createSession,
     loadSession,
@@ -60,17 +86,58 @@ export function App() {
   // True until the initial route (deep-linked session or home) is resolved.
   const [routeBooting, setRouteBooting] = useState(true);
 
-  const ensureSession = useCallback(async (): Promise<string> => {
+  /*
+   * Device-local settings from Appearance / General, read here rather than in the
+   * leaf components so there is one consumer per setting and the wiring is
+   * visible. `useLocalSetting` publishes on write, so these take effect without a
+   * reload. Declared above the draft approval state because the configured
+   * permission is what a fresh composer starts from.
+   */
+  const [showSuggestions] = useLocalSetting("general.suggestions", true);
+  // Defaults to "none" so switching this on is an opt-in: a stored default of
+  // "files" would have started opening the panel for everyone the moment the
+  // setting became functional.
+  const [defaultPanel] = useLocalSetting<"none" | "files" | "tasks">(
+    "general.defaultPanel",
+    "none",
+  );
+  const [permissionDefault] = useLocalSetting<ApprovalMode>(
+    "general.permissionDefault",
+    "ask_always",
+  );
+
+  const {
+    mode: approvalMode,
+    setMode: setApprovalMode,
+    resetToDefault: resetApprovalMode,
+    isChanging: approvalModeChanging,
+    error: approvalModeError,
+  } = useApprovalMode({
+    baseUrl,
+    sessionId: currentSessionId,
+    token,
+    isReady,
+    defaultMode: permissionDefault,
+  });
+
+  const ensureSession = useCallback(async (initialMode: ApprovalMode): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
-    const id = await createSession();
+    const id = await createSession(undefined, initialMode);
     sessionRef.current = id;
+    // Creation persists this mode atomically before useApprovalMode can load
+    // the new session, so the composer's first GET cannot race a follow-up PUT.
     window.location.hash = `/c/${id}`;
     return id;
   }, [createSession]);
 
+  const ensureComposerSession = useCallback(
+    () => ensureSession(approvalMode),
+    [approvalMode, ensureSession],
+  );
+
   const onUserMessage = useCallback(
-    async () => ensureSession(),
-    [ensureSession],
+    async () => ensureComposerSession(),
+    [ensureComposerSession],
   );
 
   const onUserAccepted = useCallback(
@@ -111,15 +178,26 @@ export function App() {
     currentTool,
     streamingText,
     statusMessage,
+    activityStartedAt,
     isLoading,
     error: chatError,
     pendingApproval,
     pendingUserInput,
     clearApproval,
+    receiveApproval,
     clearUserInput,
     isSessionLoading,
     clearSession,
     sendMessage,
+    sendSteer,
+    activateSteer,
+    cancelSteer,
+    receiveSteerEvent,
+    beginExternalTurn,
+    receiveExternalTurnEvent,
+    commitExternalTurn,
+    finishExternalTurn,
+    pendingSteers,
     stop,
     retryAt,
     reset,
@@ -134,18 +212,6 @@ export function App() {
   });
 
   const { models, currentModel, setModel, reloadConfig, capabilities } = useConfig(baseUrl, isReady, token);
-  const {
-    mode: approvalMode,
-    setMode: setApprovalMode,
-    isChanging: approvalModeChanging,
-    error: approvalModeError,
-  } = useApprovalMode({
-    baseUrl,
-    sessionId: currentSessionId,
-    token,
-    isReady,
-    ensureSession,
-  });
   const { theme, toggle: toggleTheme } = useTheme();
   const {
     annotations,
@@ -162,79 +228,248 @@ export function App() {
   } = usePanelPrefs();
 
   const isAdmin = !!user?.is_admin;
+  // Settings and Admin are one surface now, so one open flag and one section.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "memories">("general");
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
-  const [activeArtifact, setActiveArtifact] = useState<Artifact | null>(null);
-  const [activeFileChanges, setActiveFileChanges] = useState<FileChangeSet | null>(null);
-  const [filesExplorerOpen, setFilesExplorerOpen] = useState(false);
+  const panel = useRightPanelTabs();
+  // Visibility is deliberately independent from tab lifecycle. Hiding the
+  // panel must not destroy the file tree, selected preview, tab set, or scroll
+  // positions; only an explicit tab close should discard a surface.
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [isAutoContinuing, setIsAutoContinuing] = useState(false);
+  const [autoStreamingText, setAutoStreamingText] = useState("");
+  const [autoContinueStartedAt, setAutoContinueStartedAt] = useState<number | null>(null);
+
+  const chatRoute = useCallback(() => sessionRef.current ? `/#/c/${sessionRef.current}` : "/#/", []);
+  // `/settings` and `/admin` both open the same surface; the base keeps matching
+  // the section so existing links and bookmarks still resolve.
+  const settingsUrl = useCallback(
+    (section: SettingsSectionId) =>
+      `${ADMIN_SECTIONS.has(section) ? "/admin" : "/settings"}?tab=${encodeURIComponent(section)}`,
+    [],
+  );
+  const openSettingsRoute = useCallback(
+    (section: SettingsSectionId = "general") => {
+      setSettingsSection(section);
+      setSettingsOpen(true);
+      window.history.pushState({}, "", settingsUrl(section));
+    },
+    [settingsUrl],
+  );
+  const openAdminRoute = useCallback(
+    (section: SettingsSectionId = "files") => openSettingsRoute(section),
+    [openSettingsRoute],
+  );
+  const closeSettingsRoute = useCallback(() => {
+    setSettingsOpen(false);
+    setSettingsSection("general");
+    window.history.pushState({}, "", chatRoute());
+  }, [chatRoute]);
 
   const openMemories = useCallback(() => {
-    setSettingsTab("memories");
-    setSettingsOpen(true);
-  }, []);
+    openSettingsRoute("memories");
+  }, [openSettingsRoute]);
 
-  /** Right panel is multi-use: opening one mode replaces the previous. Width is preserved. */
-  const openArtifact = useCallback((artifact: Artifact) => {
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(false);
-    setActiveArtifact(artifact);
-  }, []);
+  /**
+   * The right panel holds several tabs at once. These keep the old signatures so
+   * every call site downstream is unchanged; what changed is that opening one
+   * surface no longer destroys the others.
+   */
+  const openArtifact = useCallback(
+    (artifact: Artifact) => {
+      panel.open({ kind: "artifact", artifact });
+      setRightPanelOpen(true);
+    },
+    [panel],
+  );
 
-  const openFileChanges = useCallback((changeSet: FileChangeSet) => {
-    setActiveArtifact(null);
-    setFilesExplorerOpen(false);
-    setActiveFileChanges(changeSet);
-  }, []);
+  const openFileChanges = useCallback(
+    (changeSet: FileChangeSet) => {
+      panel.open({ kind: "review", changeSet });
+      setRightPanelOpen(true);
+    },
+    [panel],
+  );
 
   const openFilesExplorer = useCallback(() => {
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(true);
+    panel.open({ kind: "files" });
+    setRightPanelOpen(true);
+  }, [panel]);
+
+  const openAgentsPanel = useCallback(() => {
+    panel.open({ kind: "agents" });
+    setRightPanelOpen(true);
+  }, [panel]);
+
+
+  const filesTabActive = panel.active?.tab.kind === "files";
+  const agentsTabActive = panel.active?.tab.kind === "agents";
+
+  const {
+    active: activeSubagents,
+    done: doneSubagents,
+    selectedId: selectedSubagentId,
+    detail: subagentDetail,
+    selectAgent,
+    clearSelection: clearSubagentSelection,
+    sendMessage: sendSubagentMessage,
+    stopAgent: stopSubagent,
+  } = useSubagents({
+    baseUrl,
+    sessionId: currentSessionId,
+    token,
+    enabled: isReady && !!currentSessionId,
+    onApprovalEvent: (event) => {
+      if (event?.type === "approval_request") {
+        receiveApproval(event, currentSessionId || "default");
+      } else if (event?.type === "approval_cancelled") {
+        clearApproval();
+      }
+    },
+    onSteerEvent: (event) => {
+      void receiveSteerEvent(event as Parameters<typeof receiveSteerEvent>[0], currentSessionId || "default");
+    },
+    // Background completions are queued by the server and integrated by one
+    // normal supervisor turn; stream that durable reply into the transcript.
+    onParentAutoReply: (content) => {
+      commitExternalTurn(content, currentSessionId || "default");
+      setIsAutoContinuing(false);
+      setAutoStreamingText("");
+      setAutoContinueStartedAt(null);
+    },
+    onParentAutoEvent: (event) => {
+      receiveExternalTurnEvent(event, currentSessionId || "default");
+    },
+    onParentAutoResponseStart: () => setAutoStreamingText(""),
+    onParentAutoResponseDelta: (content) => {
+      setAutoStreamingText((current) => current + content);
+    },
+    onParentAutoTurnStarted: (event) => {
+      beginExternalTurn(String(event.turn_id || ""), currentSessionId || "default");
+      setAutoStreamingText("");
+      setAutoContinueStartedAt(Date.now());
+      setIsAutoContinuing(true);
+    },
+    onParentAutoTurnFinished: () => {
+      finishExternalTurn(currentSessionId || "default");
+      setAutoStreamingText("");
+      setAutoContinueStartedAt(null);
+      setIsAutoContinuing(false);
+    },
+    onTaskEvent: (task: TaskEvent) => {
+      setMessages((previous) => {
+        const index = previous.findIndex(
+          (message) => message.role === "system" && message.task?.task_id === task.task_id,
+        );
+        const row = { role: "system" as const, content: "", task };
+        if (index < 0) return [...previous, row];
+        const next = [...previous];
+        next[index] = row;
+        return next;
+      });
+    },
+  });
+  const chatBusy = isLoading || isAutoContinuing;
+  const terminalTasks = messages
+    .filter((message) => message.role === "system" && message.task?.task_type === "terminal")
+    .map((message) => message.task!);
+
+  /** Hide the panel without destroying any of its mounted surface state. */
+  const hidePanel = useCallback(() => {
+    setRightPanelOpen(false);
   }, []);
 
-  const closeRightPanel = useCallback(() => {
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
-    setFilesExplorerOpen(false);
-  }, []);
+  /** The most recent change set in the transcript — what "Review" opens. */
+  const latestChangeSet = useMemo(
+    () =>
+      [...messages].reverse().flatMap((m) => m.fileChanges ?? [])[0] as
+        | FileChangeSet
+        | undefined,
+    [messages],
+  );
 
-  const toggleFilesExplorer = useCallback(() => {
-    if (filesExplorerOpen) {
-      setFilesExplorerOpen(false);
-      return;
-    }
-    openFilesExplorer();
-  }, [filesExplorerOpen, openFilesExplorer]);
-
-  const rightPanelOpen = !!activeArtifact || !!activeFileChanges || filesExplorerOpen;
+  const launcherItems = useMemo<LauncherItem[]>(
+    () => [
+      {
+        id: "review",
+        label: "Review",
+        icon: <GitCompareArrows size={15} />,
+        shortcut: "panel.review",
+        disabled: !latestChangeSet,
+        hint: "No changes yet",
+        onSelect: () => {
+          if (latestChangeSet) openFileChanges(latestChangeSet);
+        },
+      },
+      {
+        id: "files",
+        label: "Files",
+        icon: <FolderTree size={15} />,
+        shortcut: "panel.files",
+        onSelect: openFilesExplorer,
+      },
+      {
+        id: "agents",
+        label: "Agents",
+        icon: <Bot size={15} />,
+        shortcut: "panel.agents",
+        badge:
+          activeSubagents.length > 0 ? (
+            <span className="shrink-0 text-micro font-semibold text-scout-accent-cta">
+              {activeSubagents.length}
+            </span>
+          ) : undefined,
+        onSelect: openAgentsPanel,
+      },
+    ],
+    [activeSubagents.length, latestChangeSet, openAgentsPanel, openFileChanges, openFilesExplorer],
+  );
 
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   const toggleRightPanelExpanded = useCallback(() => setRightPanelExpanded((value) => !value), []);
-  useEffect(() => {
-    if (!rightPanelOpen) setRightPanelExpanded(false);
-  }, [rightPanelOpen]);
+  useShortcuts({
+    "panel.files": openFilesExplorer,
+    "panel.agents": openAgentsPanel,
+    "panel.review": () => {
+      if (latestChangeSet) openFileChanges(latestChangeSet);
+    },
+    // Restore the exact surface that was visible before the panel was hidden.
+    // With no tabs, the already-mounted panel naturally shows its launcher.
+    "panel.toggle": () => {
+      setRightPanelOpen((open) => !open);
+    },
+    "panel.closeTab": () => {
+      if (rightPanelOpen && panel.activeKey) panel.close(panel.activeKey);
+    },
+  });
 
+  // Keep open tabs current as the stream produces newer versions of what they
+  // show. `replace` rather than `open`, so refreshing a background tab does not
+  // yank the panel away from the one you are reading.
   useEffect(() => {
-    if (!activeArtifact) return;
-    const latest = [...messages]
-      .reverse()
-      .flatMap((m) => m.artifacts ?? [])
-      .find((artifact) => artifact.path === activeArtifact.path);
-    if (latest && latest.version !== activeArtifact.version) setActiveArtifact(latest);
-  }, [messages, activeArtifact]);
-
-  useEffect(() => {
-    if (!activeFileChanges) return;
-    const latest = [...messages]
-      .reverse()
-      .flatMap((m) => m.fileChanges ?? [])
-      .find((changeSet) => changeSet.id === activeFileChanges.id);
-    if (latest && latest !== activeFileChanges) setActiveFileChanges(latest);
-  }, [messages, activeFileChanges]);
+    for (const open of panel.tabs) {
+      if (open.tab.kind === "artifact") {
+        const current = open.tab.artifact;
+        const latest = [...messages]
+          .reverse()
+          .flatMap((m) => m.artifacts ?? [])
+          .find((artifact) => artifact.path === current.path);
+        if (latest && latest.version !== current.version) {
+          panel.replace({ kind: "artifact", artifact: latest });
+        }
+      } else if (open.tab.kind === "review") {
+        const current = open.tab.changeSet;
+        const latest = [...messages]
+          .reverse()
+          .flatMap((m) => m.fileChanges ?? [])
+          .find((changeSet) => changeSet.id === current.id);
+        if (latest && latest !== current) panel.replace({ kind: "review", changeSet: latest });
+      }
+    }
+  }, [messages, panel]);
 
   const markChangeSetUndone = useCallback((changeSetId: string) => {
     setMessages((prev) => prev.map((message) => ({
@@ -243,9 +478,6 @@ export function App() {
         changeSet.id === changeSetId ? { ...changeSet, undone: true } : changeSet,
       ),
     })));
-    setActiveFileChanges((current) =>
-      current?.id === changeSetId ? { ...current, undone: true } : current,
-    );
   }, [setMessages]);
 
   const undoFileChanges = useCallback(async (changeSet: FileChangeSet) => {
@@ -264,13 +496,18 @@ export function App() {
 
   const handleSubmit = useCallback(
     async (text: string, attachments: string[] = [], chatImages: ChatImage[] = [], onAccepted?: () => void, submittedAnnotations: ResponseAnnotation[] = []) => {
-      if (!isReady || isLoading) return false;
+      if (!isReady) return false;
+      if (chatBusy) {
+        const accepted = await sendSteer(text, attachments, chatImages, submittedAnnotations);
+        if (accepted && submittedAnnotations.length) clearAnnotations();
+        return accepted;
+      }
       return sendMessage(text, attachments, chatImages, () => {
         if (submittedAnnotations.length) clearAnnotations();
         onAccepted?.();
       }, submittedAnnotations);
     },
-    [isReady, isLoading, sendMessage, clearAnnotations],
+    [isReady, chatBusy, sendMessage, sendSteer, clearAnnotations],
   );
 
   const handleUserInputAnswer = useCallback(
@@ -281,22 +518,37 @@ export function App() {
     [clearUserInput, handleSubmit],
   );
 
+  const handleLogout = useCallback(() => {
+    // Clear chat state BEFORE dropping the token: otherwise the next login
+    // briefly renders the previous user's transcript.
+    reset();
+    if (sessionRef.current) clearSession(sessionRef.current);
+    sessionRef.current = null;
+    setCurrentSessionId(null);
+    resetApprovalMode();
+    panel.closeKinds(["artifact", "review"]);
+    logout();
+  }, [reset, clearSession, setCurrentSessionId, resetApprovalMode, logout, panel]);
+
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
-    setActiveArtifact(null);
-    setActiveFileChanges(null);
+    resetApprovalMode();
+    panel.closeKinds(["artifact", "review"]);
+    // "Default side panel" (General). Files and Agents are workspace-scoped, so
+    // they survive closeKinds above and only need opening when not already up.
+    if (defaultPanel === "files") openFilesExplorer();
+    else if (defaultPanel === "tasks") openAgentsPanel();
     if (window.location.hash !== "" && window.location.hash !== "#/") {
       window.location.hash = "/";
     }
-  }, [setCurrentSessionId]);
+  }, [setCurrentSessionId, resetApprovalMode, panel, defaultPanel, openFilesExplorer, openAgentsPanel]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
       if (sessionId === sessionRef.current) return;
 
-      setActiveArtifact(null);
-      setActiveFileChanges(null);
+      panel.closeKinds(["artifact", "review"]);
       const oldSid = sessionRef.current;
       sessionRef.current = sessionId;
       if (window.location.hash !== `#/c/${sessionId}`) {
@@ -317,7 +569,7 @@ export function App() {
         setMessagesForSession(
           sessionId,
           msgs.map((m) => ({
-            role: m.role as "user" | "assistant",
+            role: m.role as "user" | "assistant" | "system",
             content: m.content,
             steps: m.steps as ToolStep[] | undefined,
             artifacts: m.artifacts as Artifact[] | undefined,
@@ -325,6 +577,7 @@ export function App() {
             attachments: m.attachments,
             chatImages: m.chatImages,
             annotations: m.annotations,
+            task: m.task,
           })),
         );
       } catch {
@@ -334,12 +587,28 @@ export function App() {
         }
       }
     },
-    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat],
+    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat, panel],
   );
 
   useEffect(() => {
     const handleHashChange = (): Promise<void> | void => {
       const hash = window.location.hash;
+      const isUtilityPath = window.location.pathname === "/admin" || window.location.pathname === "/settings";
+      const routeLocation = isUtilityPath
+        ? `${window.location.pathname}${window.location.search}`
+        : window.location.hash;
+      const [route, query = ""] = routeLocation.replace(/^#/, "").split("?");
+      const params = new URLSearchParams(query);
+      if (route === "/admin" || route === "/settings") {
+        setSettingsOpen(true);
+        const requested = params.get("tab") ?? "";
+        // `integrations` was the old id for the per-user connections tab; keep
+        // existing links working.
+        const section = requested === "integrations" ? "connections" : requested;
+        if (SETTINGS_SECTION_IDS.has(section)) setSettingsSection(section as SettingsSectionId);
+        return;
+      }
+      setSettingsOpen(false);
       const match = hash.match(/^#\/c\/(.+)$/);
       if (match) {
         const sid = match[1];
@@ -350,13 +619,17 @@ export function App() {
     };
 
     window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("popstate", handleHashChange);
     if (isReady && isMultiUser !== undefined && !initialSyncRef.current) {
       initialSyncRef.current = true;
       // Keep the boot screen up until the deep-linked session (if any) has
       // loaded — otherwise the home screen flashes before the chat appears.
       void Promise.resolve(handleHashChange()).finally(() => setRouteBooting(false));
     }
-    return () => window.removeEventListener("hashchange", handleHashChange);
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("popstate", handleHashChange);
+    };
   }, [isReady, isMultiUser, handleResumeSession, handleNewChat]);
 
   const handleFork = useCallback(
@@ -400,12 +673,11 @@ export function App() {
       await deleteSession(sessionId);
       clearSession(sessionId);
       if (sessionRef.current === sessionId) {
-        setActiveArtifact(null);
-        setActiveFileChanges(null);
+        panel.closeKinds(["artifact", "review"]);
         sessionRef.current = null;
       }
     },
-    [clearSession, deleteSession],
+    [clearSession, deleteSession, panel],
   );
 
   const handleSlashCommand = useCallback(
@@ -415,25 +687,23 @@ export function App() {
           handleNewChat();
           break;
         case "/settings":
-          setSettingsTab("general");
-          setSettingsOpen(true);
+          openSettingsRoute("general");
           break;
         case "/memory":
-          setSettingsTab("memories");
-          setSettingsOpen(true);
+          openSettingsRoute("memories");
           break;
         case "/init":
           setInitOpen(true);
           break;
         case "/model":
-          setSettingsOpen(true);
+          openSettingsRoute("general");
           break;
         case "/help":
           setHelpOpen(true);
           break;
       }
     },
-    [handleNewChat],
+    [handleNewChat, openSettingsRoute],
   );
 
   const { uploads, uploadFiles, dismiss: dismissUpload, activeCount, errorCount } = useUploads(
@@ -467,23 +737,28 @@ export function App() {
   );
 
   const displayError = serverError || chatError || operationError || approvalModeError;
-  const isWelcome = isReady && messages.length === 0 && !isLoading;
+  const loadingCurrentSession = !!currentSessionId && isSessionLoading(currentSessionId);
+  const isWelcome = isReady && messages.length === 0 && !chatBusy && !loadingCurrentSession;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
   const sessionTitle =
     rawTitle && !["New chat", "New session"].includes(rawTitle)
       ? rawTitle
       : "New chat";
 
+  if (serverError) {
+    return <ServerErrorScreen error={serverError} />;
+  }
+
   // Blank boot screen while we don't yet know what to render — server still
   // connecting or auth state unknown. Prevents the chat shell flashing before
   // the login screen (or before a restored session).
-  if (!isReady && !serverError) {
+  if (!isReady) {
     return <BootScreen />;
   }
 
-  if (isReady && isMultiUser && !token && !serverError) {
+  if (isReady && isMultiUser && !token) {
     return (
-      <div className="flex h-screen flex-col">
+      <div className="flex h-dvh flex-col">
         <WarningBanner warnings={serverWarnings} />
         <Login onLogin={login} onRegister={register} error={authError || null} />
       </div>
@@ -492,7 +767,7 @@ export function App() {
 
   // Logged in (or single-user), but the initial route hasn't resolved yet —
   // keep the boot screen up instead of flashing the home screen.
-  if (routeBooting && !serverError) {
+  if (routeBooting) {
     return <BootScreen />;
   }
 
@@ -502,38 +777,14 @@ export function App() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         sessionTitle={sessionTitle}
-        headerActions={
-          <>
-            <button
-              type="button"
-              onClick={toggleFilesExplorer}
-              className={`${headerActionButtonClass} ${
-                filesExplorerOpen
-                  ? headerActionActiveClass
-                  : headerActionIdleClass
-              }`}
-              title={filesExplorerOpen ? "Close files" : "Browse workspace files"}
-              aria-label="Browse files"
-              aria-pressed={filesExplorerOpen}
-            >
-              <FolderTree size={15} />
-              <span className="hidden sm:inline">Files</span>
-            </button>
-            {isMultiUser && (
-              <UploadButton
-                uploads={uploads}
-                activeCount={activeCount}
-                errorCount={errorCount}
-                onUpload={uploadFiles}
-                onDismiss={dismissUpload}
-              />
-            )}
-          </>
-        }
+        rightPanelOpen={rightPanelOpen}
+        onToggleRightPanel={() => {
+          setRightPanelOpen((open) => !open);
+        }}
         artifactOpen={rightPanelOpen}
         artifactExpanded={rightPanelExpanded}
-        artifactDefaultSize={filesExplorerOpen ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
-        artifactMinSize={filesExplorerOpen ? 42 : 20}
+        artifactDefaultSize={filesTabActive ? Math.max(44, artifactDefaultSize) : artifactDefaultSize}
+        artifactMinSize={filesTabActive ? 42 : 20}
         artifactMaxSize={70}
         onArtifactResize={setArtifactDefaultSize}
         banners={
@@ -545,84 +796,149 @@ export function App() {
         sidebar={
           <Sidebar
             onNewChat={handleNewChat}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => openSettingsRoute("general")}
             onOpenInit={() => setInitOpen(true)}
             onOpenHelp={() => setHelpOpen(true)}
             isConnected={isReady}
             theme={theme}
             onToggleTheme={toggleTheme}
             sessions={sessions}
+            sessionsLoading={sessionsLoading}
             currentSessionId={currentSessionId}
             onResumeSession={handleResumeSession}
             onRenameSession={renameSession}
             onDeleteSession={handleDeleteSession}
             hasModels={models.length > 0}
-            onLogout={logout}
+            onLogout={handleLogout}
             username={user?.username}
             isMultiUser={isMultiUser}
             isAdmin={isAdmin}
-            onOpenAdmin={() => setAdminOpen(true)}
+            onOpenAdmin={() => openAdminRoute("files")}
           />
         }
         artifactPanel={
-          filesExplorerOpen ? (
-            <FileExplorerPanel
+          <RightPanel
+            tabs={panel.tabs}
+            activeKey={panel.activeKey}
+            onActivate={panel.activate}
+            onCloseTab={(key) => {
+              // Leaving a selected agent behind would show its detail view again
+              // the next time the tab is opened.
+              if (key === "agents") void clearSubagentSelection();
+              panel.close(key);
+            }}
+            visible={rightPanelOpen}
+            onHide={hidePanel}
+            launcherItems={launcherItems}
+            expanded={rightPanelExpanded}
+            onToggleExpand={toggleRightPanelExpanded}
+            renderSurface={(open) =>
+              open.tab.kind === "agents" ? (
+            <AgentsPanel
+              active={activeSubagents}
+              done={doneSubagents}
+              selectedId={selectedSubagentId}
+              detail={subagentDetail}
+              onSelect={(id) => {
+                void selectAgent(id);
+              }}
+              onBack={() => {
+                void clearSubagentSelection();
+              }}
+              onStop={async (id) => {
+                await stopSubagent(id);
+              }}
+              onStopTerminal={async (taskId) => {
+                if (!currentSessionId) return;
+                const response = await fetch(`${baseUrl}/sessions/${currentSessionId}/tasks/${taskId}/stop`, {
+                  method: "POST",
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                });
+                if (!response.ok) {
+                  const detail = await response.text();
+                  throw new Error(detail || "Could not stop command");
+                }
+                const payload = await response.json();
+                if (payload.task) {
+                  setMessages((previous) => previous.map((message) => (
+                    message.role === "system" && message.task?.task_id === taskId
+                      ? { ...message, task: payload.task }
+                      : message
+                  )));
+                }
+              }}
+              onSend={async (id, message) => {
+                await sendSubagentMessage(id, message);
+              }}
+              onOpenArtifact={openArtifact}
+              onOpenFileChanges={openFileChanges}
+              onUndoFileChanges={(changeSet) => {
+                void undoFileChanges(changeSet).catch((err) => {
+                  setOperationError(
+                    err instanceof Error ? err.message : "Undo failed",
+                  );
+                });
+              }}
               baseUrl={baseUrl}
               token={token}
-              onClose={closeRightPanel}
-              refreshSignal={`${messages.length}:${isLoading ? "running" : "idle"}`}
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
+              terminalTasks={terminalTasks}
             />
-          ) : activeArtifact ? (
-            <ArtifactPanel
-              artifact={activeArtifact}
-              baseUrl={baseUrl}
-              token={token}
-              onClose={closeRightPanel}
-              embedded
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-            />
-          ) : activeFileChanges ? (
-            <FileChangePanel
-              changeSet={activeFileChanges}
-              onClose={closeRightPanel}
-              expanded={rightPanelExpanded}
-              onToggleExpand={toggleRightPanelExpanded}
-            />
-          ) : undefined
+              ) : open.tab.kind === "files" ? (
+                <FileExplorerPanel
+                  baseUrl={baseUrl}
+                  token={token}
+                  refreshSignal={`${messages.length}:${chatBusy ? "running" : "idle"}`}
+                  onTitleChange={(title) => panel.setTitle(open.key, title)}
+                  uploads={uploads}
+                  uploadActiveCount={activeCount}
+                  uploadErrorCount={errorCount}
+                  onUpload={isMultiUser ? uploadFiles : undefined}
+                  onDismissUpload={isMultiUser ? dismissUpload : undefined}
+                />
+              ) : open.tab.kind === "artifact" ? (
+                <ArtifactPanel
+                  artifact={open.tab.artifact}
+                  baseUrl={baseUrl}
+                  token={token}
+                  embedded
+                />
+              ) : (
+                <FileChangePanel changeSet={open.tab.changeSet} />
+              )
+            }
+          />
         }
       >
         <div className="flex flex-col flex-1 min-h-0">
           {isWelcome && (
-            <div className="relative flex-1 flex flex-col items-center justify-center min-h-0 overflow-y-auto py-8">
+            <div className="relative flex-1 flex flex-col items-center min-h-0 overflow-y-auto">
               <WelcomeScene />
-              <div className="relative z-10 flex w-full max-w-[42rem] flex-col gap-5 px-5">
+              {/* welcome-block carries the density preference and the top anchor;
+                  see globals.css. */}
+              <div className="welcome-block relative z-10 flex w-full max-w-[42rem] flex-col px-5">
                 <WelcomeContent />
                 {/* Extra headroom so the pet standing on the composer doesn't
                     crowd the hero title; he strolls this ledge while idle. */}
-                <div className="relative mt-9">
+                <div className="relative mt-[var(--welcome-headroom)]">
                   <div className="absolute inset-x-0 top-0 h-0">
-                    <PixelPet working={isLoading} size={40} idleStrollEveryMs={90_000} />
+                    <PixelPet working={chatBusy} size={40} idleStrollEveryMs={90_000} />
                   </div>
                 <InputBar
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
                   onSlashCommand={handleSlashCommand}
-                  disabled={isLoading || !isReady}
-                  isLoading={isLoading}
+                  disabled={chatBusy || !isReady}
+                  isLoading={chatBusy}
                   onStop={stop}
                   models={models}
                   capabilities={capabilities}
                   requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-                  ensureSession={ensureSession}
+                  ensureSession={ensureComposerSession}
                   currentModel={currentModel}
                   onSelectModel={(model) => setModel(model, sessionRef.current)}
                   approvalMode={approvalMode}
                   onSelectApprovalMode={setApprovalMode}
                   approvalModeChanging={approvalModeChanging}
-                  isMultiUser={isMultiUser}
                   token={token}
                   uploadingCount={activeCount}
                   onUpload={isMultiUser ? uploadFiles : undefined}
@@ -633,48 +949,66 @@ export function App() {
                   embedded
                 />
                 </div>
-                <div>
-                  <SuggestionChips onSuggestionClick={handleSubmit} />
-                </div>
+                {showSuggestions && (
+                  <div>
+                    <SuggestionChips onSuggestionClick={handleSubmit} />
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {isReady && (messages.length > 0 || isLoading) && (
-            <ChatView
-              messages={messages}
-              streamingSteps={streamingSteps}
-              streamingText={streamingText}
-              currentTool={currentTool}
-              statusMessage={statusMessage}
-              isLoading={isLoading}
-              awaitingApproval={!!pendingApproval}
-              annotations={annotations}
-              onAddAnnotation={addAnnotation}
-              onUpdateAnnotation={updateAnnotation}
-              onRemoveAnnotation={removeAnnotation}
-              onRetry={retryAt}
-              onFork={isMultiUser ? handleFork : undefined}
-              onOpenArtifact={openArtifact}
-              onOpenFileChanges={openFileChanges}
-              onUndoFileChanges={(changeSet) => {
-                setOperationError(null);
-                void undoFileChanges(changeSet).catch((err) => {
-                  console.error("Undo failed:", err);
-                  setOperationError(err instanceof Error ? err.message : "Undo failed");
-                });
-              }}
-              onOpenMemories={openMemories}
-              baseUrl={baseUrl}
-              token={token}
-            />
+          {isReady && (messages.length > 0 || chatBusy) && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <ChatView
+                sessionId={currentSessionId}
+                messages={messages}
+                streamingSteps={streamingSteps}
+                streamingText={streamingText}
+                currentTool={currentTool}
+                statusMessage={statusMessage}
+                activityStartedAt={activityStartedAt}
+                isLoading={chatBusy}
+                awaitingApproval={!!pendingApproval}
+                annotations={annotations}
+                onAddAnnotation={addAnnotation}
+                onUpdateAnnotation={updateAnnotation}
+                onRemoveAnnotation={removeAnnotation}
+                onRetry={retryAt}
+                onFork={isMultiUser ? handleFork : undefined}
+                onOpenArtifact={openArtifact}
+                onOpenFileChanges={openFileChanges}
+                onUndoFileChanges={(changeSet) => {
+                  setOperationError(null);
+                  void undoFileChanges(changeSet).catch((err) => {
+                    console.error("Undo failed:", err);
+                    setOperationError(err instanceof Error ? err.message : "Undo failed");
+                  });
+                }}
+                onOpenMemories={openMemories}
+                onOpenTask={(task) => {
+                  if (task.task_type === "agent") {
+                    openAgentsPanel();
+                    void selectAgent(task.task_id);
+                  }
+                }}
+                baseUrl={baseUrl}
+                token={token}
+              />
+            </div>
           )}
 
           {isReady && !isWelcome && (
             <div className="shrink-0 bg-scout-canvas/95">
-              {!pendingUserInput && !pendingApproval && annotations.length === 0 && (
+              {!agentsTabActive && activeSubagents.length > 0 && (
+                <SubagentStatusStrip
+                  active={activeSubagents}
+                  onOpen={openAgentsPanel}
+                />
+              )}
+              {!pendingUserInput && !pendingApproval && pendingSteers.length === 0 && annotations.length === 0 && (
                 <div className="relative z-10 mx-auto h-0 w-full max-w-[46rem] px-4">
-                  <PixelPet working={isLoading} />
+                  <PixelPet working={chatBusy || activeSubagents.length > 0} />
                 </div>
               )}
               {pendingUserInput && (
@@ -701,19 +1035,22 @@ export function App() {
                   baseUrl={baseUrl}
                   onSubmit={handleSubmit}
                   onSlashCommand={handleSlashCommand}
-                  disabled={isLoading || !isReady}
-                  isLoading={isLoading}
+                  disabled={!isReady}
+                  isLoading={chatBusy}
                   onStop={stop}
                   models={models}
                   capabilities={capabilities}
                   requiresVision={messages.some((m) => !!m.chatImages?.length || m.attachments?.some((p) => /\.(png|jpe?g|webp|gif)$/i.test(p)))}
-                  ensureSession={ensureSession}
+                  ensureSession={ensureComposerSession}
                   currentModel={currentModel}
                   onSelectModel={(model) => setModel(model, sessionRef.current)}
                   approvalMode={approvalMode}
                   onSelectApprovalMode={setApprovalMode}
                   approvalModeChanging={approvalModeChanging}
-                  isMultiUser={isMultiUser}
+                  modelDisabled={chatBusy}
+                  pendingSteers={pendingSteers}
+                  onActivateSteer={(steerId) => { void activateSteer(steerId); }}
+                  onCancelSteer={(steerId) => { void cancelSteer(steerId); }}
                   token={token}
                   uploadingCount={activeCount}
                   onUpload={isMultiUser ? uploadFiles : undefined}
@@ -727,29 +1064,26 @@ export function App() {
         </div>
       </WorkspaceShell>
 
-      <SettingsPanel
+      <SettingsSurface
         open={settingsOpen}
         baseUrl={baseUrl}
         isMultiUser={isMultiUser}
+        isAdmin={isAdmin}
         token={token}
-        initialTab={settingsTab}
+        initialSection={settingsSection}
+        onSectionChange={(section) => {
+          setSettingsSection(section);
+          window.history.replaceState({}, "", settingsUrl(section));
+        }}
         onClose={() => {
-          setSettingsOpen(false);
-          setSettingsTab("general");
+          closeSettingsRoute();
           reloadConfig();
         }}
       />
 
-      <InitWizard open={initOpen} baseUrl={baseUrl} onClose={() => setInitOpen(false)} />
+      <InitWizard open={initOpen} baseUrl={baseUrl} token={token} onClose={() => setInitOpen(false)} />
 
       <HelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-
-      <AdminPanel
-        open={adminOpen}
-        onClose={() => setAdminOpen(false)}
-        baseUrl={baseUrl}
-        token={token}
-      />
     </>
   );
 }

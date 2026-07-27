@@ -1,3 +1,8 @@
+// Explicit ".js": tailwind v3 ships no exports map for this subpath, so bare
+// "tailwindcss/plugin" fails to resolve under ESM (this config and
+// scripts/check-tokens.mjs both load as modules).
+import plugin from "tailwindcss/plugin.js";
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
@@ -19,13 +24,6 @@ export default {
           "hairline-faint": "var(--scout-hairline-faint)",
           lift: "rgb(var(--scout-lift) / <alpha-value>)",
           bg: "rgb(var(--scout-bg) / <alpha-value>)",
-          surface: "rgb(var(--scout-surface) / <alpha-value>)",
-          "surface-hover": "rgb(var(--scout-surface-hover) / <alpha-value>)",
-          "sidebar-bg": "rgb(var(--scout-sidebar-bg) / <alpha-value>)",
-          "sidebar-hover": "rgb(var(--scout-sidebar-hover) / <alpha-value>)",
-          border: "rgb(var(--scout-border) / <alpha-value>)",
-          "text-primary": "rgb(var(--scout-text-primary) / <alpha-value>)",
-          "text-secondary": "rgb(var(--scout-text-secondary) / <alpha-value>)",
           peach: "rgb(var(--scout-peach) / <alpha-value>)",
           "peach-muted": "var(--scout-peach-muted)",
           lavender: "rgb(var(--scout-lavender) / <alpha-value>)",
@@ -53,7 +51,12 @@ export default {
         },
       },
       fontFamily: {
+        // "Inter Variable" is the family name the self-hosted variable build
+        // registers (see the @fontsource import in main.tsx) — it must come
+        // FIRST. Plain "Inter" stays next as a fallback for machines with a
+        // static Inter installed locally.
         sans: [
+          "Inter Variable",
           "Inter",
           "SF Pro Text",
           "system-ui",
@@ -63,6 +66,7 @@ export default {
           "sans-serif",
         ],
         display: [
+          "Inter Variable",
           "Inter",
           "SF Pro Display",
           "ui-sans-serif",
@@ -81,13 +85,44 @@ export default {
         hero: "var(--radius-hero)",
         card: "var(--radius-card)",
         btn: "var(--radius-btn)",
+        composer: "var(--radius-composer)",
+        message: "var(--radius-message)",
+        surface: "var(--radius-surface)",
+        control: "var(--radius-control)",
       },
       boxShadow: {
         pop: "var(--shadow-pop)",
         "card-hover": "var(--shadow-card-hover)",
         composer: "var(--shadow-composer)",
       },
+      // Motion tokens. The easing was previously repeated as a literal
+      // cubic-bezier in three places; `ease-swift` is now the single name for it.
+      transitionTimingFunction: {
+        swift: "var(--ease-swift)",
+      },
+      transitionDuration: {
+        fast: "var(--dur-fast)",
+        base: "var(--dur-base)",
+        panel: "var(--dur-panel)",
+        drawer: "var(--dur-drawer)",
+        glide: "var(--dur-glide)",
+      },
     },
   },
-  plugins: [],
+  plugins: [
+    /*
+     * `motion-off:` — the Appearance "Reduce motion" setting.
+     *
+     * Tailwind's built-in `motion-reduce:` compiles to the OS media query only,
+     * and redefining a core variant does not take, so the in-app setting needs a
+     * variant of its own. Use them together on a micro-interaction that has no
+     * CSS equivalent in globals.css:
+     *   motion-reduce:active:scale-100 motion-off:active:scale-100
+     * Everything animated through the `.animate-*` classes is already covered by
+     * the `[data-motion="reduce"]` rules in globals.css and needs neither.
+     */
+    plugin(({ addVariant }) => {
+      addVariant("motion-off", ':root[data-motion="reduce"] &');
+    }),
+  ],
 };

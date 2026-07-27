@@ -20,9 +20,22 @@ export interface ProviderConfig {
   apiKey: string;
 }
 
+export interface McpBootstrapServer {
+  id: string;
+  name: string;
+  transport: "streamable_http" | "container_stdio";
+  url?: string;
+  image?: string;
+  command?: string[];
+  args?: string[];
+  availability: "everyone" | "selected";
+  enabled: boolean;
+  auth_mode: "none" | "bearer";
+}
+
 export interface DeploymentDraft {
-  version: 2;
-  phase: "providers" | "models" | "access" | "review" | "complete";
+  version: 3;
+  phase: "providers" | "models" | "access" | "mcp" | "review" | "complete";
   /** Providers the user enabled, in configuration order. */
   enabled: ProviderId[];
   providers: Record<ProviderId, ProviderConfig>;
@@ -36,8 +49,12 @@ export interface DeploymentDraft {
   dataDir: string;
   scoutSecret: string;
   workerSecret: string;
+  /** Admin-installed MCP integrations applied by the deploy wizard. */
+  mcpServers: McpBootstrapServer[];
   updatedAt: string;
 }
+
+type DeploymentDraftV2 = Omit<DeploymentDraft, "version" | "mcpServers"> & { version: 2 };
 
 /** V1 single-provider draft, still accepted on load. */
 interface DeploymentDraftV1 {
@@ -63,7 +80,7 @@ export function deploymentDraftPath(root: string): string { return join(root, DR
 
 export function newDeploymentDraft(): DeploymentDraft {
   return {
-    version: 2,
+    version: 3,
     phase: "providers",
     enabled: [],
     providers: {
@@ -79,6 +96,7 @@ export function newDeploymentDraft(): DeploymentDraft {
     dataDir: "",
     scoutSecret: randomBytes(32).toString("hex"),
     workerSecret: randomBytes(32).toString("hex"),
+    mcpServers: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -105,12 +123,24 @@ function saveDraft(root: string, draft: DeploymentDraft): void {
   writeFileSync(path, `${JSON.stringify(draft, null, 2)}\n`, { mode: 0o600 });
 }
 
+function loadMcpBootstrap(root: string): McpBootstrapServer[] {
+  const path = join(root, "config", "mcp.yaml");
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { servers?: McpBootstrapServer[] };
+    return Array.isArray(parsed.servers) ? parsed.servers : [];
+  } catch {
+    return [];
+  }
+}
+
 function loadDraft(root: string): DeploymentDraft | undefined {
   const path = deploymentDraftPath(root);
   if (!existsSync(path)) return undefined;
   try {
-    const value = JSON.parse(readFileSync(path, "utf8")) as DeploymentDraft | DeploymentDraftV1;
-    if (value.version === 2) return { ...newDeploymentDraft(), ...value };
+    const value = JSON.parse(readFileSync(path, "utf8")) as DeploymentDraft | DeploymentDraftV2 | DeploymentDraftV1;
+    if (value.version === 3) return { ...newDeploymentDraft(), ...value };
+    if (value.version === 2) return { ...newDeploymentDraft(), ...value, version: 3, mcpServers: loadMcpBootstrap(root) };
     if (value.version === 1) return migrateDraft(value);
     return undefined;
   } catch { return undefined; }
@@ -167,6 +197,7 @@ const PROVIDER_ENV_KEYS: Record<ProviderId, string[]> = {
 
 export function draftFromEnvironment(root: string, env?: Map<string, string>): DeploymentDraft {
   const draft = newDeploymentDraft();
+  draft.mcpServers = loadMcpBootstrap(root);
   if (!env) {
     const envPath = join(root, ".env");
     if (!existsSync(envPath)) return draft;
@@ -269,6 +300,9 @@ function writeSelectedConfiguration(root: string, draft: DeploymentDraft): void 
     composeText = composeText.replace("volumes:\n  scout-data:", "volumes:\n  scout-data:\n  vllm-cache:");
   }
   writeFileSync(composePath, composeText);
+
+  const mcpPath = join(root, "config", "mcp.yaml");
+  writeFileSync(mcpPath, `${JSON.stringify({ servers: draft.mcpServers }, null, 2)}\n`, { mode: 0o600 });
 }
 
 function prepareWorkspace(root: string, draft: DeploymentDraft): void {

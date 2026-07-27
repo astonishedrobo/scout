@@ -122,3 +122,16 @@ retyping anything. Secrets are never rotated on re-apply.
 The CLI has no private configuration channel: it only writes the files
 above, which `docker compose` consumes on its own. You can edit them by
 hand or delete the CLI entirely and the deployment still works.
+
+## MCP integrations
+
+`npm run deploy` includes an **Integrations** step for remote Streamable HTTP
+servers and advanced digest-pinned container stdio servers. Admin-installed MCP servers
+are saved in the resumable deployment draft and applied to `config/mcp.yaml`
+with the rest of the deployment. Re-running the wizard loads the current MCP
+configuration, so integrations are not lost or re-entered.
+
+After launch, the admin **Tools** panel can manage live integrations. Users opt
+in from **Settings → Integrations**; credentials are stored per user and
+encrypted with `SCOUT_SECRET_KEY`. A failed MCP connection is a warning and
+does not stop Scout.

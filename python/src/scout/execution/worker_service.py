@@ -6,6 +6,9 @@ import argparse
 import asyncio
 import logging
 import os
+import json
+import select
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -70,6 +73,92 @@ class SessionClosePayload(BaseModel):
     session_id: str
 
 
+class McpConnectPayload(BaseModel):
+    connection_id: str
+    user_id: str
+    session_id: str
+    image: str
+    command: list[str] = Field(default_factory=list)
+    args: list[str] = Field(default_factory=list)
+
+
+class McpCallPayload(BaseModel):
+    connection_id: str
+    user_id: str
+    session_id: str
+    name: str
+    arguments: dict = Field(default_factory=dict)
+
+
+class _McpProcess:
+    def __init__(self, payload: McpConnectPayload) -> None:
+        from .container_backend import container_engine_binary
+        from .worker_roots import validate_user_id
+        validate_user_id(payload.user_id)
+        binary = container_engine_binary()
+        if not binary:
+            raise RuntimeError("container engine unavailable")
+        image = payload.image
+        if "@sha256:" not in image:
+            raise RuntimeError("MCP image must be pinned by digest")
+        host_users = os.environ.get("SCOUT_WORKSPACE_USERS_HOST")
+        host_shared = os.environ.get("SCOUT_WORKSPACE_SHARED_HOST")
+        if not host_users or not host_shared:
+            raise RuntimeError("host workspace mounts are not configured")
+        personal = str(Path(host_users) / payload.user_id)
+        self.user_id = payload.user_id
+        command = [binary, "run", "--rm", "-i", "--network", "none", "--user", "1000:1000",
+                   "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+                   "--memory", "512m", "--cpus", "1", "--pids-limit", "128",
+                   "--tmpfs", "/tmp:rw,mode=1777", "-v", f"{personal}:/workspace:rw",
+                   "-v", f"{host_shared}:/shared:ro", "-w", "/workspace",
+                   "--label", "scout.mcp=1", "--label", f"scout.user={payload.user_id}", image,
+                   *payload.command, *payload.args]
+        self.process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, bufsize=1,
+        )
+        self.lock = threading.Lock()
+        self.next_id = 1
+
+    def rpc(self, method: str, params: dict) -> dict:
+        with self.lock:
+            if self.process.poll() is not None or not self.process.stdin or not self.process.stdout:
+                raise RuntimeError("MCP process exited")
+            request_id = self.next_id
+            self.next_id += 1
+            self.process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
+            self.process.stdin.flush()
+            while True:
+                ready, _, _ = select.select([self.process.stdout], [], [], 30)
+                if not ready:
+                    raise RuntimeError(f"MCP process timed out during {method}")
+                line = self.process.stdout.readline()
+                if not line:
+                    raise RuntimeError("MCP process closed stdout")
+                message = json.loads(line)
+                if message.get("id") == request_id:
+                    if "error" in message:
+                        raise RuntimeError(str(message["error"]))
+                    return message.get("result") or {}
+
+    def initialize(self) -> dict:
+        self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "scout", "version": "0.1"}})
+        if not self.process.stdin:
+            raise RuntimeError("MCP process closed stdin")
+        self.process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        self.process.stdin.flush()
+        return self.rpc("tools/list", {})
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
 class ExecCommandPayload(BaseModel):
     execution_id: str
     user_id: str
@@ -98,7 +187,8 @@ class ExecStdinPayload(BaseModel):
 
 
 class ExecCancelPayload(BaseModel):
-    execution_id: str
+    execution_id: str = ""
+    process_id: int | None = None
     user_id: str
     session_id: str
 
@@ -151,6 +241,8 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             isolation_error = container_error
 
     managed_sessions: dict[str, _ManagedSession] = {}
+    mcp_processes: dict[str, _McpProcess] = {}
+    mcp_locks: dict[str, asyncio.Lock] = {}
     sessions_lock = threading.RLock()
 
     app = FastAPI(title="Scout Execution Worker", version="0.2.0")
@@ -161,6 +253,9 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             for ms in managed_sessions.values():
                 ms.session.close()
             managed_sessions.clear()
+            for process in mcp_processes.values():
+                process.close()
+            mcp_processes.clear()
 
     def _session_key(user_id: str, session_id: str) -> str:
         return f"{user_id}:{session_id}"
@@ -223,6 +318,53 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
             "warnings": h.warnings,
             "error": h.error or isolation_error,
         }
+
+    @app.post("/mcp/connect")
+    async def mcp_connect(request: Request, authorization: str | None = Header(None)):
+        body = await request.body()
+        payload = McpConnectPayload.model_validate_json(body)
+        _auth_request(request, authorization, body, payload.user_id)
+        validate_user_id(payload.user_id)
+        async with mcp_locks.setdefault(payload.connection_id, asyncio.Lock()):
+            if payload.connection_id in mcp_processes:
+                process = mcp_processes[payload.connection_id]
+                if process.user_id != payload.user_id:
+                    raise HTTPException(status_code=403, detail="MCP connection ownership mismatch")
+                tools = await asyncio.to_thread(process.rpc, "tools/list", {})
+            else:
+                process = await asyncio.to_thread(_McpProcess, payload)
+                try:
+                    tools = await asyncio.to_thread(process.initialize)
+                except Exception:
+                    process.close()
+                    raise
+                mcp_processes[payload.connection_id] = process
+        return {"connection_id": payload.connection_id, "tools": tools.get("tools", [])}
+
+    @app.post("/mcp/call")
+    async def mcp_call(request: Request, authorization: str | None = Header(None)):
+        body = await request.body()
+        payload = McpCallPayload.model_validate_json(body)
+        _auth_request(request, authorization, body, payload.user_id)
+        process = mcp_processes.get(payload.connection_id)
+        if process is None:
+            raise HTTPException(status_code=404, detail="MCP connection not found")
+        if process.user_id != payload.user_id:
+            raise HTTPException(status_code=403, detail="MCP connection ownership mismatch")
+        async with mcp_locks.setdefault(payload.connection_id, asyncio.Lock()):
+            result = await asyncio.to_thread(process.rpc, "tools/call", {"name": payload.name, "arguments": payload.arguments})
+        return result
+
+    @app.delete("/mcp/{connection_id}")
+    async def mcp_close(connection_id: str, request: Request, authorization: str | None = Header(None)):
+        body = await request.body()
+        _auth_request(request, authorization, body, None)
+        async with mcp_locks.setdefault(connection_id, asyncio.Lock()):
+            process = mcp_processes.pop(connection_id, None)
+            if process:
+                await asyncio.to_thread(process.close)
+        mcp_locks.pop(connection_id, None)
+        return {"status": "ok"}
 
     @app.post("/execute")
     async def execute(
@@ -606,12 +748,17 @@ def create_worker_app(config: ExecutionConfig | None = None) -> FastAPI:
         mgr = _unified_mgr()
         if mgr is None:
             raise HTTPException(status_code=503, detail="Unified exec unavailable")
-        cancelled = await asyncio.to_thread(
-            mgr.cancel_execution,
-            payload.execution_id,
-            payload.user_id,
-            payload.session_id,
-        )
+        if payload.process_id is not None:
+            cancelled = int(await asyncio.to_thread(
+                mgr.cancel_process, payload.process_id, payload.user_id, payload.session_id,
+            ))
+        else:
+            cancelled = await asyncio.to_thread(
+                mgr.cancel_execution,
+                payload.execution_id,
+                payload.user_id,
+                payload.session_id,
+            )
         return {"status": "ok", "cancelled": cancelled}
 
     @app.get("/exec/stream/{execution_id}")

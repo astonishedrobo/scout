@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SPRITE } from "./spritePalette";
 
 // Scout's pixel pet. Lives on the strip above the composer.
 //  - Idle: sits in the right corner, breathing; click it and it waves.
@@ -11,14 +12,8 @@ const STROLL_MS = 11_000;
 const STROLL_EVERY_MS = 20_000;
 const WAVE_MS = 2_200;
 
-// Fixed sprite palette — vivid on light AND dark backgrounds. Theme tokens
-// desaturate in dark/soft modes, which turned the pet into a gray ghost.
-const SKIN = "#f2a76b";
-const HAIR = "#f5c542";
-const SHIRT = "#8f78ef";
-const PANTS = "var(--sprite-pants)";
-const SHOES = "var(--sprite-shoes)";
-const DARK = "#17181c";
+// Shared with PixelArt — see spritePalette for why these are fixed hexes.
+const { skin: SKIN, hair: HAIR, shirt: SHIRT, pants: PANTS, shoes: SHOES, dark: DARK } = SPRITE;
 
 function PetSprite({ waving, size = 34, cap = false }: { waving: boolean; size?: number; cap?: boolean }) {
   return (
@@ -157,7 +152,11 @@ export function PixelPet({
       type="button"
       onClick={waveNow}
       title={working ? "Scout is working on it!" : "Hi!"}
-      aria-label="Scout's pet"
+      // Decorative: clicking it makes it wave, and that is the whole feature.
+      // As a labelled, focusable control it inserted an uninformative tab stop
+      // between the composer and the suggestion chips.
+      aria-hidden="true"
+      tabIndex={-1}
       className={`pet cursor-pointer border-0 bg-transparent p-0 ${
         inline ? "relative inline-block" : "absolute bottom-0"
       } ${strolling ? "pet-stroll" : waving ? "pet-hop" : working ? "pet-goof" : "pet-breathe"}`}

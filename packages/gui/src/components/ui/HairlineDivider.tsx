@@ -16,7 +16,7 @@ export function HairlineDivider({ label, surface = "canvas" }: HairlineDividerPr
   return (
     <div className="relative flex items-center w-full">
       <div className={`flex-1 border-t ${lineClass}`} />
-      <span className={`px-3 text-caption text-xs ${labelClass}`}>{label}</span>
+      <span className={`px-3 text-caption text-caption ${labelClass}`}>{label}</span>
       <div className={`flex-1 border-t ${lineClass}`} />
     </div>
   );

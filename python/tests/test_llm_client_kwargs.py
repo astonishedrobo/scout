@@ -20,6 +20,7 @@ def test_agent_chat_model_passes_client_kwargs():
         "api_key": "local-vllm",
         "api_base": "http://vllm:8000/v1",
         "max_retries": 2,
+        "streaming": True,
     }
 
 

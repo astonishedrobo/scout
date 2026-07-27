@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { PanelToggleIcon } from "./ui/PanelToggleIcon";
-import { headerIconButtonClass } from "./ui/headerControls";
+import { IconButton } from "./ui/IconButton";
 import { useMediaQuery } from "../hooks/usePanelPrefs";
+import { PANEL_GLIDE_MS, SETTLE_SLACK_MS } from "../motion";
 
 interface WorkspaceShellProps {
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   sidebar: ReactNode;
   headerActions?: ReactNode;
+  rightPanelOpen?: boolean;
+  onToggleRightPanel?: () => void;
   sessionTitle?: string;
   banners?: ReactNode;
   children: ReactNode;
@@ -27,24 +30,49 @@ function ShellHeader({
   onToggleSidebar,
   sessionTitle,
   headerActions,
-}: Pick<WorkspaceShellProps, "sidebarCollapsed" | "onToggleSidebar" | "sessionTitle" | "headerActions">) {
+  rightPanelOpen,
+  onToggleRightPanel,
+}: Pick<
+  WorkspaceShellProps,
+  | "sidebarCollapsed"
+  | "onToggleSidebar"
+  | "sessionTitle"
+  | "headerActions"
+  | "rightPanelOpen"
+  | "onToggleRightPanel"
+>) {
   return (
-    <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-scout-hairline-faint bg-scout-canvas px-3.5">
-      <button
+    <header className="flex h-[46px] shrink-0 items-center gap-3 border-b border-scout-hairline-faint bg-scout-canvas px-3">
+      <IconButton
         onClick={onToggleSidebar}
-        className={headerIconButtonClass}
-        title={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
+        label={sidebarCollapsed ? "Open sidebar" : "Close sidebar"}
+        aria-expanded={!sidebarCollapsed}
       >
         <PanelToggleIcon open={!sidebarCollapsed} side="left" size={16} />
-      </button>
+      </IconButton>
       {sessionTitle && (
-        <span className="text-[13px] font-semibold tracking-[-0.01em] text-scout-text/90 truncate flex-1 min-w-0">
+        // title: the session name is the only label for the current
+        // conversation and it truncates at every narrow width.
+        <span
+          className="min-w-0 flex-1 truncate text-label font-semibold tracking-[-0.01em] text-scout-text/90"
+          title={sessionTitle}
+        >
           {sessionTitle}
         </span>
       )}
       {!sessionTitle && <div className="flex-1" />}
       {headerActions && (
         <div className="flex items-center gap-1.5 shrink-0">{headerActions}</div>
+      )}
+      {!rightPanelOpen && onToggleRightPanel && (
+        <IconButton
+          onClick={onToggleRightPanel}
+          label="Open side panel (Alt+P)"
+          aria-expanded={false}
+          className="ml-0.5"
+        >
+          <PanelToggleIcon open={false} side="right" size={16} />
+        </IconButton>
       )}
     </header>
   );
@@ -55,6 +83,8 @@ export function WorkspaceShell({
   onToggleSidebar,
   sidebar,
   headerActions,
+  rightPanelOpen,
+  onToggleRightPanel,
   sessionTitle,
   banners,
   children,
@@ -87,7 +117,10 @@ export function WorkspaceShell({
   }
   useEffect(() => {
     if (settled) return;
-    const timer = window.setTimeout(() => setSettled(true), 340);
+    const timer = window.setTimeout(
+      () => setSettled(true),
+      PANEL_GLIDE_MS + SETTLE_SLACK_MS,
+    );
     return () => window.clearTimeout(timer);
   }, [settled]);
   const pinArtifact = !artifactOpen || !settled;
@@ -97,7 +130,7 @@ export function WorkspaceShell({
   const expandedActive = !!artifactOpen && artifactExpanded;
 
   return (
-    <div className="h-screen flex overflow-hidden bg-transparent text-scout-text">
+    <div className="flex h-dvh overflow-hidden bg-transparent text-scout-text">
       {showSidebarOverlay && (
         <div
           className="fixed inset-0 bg-black/50 z-20 lg:hidden"
@@ -109,7 +142,7 @@ export function WorkspaceShell({
         className={`
           fixed lg:relative z-30 h-full shrink-0 glass-chrome border-r border-scout-hairline-faint
           transition-[width,transform] duration-200 ease-in-out overflow-hidden
-          ${sidebarHidden ? "w-0 lg:w-0" : "w-[252px]"}
+          ${sidebarHidden ? "w-0 lg:w-0" : "w-[min(252px,85vw)] lg:w-[252px]"}
           ${isMobile ? (sidebarCollapsed ? "-translate-x-full" : "translate-x-0") : "translate-x-0"}
         `}
       >
@@ -153,6 +186,8 @@ export function WorkspaceShell({
                   onToggleSidebar={onToggleSidebar}
                   sessionTitle={sessionTitle}
                   headerActions={headerActions}
+                  rightPanelOpen={rightPanelOpen}
+                  onToggleRightPanel={onToggleRightPanel}
                 />
                 {banners}
                 {children}
@@ -184,8 +219,17 @@ export function WorkspaceShell({
                   : "bg-transparent"
               }
             >
-              {artifactOpen && artifactPanel ? (
-                <div className="h-full animate-backdrop-in">{artifactPanel}</div>
+              {artifactPanel ? (
+                <div
+                  aria-hidden={!artifactOpen}
+                  className={`h-full ${
+                    artifactOpen
+                      ? "animate-backdrop-in"
+                      : "invisible pointer-events-none"
+                  }`}
+                >
+                  {artifactPanel}
+                </div>
               ) : null}
             </Panel>
           </Group>
@@ -196,12 +240,23 @@ export function WorkspaceShell({
               onToggleSidebar={onToggleSidebar}
               sessionTitle={sessionTitle}
               headerActions={headerActions}
+              rightPanelOpen={rightPanelOpen}
+              onToggleRightPanel={onToggleRightPanel}
             />
             {banners}
             <div className="flex-1 flex flex-col min-h-0 relative bg-transparent">
               {children}
-              {artifactOpen && artifactPanel && (
-                <div className="absolute inset-0 z-40 bg-scout-canvas animate-panel-in">{artifactPanel}</div>
+              {artifactPanel && (
+                <div
+                  aria-hidden={!artifactOpen}
+                  className={`absolute inset-0 z-40 bg-scout-canvas ${
+                    artifactOpen
+                      ? "animate-panel-in"
+                      : "invisible pointer-events-none"
+                  }`}
+                >
+                  {artifactPanel}
+                </div>
               )}
             </div>
           </>

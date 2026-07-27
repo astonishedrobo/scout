@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { Artifact, ChatImage, FileChangeSet, ResponseAnnotation, ToolStep } from "scout-core";
+import type { ApprovalMode, Artifact, ChatImage, FileChangeSet, ResponseAnnotation, TaskEvent, ToolStep } from "scout-core";
 
 interface StoredMessage {
   role: string;
@@ -10,6 +10,7 @@ interface StoredMessage {
   attachments?: string[];
   chatImages?: ChatImage[];
   annotations?: ResponseAnnotation[];
+  task?: TaskEvent;
 }
 
 export interface SessionMeta {
@@ -26,8 +27,14 @@ export interface SessionMeta {
 
 interface UseSessionsReturn {
   sessions: SessionMeta[];
+  /**
+   * True until the first `/sessions` fetch settles. Distinguishes "still
+   * loading" from "genuinely no sessions", which an empty array alone cannot —
+   * without it the sidebar shows its empty state and then swaps in the list.
+   */
+  sessionsLoading: boolean;
   currentSessionId: string | null;
-  createSession: (model?: string) => Promise<string>;
+  createSession: (model?: string, approvalMode?: ApprovalMode) => Promise<string>;
   loadSession: (id: string) => Promise<StoredMessage[]>;
   renameSession: (id: string, title: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -44,6 +51,7 @@ interface UseSessionsReturn {
 
 export function useSessions(baseUrl: string, isReady: boolean, token: string | null, isMultiUser: boolean | undefined, onUnauthorized?: () => void): UseSessionsReturn {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setInterval>>();
 
@@ -68,6 +76,10 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
       }
     } catch (err) {
       console.error("Failed to refresh sessions:", err);
+    } finally {
+      // Settled either way — a failed fetch must not leave the sidebar
+      // showing placeholders forever.
+      setSessionsLoading(false);
     }
   }, [baseUrl, token, isMultiUser, handleResponse]);
 
@@ -82,14 +94,17 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
   }, [isReady, refreshSessions]);
 
   const createSession = useCallback(
-    async (model?: string): Promise<string> => {
+    async (
+      model?: string,
+      approvalMode: ApprovalMode = "ask_always",
+    ): Promise<string> => {
       const resp = await fetch(`${baseUrl}/sessions`, {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ model, approval_mode: approvalMode }),
       });
       
       if (!resp.ok) {
@@ -220,6 +235,7 @@ export function useSessions(baseUrl: string, isReady: boolean, token: string | n
 
   return {
     sessions,
+    sessionsLoading,
     currentSessionId,
     createSession,
     loadSession,

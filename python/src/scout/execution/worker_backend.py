@@ -293,6 +293,20 @@ class WorkerExecutionBackend:
             artifacts=data.get("artifacts", []),
         )
 
+    async def cancel_process(self, process_id: int, user_id: str, session_id: str) -> bool:
+        payload = {"process_id": process_id, "user_id": user_id, "session_id": session_id}
+        try:
+            response = await self._client.post(
+                f"{self._worker_url}/exec/cancel",
+                content=json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                headers=self._headers(payload), timeout=5,
+            )
+            response.raise_for_status()
+            return response.json().get("cancelled", 0) > 0
+        except httpx.HTTPError:
+            logger.exception("Worker process cancellation failed")
+            return False
+
     async def close_session(self, session_id: str) -> None:
         body = {"session_id": session_id}
         try:

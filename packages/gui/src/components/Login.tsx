@@ -28,11 +28,29 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
   const [day, setDay] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  // Submitting empty used to return silently, with nothing to explain why.
+  const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string; confirm?: string }>({});
+
+  const MIN_PASSWORD = 8;
+
+  const validate = () => {
+    const next: typeof fieldErrors = {};
+    if (!username.trim()) next.username = "Enter a username.";
+    if (!password) next.password = "Enter your password.";
+    else if (isRegistering && password.length < MIN_PASSWORD) {
+      next.password = `Use at least ${MIN_PASSWORD} characters.`;
+    }
+    if (isRegistering && confirmPassword !== password) next.confirm = "Passwords do not match.";
+    return next;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !password) return;
+    const problems = validate();
+    setFieldErrors(problems);
+    if (Object.keys(problems).length > 0) return;
     setLoading(true);
     try {
       if (isRegistering) {
@@ -45,6 +63,13 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Switching mode invalidates whatever was typed against the other mode's rules.
+  const switchMode = () => {
+    setIsRegistering((current) => !current);
+    setFieldErrors({});
+    setConfirmPassword("");
   };
 
   // Warm (sunset-image) styling for the artwork variants; the pixel variant
@@ -75,35 +100,87 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
       <div className={warm ? "glass-warm rounded-card overflow-hidden" : ""}>
         <form className={warm ? "p-6 space-y-4" : "space-y-3"} onSubmit={handleSubmit}>
           {error && (
-            <div className="p-3 text-sm text-white bg-scout-error-muted rounded-btn">
+            <div className="rounded-btn bg-scout-error-muted p-3 text-sm text-white" role="alert" id="login-error">
               {error}
             </div>
           )}
 
           <div>
-            {warm && <Label className="text-sm text-[#f5e3c2]/80">Username</Label>}
+            {warm && <Label htmlFor="login-username" className="text-sm text-[#f5e3c2]/80">Username</Label>}
             <Input
+              id="login-username"
+              // name + autocomplete are what let a password manager fill and,
+              // on register, offer to save. Neither field had them.
+              name="username"
+              autoComplete="username"
               type="text"
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder={warm ? "Enter your username" : "Username"}
               aria-label="Username"
+              invalid={!!fieldErrors.username}
+              aria-describedby={fieldErrors.username ? "login-username-error" : error ? "login-error" : undefined}
               surface={warm ? "warm" : day ? "pixel-day" : "pixel-night"}
             />
+            {fieldErrors.username && (
+              <p id="login-username-error" role="alert" className="mt-1.5 text-caption text-white/85">
+                {fieldErrors.username}
+              </p>
+            )}
           </div>
 
           <div>
-            {warm && <Label className="text-sm text-[#f5e3c2]/80">Password</Label>}
+            {warm && <Label htmlFor="login-password" className="text-sm text-[#f5e3c2]/80">Password</Label>}
             <PasswordInput
+              id="login-password"
+              name="password"
+              autoComplete={isRegistering ? "new-password" : "current-password"}
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder={warm ? "••••••••" : "Password"}
               aria-label="Password"
+              invalid={!!fieldErrors.password}
+              aria-describedby={
+                fieldErrors.password ? "login-password-error" : isRegistering ? "login-password-hint" : undefined
+              }
               surface={warm ? "warm" : day ? "pixel-day" : "pixel-night"}
             />
+            {fieldErrors.password ? (
+              <p id="login-password-error" role="alert" className="mt-1.5 text-caption text-white/85">
+                {fieldErrors.password}
+              </p>
+            ) : isRegistering ? (
+              <p id="login-password-hint" className="mt-1.5 text-caption text-white/55">
+                At least {MIN_PASSWORD} characters.
+              </p>
+            ) : null}
           </div>
+
+          {isRegistering && (
+            <div>
+              {warm && <Label htmlFor="login-confirm" className="text-sm text-[#f5e3c2]/80">Confirm password</Label>}
+              <PasswordInput
+                id="login-confirm"
+                name="confirmPassword"
+                autoComplete="new-password"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder={warm ? "Repeat your password" : "Confirm password"}
+                aria-label="Confirm password"
+                invalid={!!fieldErrors.confirm}
+                aria-describedby={fieldErrors.confirm ? "login-confirm-error" : undefined}
+                surface={warm ? "warm" : day ? "pixel-day" : "pixel-night"}
+              />
+              {fieldErrors.confirm && (
+                <p id="login-confirm-error" role="alert" className="mt-1.5 text-caption text-white/85">
+                  {fieldErrors.confirm}
+                </p>
+              )}
+            </div>
+          )}
 
           <Button
             type="submit"
@@ -112,11 +189,11 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
             accent="white"
             fullWidth
             size="hero"
-            disabled={loading}
+            loading={loading}
             className={!warm && day ? "!bg-[#202636] !text-white" : ""}
           >
             {loading ? (
-              <span className="w-5 h-5 border-2 border-scout-void/20 border-t-scout-void rounded-full animate-spin" />
+              isRegistering ? "Creating account…" : "Signing in…"
             ) : isRegistering ? (
               <>
                 <UserPlus size={16} />
@@ -141,7 +218,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
               fullWidth
               size="default"
               className="mt-4 !border-[#ffd6a0]/30 !text-[#f5e3c2] hover:!bg-white/5"
-              onClick={() => setIsRegistering(!isRegistering)}
+              onClick={switchMode}
             >
               {isRegistering ? "Already have an account? Sign in" : "Create a new account"}
             </Button>
@@ -155,7 +232,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
             {isRegistering ? "Already have an account?" : "New to Scout?"}{" "}
             <button
               type="button"
-              onClick={() => setIsRegistering(!isRegistering)}
+              onClick={switchMode}
               className={`font-semibold underline underline-offset-4 transition-colors duration-700 ${
                 day ? "text-[#202636] hover:text-[#3a4358]" : "text-white hover:text-white/80"
               }`}
@@ -205,7 +282,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
       >
         {/* Left column — image (hidden when viewport is too narrow for two columns) */}
         <div className="hidden lg:flex lg:flex-1 lg:min-h-0 items-center justify-center px-10 xl:px-14 py-10">
-          <div className="relative h-[min(calc(100vh-5rem),920px)] w-full overflow-hidden rounded-hero border border-white/10 shadow-2xl">
+          <div className="relative h-[min(calc(100dvh-5rem),920px)] w-full overflow-hidden rounded-hero border border-white/10 shadow-2xl">
             <img src={loginScreenImage} alt="" className="h-full w-full object-cover" />
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent px-8 pb-8 pt-24">
               <p className="text-[22px] font-semibold tracking-[-0.03em] leading-snug text-white">
@@ -230,7 +307,7 @@ export function Login({ onLogin, onRegister, error }: LoginProps) {
 
   // "sky" variant — fullscreen artwork drifting slowly, form centered on top.
   return (
-    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-scout-void">
+    <div className="relative flex min-h-dvh w-full items-center justify-center overflow-hidden bg-scout-void">
       <img
         src={loginScreenImage}
         alt=""

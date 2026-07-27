@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..execution.service import ExecutionService
     from ..retriever import BM25Retriever
     from .session import PersistentPythonSession
+    from .subagents import SubAgentManager
 
 
 # ── Factory ──────────────────────────────────────────────────────────────
@@ -40,6 +41,9 @@ def make_tools(
     use_memories: bool = True,
     allow_request_permissions: bool = True,
     request_permissions_fn=None,
+    subagent_manager: "SubAgentManager | None" = None,
+    is_subagent: bool = False,
+    external_tools: list | None = None,
 ) -> list:
     """Create tool functions, binding resources via closures.
 
@@ -436,6 +440,76 @@ def make_tools(
         domains = [d.strip() for d in network_domains.split(",") if d.strip()]
         return await request_permissions_fn(reason, domains)
 
+    # ── Multi-agent tools (parent only) ──────────────────────────────
+
+    @tool
+    async def spawn_subagent(
+        description: str,
+        prompt: str,
+        agent_type: str = "trailhand",
+        run_in_background: bool = True,
+        resume_parent_on_complete: bool = False,
+    ) -> str:
+        """Launch a Scout sub-agent for a concrete, independent subtask.
+
+        Prefer background mode so you can keep working; you will be notified
+        when it finishes. Types: snoop (read-only search), cartographer
+        (read-only plan), trailhand (multi-step work / timers / edits).
+        Completion is always delivered back to the supervisor automatically.
+        resume_parent_on_complete is retained for API compatibility.
+        """
+        if is_subagent or subagent_manager is None:
+            return (
+                "[SPAWN DENIED] Sub-agents cannot spawn further agents "
+                "(max depth is 1)."
+            )
+        return await subagent_manager.spawn(
+            description=description,
+            prompt=prompt,
+            agent_type=agent_type,
+            run_in_background=run_in_background,
+            resume_parent_on_complete=resume_parent_on_complete,
+        )
+
+    @tool
+    def list_subagents() -> str:
+        """List sub-agents spawned in this session and their status."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Sub-agent listing is only available on the parent agent."
+        return subagent_manager.list_agents()
+
+    @tool
+    def get_subagent_result(agent_id: str) -> str:
+        """Fetch a finished sub-agent's result. Prefer automatic notifications over polling."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Sub-agent results are only available on the parent agent."
+        return subagent_manager.get_result(agent_id)
+
+    @tool
+    def get_subagent_transcript(agent_id: str) -> str:
+        """Fetch a retained sub-agent activity transcript only when details are needed."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Sub-agent transcripts are only available on the parent agent."
+        return subagent_manager.get_transcript(agent_id)
+
+    @tool
+    async def stop_subagent(agent_id: str) -> str:
+        """Stop a running sub-agent when its direction is wrong or no longer needed."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Stopping sub-agents is only available on the parent agent."
+        # The supervisor sees this tool result in the current turn. Mark the
+        # origin so the server does not launch a duplicate automatic pickup.
+        return await subagent_manager.stop(agent_id, initiated_by_parent=True)
+
+    @tool
+    async def send_subagent_message(agent_id: str, message: str) -> str:
+        """Send a follow-up to an existing sub-agent (same thread). Prefer this over re-spawning."""
+        if is_subagent or subagent_manager is None:
+            return "[UNAVAILABLE] Messaging sub-agents is only available on the parent agent."
+        return await subagent_manager.send_message(
+            agent_id, message, source="parent",
+        )
+
     unified = (
         execution_service is not None
         and execution_service._exec_cfg.unified_shell
@@ -444,9 +518,16 @@ def make_tools(
     memory_tools = [memory_search, memory_read, memory_list, memory_add_note] if use_memories else []
     skill_tools = [skill_list, skill_read]
     perm_tools = [request_permissions] if allow_request_permissions and request_permissions_fn else []
+    multi_agent_tools = []
+    if not is_subagent and subagent_manager is not None and subagent_manager.enabled:
+        multi_agent_tools = [
+            spawn_subagent, list_subagents, get_subagent_result,
+            get_subagent_transcript,
+            stop_subagent, send_subagent_message,
+        ]
     tools = [
         *shell_tools, run_node,
-        *memory_tools, *skill_tools, *perm_tools,
+        *memory_tools, *skill_tools, *perm_tools, *multi_agent_tools,
         read_file, list_files, search_workspace, filter_table, think, ask_user_choice,
         present_files,
     ]
@@ -455,4 +536,5 @@ def make_tools(
 
     if allowed_tools is not None:
         tools = [t for t in tools if t.name in allowed_tools]
+    tools.extend(external_tools or [])
     return tools

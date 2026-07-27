@@ -65,6 +65,24 @@ def test_prompt_defines_instruction_trust_boundary(tmp_path):
     assert "Never reveal internal absolute filesystem paths" in prompt
 
 
+def test_prompt_preserves_explicit_conversational_output_contract(tmp_path):
+    prompt = build_system_prompt(str(tmp_path))
+
+    assert "explicit output instructions control the delivery format" in prompt
+    assert "conversation and do not create or modify files" in prompt
+    assert "does not override an explicit response format" in prompt
+    assert "do not create a file merely because the" in prompt
+
+
+def test_prompt_has_personality_and_momentum_guidance(tmp_path):
+    prompt = build_system_prompt(str(tmp_path))
+
+    assert "## Personality & voice" in prompt
+    assert "sharp teammate" in prompt or "concise, direct, and friendly" in prompt
+    assert "Momentum in mid-task" in prompt or "8–15 words" in prompt or "8-15 words" in prompt
+    assert "running inside the user's terminal" not in prompt
+
+
 def test_prompt_discourages_unnecessary_questions_and_duplicate_approval(tmp_path):
     prompt = build_system_prompt(str(tmp_path))
 

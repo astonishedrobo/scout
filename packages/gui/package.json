@@ -9,7 +9,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -p tsconfig.cli.json",
+    "build": "node scripts/check-tokens.mjs && vite build && tsc -p tsconfig.cli.json",
+    "check:tokens": "node scripts/check-tokens.mjs",
     "preview": "vite preview",
     "start": "node dist/cli.js"
   },
@@ -18,18 +19,23 @@
   ],
   "dependencies": {
     "@floating-ui/react": "^0.27.19",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "commander": "^12.1.0",
-    "framer-motion": "^11.15.0",
     "lucide-react": "^0.468.0",
+    "material-icon-theme": "^5.37.0",
     "mermaid": "^11.16.0",
     "open": "^10.1.0",
+    "prism-react-renderer": "^2.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-resizable-panels": "^4.11.2",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "scout-core": "0.1.0"
+    "scout-core": "0.1.0",
+    "shiki": "^4.3.1",
+    "thinking-orbs": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -168,6 +168,65 @@ class ExecutionAuditor:
     def metrics(self) -> dict[str, int]:
         return dict(self._metrics)
 
+    def query(
+        self,
+        limit: int = 100,
+        since: float | None = None,
+    ) -> tuple[list[ExecutionAuditEntry], int]:
+        """Read the durable log, newest first, with a total for the range.
+
+        Deliberately does not consult the in-memory `_entries` list the way
+        `recent()` does. That list belongs to one `ExecutionService`, so an admin
+        reading it would see only whichever service happened to answer and would
+        lose all history from before the process started. The table is the
+        server-wide record, so the admin view reads the table.
+        """
+        entries: list[ExecutionAuditEntry] = []
+        total = 0
+        where = "WHERE start_time >= ?" if since is not None else ""
+        params: tuple = (since,) if since is not None else ()
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM execution_audit {where}", params
+                ).fetchone()[0]
+                rows = conn.execute(
+                    f"""
+                    SELECT execution_id, user_id, session_id, runtime, command_summary,
+                           start_time, end_time, status, error_category, changed_paths,
+                           approval_outcome, grant_ids, promotion_outcome, resource_usage
+                    FROM execution_audit {where}
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (*params, limit),
+                ).fetchall()
+            for row in rows:
+                entries.append(self._row_to_entry(row))
+        except sqlite3.Error:
+            # A missing or locked audit DB is not a reason to fail the admin
+            # page; an empty list plus a zero total reads as "no history yet".
+            return [], 0
+        return entries, total
+
+    @staticmethod
+    def _row_to_entry(row: tuple) -> ExecutionAuditEntry:
+        return ExecutionAuditEntry(
+            execution_id=row[0],
+            user_id=row[1],
+            session_id=row[2],
+            runtime=row[3],
+            command_summary=row[4] or "",
+            start_time=row[5],
+            end_time=row[6],
+            status=row[7] or "unknown",
+            error_category=row[8],
+            changed_paths=json.loads(row[9] or "[]"),
+            approval_outcome=row[10],
+            grant_ids=json.loads(row[11] or "[]"),
+            promotion_outcome=row[12],
+            resource_usage=json.loads(row[13] or "{}"),
+        )
+
     def recent(self, limit: int = 50) -> list[ExecutionAuditEntry]:
         if self._entries:
             return self._entries[-limit:]

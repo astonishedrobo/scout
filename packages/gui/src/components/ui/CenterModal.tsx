@@ -1,6 +1,10 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { IconButton } from "./IconButton";
+import { usePresence } from "../../hooks/usePresence";
+import { useDialogShell } from "../../hooks/useDialogShell";
+import { EXIT_MS } from "../../motion";
 
 interface CenterModalProps {
   open: boolean;
@@ -30,32 +34,24 @@ export function CenterModal({
   showClose = true,
 }: CenterModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const { mounted, state } = usePresence(open, EXIT_MS.panel);
 
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
+  // Initial focus, scroll lock, focus restore, Escape and Tab containment all
+  // live in useDialogShell so every modal shell behaves the same way.
+  useDialogShell(open, panelRef, onClose, closeOnEscape);
 
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && closeOnEscape) {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-      prev?.focus();
-    };
-  }, [open, onClose, closeOnEscape]);
+  if (!mounted) return null;
 
-  if (!open) return null;
+  const exiting = state === "exiting";
+  // pointer-events-none while exiting: the dialog is still on screen for the
+  // length of the animation, and a closing modal must not be clickable.
+  const backdropMotion = exiting
+    ? "animate-backdrop-out pointer-events-none"
+    : "animate-backdrop-in";
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm"
+      className={`fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm ${backdropMotion}`}
       role="dialog"
       aria-modal="true"
       aria-label={title}
@@ -64,24 +60,22 @@ export function CenterModal({
       <div
         ref={panelRef}
         tabIndex={-1}
-        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-hero shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden`}
+        className={`w-full ${maxWidths[maxWidth]} bg-scout-panel border border-scout-hairline-faint rounded-surface shadow-pop flex flex-col max-h-[90vh] outline-none overflow-hidden ${
+          exiting ? "animate-modal-out" : "animate-modal-in"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {(title || showClose) && (
-          <div className="flex items-center justify-between px-5 py-3 border-b border-scout-hairline-faint shrink-0">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-scout-hairline-faint shrink-0">
             {title ? (
-              <h2 className="text-sm font-medium text-scout-text">{title}</h2>
+              <h2 className="text-label font-medium text-scout-text">{title}</h2>
             ) : (
               <span />
             )}
             {showClose && (
-              <button
-                onClick={onClose}
-                className="p-1 rounded-btn text-scout-muted hover:text-scout-text hover:bg-scout-lift/80 transition-colors"
-                aria-label="Close"
-              >
+              <IconButton label="Close" onClick={onClose}>
                 <X size={18} />
-              </button>
+              </IconButton>
             )}
           </div>
         )}

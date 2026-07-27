@@ -40,12 +40,16 @@ export function AnchoredPopover({
 
   useEffect(() => setMounted(true), []);
 
-  const { refs, floatingStyles, context } = useFloating({
+  const { refs, floatingStyles, context, isPositioned } = useFloating({
     open,
     onOpenChange: (v) => {
       if (!v) onClose();
     },
     placement,
+    // `fixed`, not the default `absolute`: this is portaled to <body>, so
+    // absolute coordinates resolve against the document and drift once the page
+    // behind it is scrolled. (Same bug the tooltip had.)
+    strategy: "fixed",
     whileElementsMounted: autoUpdate,
     middleware: [
       offset(6),
@@ -97,10 +101,19 @@ export function AnchoredPopover({
     <div
       ref={refs.setFloating}
       style={floatingStyles}
-      className={`z-[70] bg-scout-panel border border-scout-hairline-faint rounded-card shadow-pop overflow-hidden overflow-y-auto ${className}`}
+      className={`z-[70] ${isPositioned ? "" : "invisible"}`}
       data-floating={context.open}
     >
-      {children}
+      {/*
+        Floating UI positions its reference with `transform: translate(...)`.
+        Motion must live on a child: animating this wrapper would overwrite that
+        transform and pin the popover to 0,0.
+      */}
+      <div
+        className={`origin-top overflow-hidden overflow-y-auto rounded-surface border border-scout-hairline-faint bg-scout-panel/95 shadow-pop backdrop-blur-xl animate-enter ${className}`}
+      >
+        {children}
+      </div>
     </div>,
     document.body,
   );

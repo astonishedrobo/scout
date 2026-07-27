@@ -1,7 +1,7 @@
 import type { Artifact } from "scout-core";
-import { FileCode2, Image, FileText, Table2 } from "lucide-react";
 import { MemoryUpdateChip } from "./MemoryUpdateChip";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+import { FileTypeIcon } from "./ui/FileTypeIcon";
 
 function hiddenSegment(path: string) {
   return path.split("/").some((part) => part.startsWith("."));
@@ -74,21 +74,13 @@ export function ArtifactCards({
         <MemoryUpdateChip onOpenMemories={onOpenMemories} />
       )}
       {previewableArtifacts.map((artifact) => {
-        const Icon =
-          artifact.renderer === "image"
-            ? Image
-            : artifact.renderer === "csv"
-              ? Table2
-              : artifact.renderer === "code"
-                ? FileCode2
-                : FileText;
         return (
           <button
             key={artifact.id}
             onClick={() => onOpen(artifact)}
-            className="group lift-hover flex w-full max-w-[45rem] items-center gap-3 rounded-card border border-scout-hairline-faint bg-scout-card-lavender px-3.5 py-3 text-left hover:bg-scout-card-lavender-hover"
+            className="group flex w-full max-w-[45rem] items-center gap-2.5 rounded-control border border-scout-hairline-faint bg-scout-card-lavender/70 px-3 py-2.5 text-left transition-colors hover:border-scout-hairline hover:bg-scout-card-lavender-hover"
           >
-            <span className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-btn border border-scout-hairline-faint bg-scout-lavender-muted">
+            <span className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-btn bg-scout-lavender-muted">
               {artifact.renderer === "image" ? (
                 <AuthenticatedImage
                   src={`${baseUrl}/artifacts/content?path=${encodeURIComponent(artifact.path)}`}
@@ -96,24 +88,20 @@ export function ArtifactCards({
                   alt={artifact.title}
                   className="h-full w-full object-cover"
                 />
-              ) : (
-                <>
-                  <Icon size={18} style={{ color: "#a78bfa" }} className="relative" />
-                </>
-              )}
+              ) : <FileTypeIcon name={artifact.name || artifact.path} size={20} />}
             </span>
             <span className="flex min-w-0 flex-1 items-center">
               <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-scout-text">
+                <span className="block truncate text-label font-semibold text-scout-text">
                   {artifact.title}
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-scout-muted">
+                <span className="mt-0.5 block truncate text-caption text-scout-muted">
                   {artifactKind(artifact)} · {formatSize(artifact.size)}
                 </span>
               </span>
             </span>
             <span className="flex shrink-0 items-center">
-              <span className="inline-flex rounded-btn px-2.5 py-1.5 text-xs font-semibold text-scout-muted transition-colors group-hover:bg-scout-lavender-muted group-hover:text-scout-text">
+              <span className="inline-flex px-1.5 py-1 text-caption font-medium text-scout-muted transition-colors group-hover:text-scout-text">
                 Open
               </span>
             </span>

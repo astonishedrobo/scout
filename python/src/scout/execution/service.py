@@ -321,6 +321,13 @@ class ExecutionService:
         )
         return self._last_result
 
+    async def cancel_process(self, process_id: int) -> bool:
+        await self._ensure_health()
+        if not self.enabled:
+            return False
+        assert self._orchestrator is not None
+        return await self._orchestrator.cancel_process(process_id)
+
     async def run_node(self, code: str, description: str = "") -> ToolExecutionResult:
         await self._ensure_health()
         if not self.enabled:

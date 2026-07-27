@@ -1,6 +1,8 @@
 import { Keyboard } from "lucide-react";
 import { CenterModal } from "./ui/CenterModal";
-import { APP_VERSION, SHORTCUTS } from "../appMeta";
+import { ShortcutRow } from "./ui/ShortcutRow";
+import { APP_VERSION } from "../appMeta";
+import { SHORTCUTS, shortcutKeys } from "../shortcuts";
 
 interface HelpDialogProps {
   open: boolean;
@@ -22,33 +24,28 @@ export function HelpDialog({ open, onClose }: HelpDialogProps) {
         <section>
           <div className="flex items-center gap-2 mb-3">
             <Keyboard size={14} className="text-scout-muted" />
-            <h4 className="text-sm font-semibold text-scout-text">Keyboard Shortcuts</h4>
+            <h4 className="text-label font-semibold text-scout-text">Keyboard Shortcuts</h4>
           </div>
-          <div className="space-y-2">
+          <div className="divide-y divide-scout-hairline-faint">
             {SHORTCUTS.map((s) => (
-              <div key={s.keys} className="flex items-center justify-between">
-                <span className="text-[13px] font-medium text-scout-text/70">{s.desc}</span>
-                <kbd className="px-2 py-1 rounded-lg bg-scout-input-bg border border-scout-hairline text-xs font-mono font-medium text-scout-text shadow-[inset_0_-1px_0_rgba(0,0,0,0.08)]">
-                  {s.keys}
-                </kbd>
-              </div>
+              <ShortcutRow key={s.id} keys={shortcutKeys(s)} desc={s.desc} />
             ))}
           </div>
         </section>
 
         <section>
-          <h4 className="text-sm font-semibold text-scout-text mb-3">Features</h4>
+          <h4 className="text-label font-semibold text-scout-text mb-3">Features</h4>
           <div className="space-y-3">
             {FEATURES.map((f) => (
               <div key={f.title}>
-                <p className="text-sm font-medium text-scout-text">{f.title}</p>
-                <p className="text-[13px] text-scout-muted leading-relaxed">{f.desc}</p>
+                <p className="text-label font-medium text-scout-text">{f.title}</p>
+                <p className="text-label text-scout-muted leading-relaxed">{f.desc}</p>
               </div>
             ))}
           </div>
         </section>
 
-        <p className="text-xs font-medium text-scout-muted pt-3 border-t border-scout-hairline-faint">
+        <p className="text-caption font-medium text-scout-muted pt-3 border-t border-scout-hairline-faint">
           Scout {APP_VERSION}
         </p>
       </div>

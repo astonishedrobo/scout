@@ -1,5 +1,5 @@
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from scout.agent import ScoutAgent
 
@@ -14,10 +14,104 @@ async def test_stream_emits_status_before_graph_runs():
     try:
         assert await anext(stream) == {
             "type": "status",
-            "message": "Thinking through the request",
+            "message": "Understanding…",
         }
     finally:
         await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_tagged_model_token_deltas():
+    class FakeGraph:
+        async def astream(self, *_args, stream_mode=None, **_kwargs):
+            assert stream_mode == ["messages", "updates"]
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="Hello", id="run-1"),
+                    {"tags": ["scout_visible_response"]},
+                ),
+            )
+            # Untagged internal model output must not reach the browser.
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content="private summary", id="internal"),
+                    {"tags": []},
+                ),
+            )
+            yield (
+                "messages",
+                (
+                    AIMessageChunk(content=" world", id="run-1"),
+                    {"tags": ["scout_visible_response"]},
+                ),
+            )
+            yield (
+                "updates",
+                {"agent": {"messages": [AIMessage(content="Hello world")]}},
+            )
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("hello")]
+    assert [event for event in events if event["type"] == "response_delta"] == [
+        {"type": "response_delta", "content": "Hello"},
+        {"type": "response_delta", "content": " world"},
+    ]
+    assert sum(event["type"] == "response_start" for event in events) == 1
+    assert events[-1] == {"type": "response", "content": "Hello world"}
+
+
+@pytest.mark.asyncio
+async def test_stream_retracts_tool_call_preamble_instead_of_persisting_it():
+    class FakeGraph:
+        async def astream(self, *_args, **_kwargs):
+            yield {
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content="I'll launch the requested workers.",
+                            tool_calls=[{
+                                "name": "spawn_subagent",
+                                "args": {"description": "Timer one"},
+                                "id": "call-1",
+                            }],
+                        ),
+                    ],
+                },
+            }
+            yield {
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content="status: async_launched\\nagent_id: sa-private",
+                            name="spawn_subagent",
+                            tool_call_id="call-1",
+                        ),
+                    ],
+                },
+            }
+            yield {"agent": {"messages": [AIMessage(content="Both timers are running.")]}}
+
+    agent = object.__new__(ScoutAgent)
+    agent._messages = []
+    agent._execution = None
+    agent._graph = FakeGraph()
+    agent._run_config = {}
+    agent._cwd = "/workspace"
+    agent._shared_dir = None
+
+    events = [event async for event in agent.stream("start two timers")]
+    assert {"type": "response_reset"} in events
+    assert not any(event["type"] == "assistant_text" for event in events)
+    assert events[-1] == {"type": "response", "content": "Both timers are running."}
 
 
 @pytest.mark.asyncio
@@ -113,7 +207,7 @@ async def test_stream_converts_think_tool_to_thinking_event():
 
 
 @pytest.mark.asyncio
-async def test_stream_preserves_assistant_text_that_accompanies_tool_call():
+async def test_stream_retracts_assistant_text_that_accompanies_tool_call():
     class FakeGraph:
         async def astream(self, *_args, **_kwargs):
             yield {
@@ -154,11 +248,7 @@ async def test_stream_preserves_assistant_text_that_accompanies_tool_call():
 
     events = [event async for event in agent.stream("demo")]
 
-    assert events[1] == {
-        "type": "assistant_text",
-        "content": "I’ll inspect the workspace first, then decide what to check next.",
-        "tool_call_id": "call-1",
-    }
+    assert events[1] == {"type": "response_reset"}
     assert events[2] == {
         "type": "tool_call",
         "name": "exec_command",
