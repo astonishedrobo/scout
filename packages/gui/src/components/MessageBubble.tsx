@@ -79,7 +79,7 @@ export function MessageBubble({
     return (
       <div className="flex justify-end group w-full">
         <div className="flex max-w-[min(75%,34rem)] flex-col items-end">
-          {/* Attachments stack above the bubble, ChatGPT-style — cards are
+          {/* Attachments stack above the bubble — cards are
               siblings of the message, not wrapped inside it. */}
           {(!!message.chatImages?.length || !!message.attachments?.length) && (
             <div className="mb-1.5 flex flex-col items-end gap-1.5">

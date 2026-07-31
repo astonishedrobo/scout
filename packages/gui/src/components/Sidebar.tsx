@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Shield,
   LogOut,
+  Clock,
 } from "lucide-react";
 import { useState } from "react";
 import type { Theme } from "../hooks/useTheme";
@@ -29,6 +30,8 @@ interface SidebarProps {
   onOpenSettings: () => void;
   onOpenInit: () => void;
   onOpenHelp: () => void;
+  onOpenScheduled?: () => void;
+  scheduledActive?: boolean;
   isConnected: boolean;
   theme: Theme;
   onToggleTheme: () => void;
@@ -85,6 +88,8 @@ export function Sidebar({
   onOpenSettings,
   onOpenInit,
   onOpenHelp,
+  onOpenScheduled,
+  scheduledActive,
   isConnected,
   theme,
   onToggleTheme,
@@ -164,6 +169,21 @@ export function Sidebar({
           <Plus size={16} />
           New chat
         </Button>
+
+        {onOpenScheduled && (
+          <Button
+            onClick={onOpenScheduled}
+            variant="filledInverse"
+            surface="panel"
+            fullWidth
+            size="default"
+            className="mt-1.5"
+            aria-current={scheduledActive ? "page" : undefined}
+          >
+            <Clock size={16} />
+            Scheduled
+          </Button>
+        )}
       </div>
 
       {!hasModels && isConnected && !isMultiUser && (

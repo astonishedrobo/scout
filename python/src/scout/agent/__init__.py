@@ -206,6 +206,7 @@ class ScoutAgent:
         self._user_id = user_id
         self._session_id = session_id
         self._execution_session_id = execution_session_id or session_id
+        self._user_timezone: str | None = None
         self._server_mode = server_mode
         self._shared_dir = str(shared_dir.resolve()) if shared_dir else None
         self._is_subagent = is_subagent
@@ -395,6 +396,7 @@ class ScoutAgent:
             personal_dir=self._cwd,
             server_mode=self._server_mode,
             user_id=str(self._user_id),
+            session_id=str(self._session_id) if self._session_id else None,
             use_memories=self._config.memories.use_memories,
             allow_request_permissions=(
                 self._config.permissions.allow_request_permissions
@@ -414,6 +416,7 @@ class ScoutAgent:
             focus_path=focus_path,
             memory_instructions=memory_instructions,
             allowed_tools=profile.allowed_tools,
+            user_timezone=self._user_timezone,
         )
         self._graph = build_graph(
             cfg, tools, system_prompt,
@@ -427,6 +430,18 @@ class ScoutAgent:
             shared_dir=self._shared_dir,
             server_mode=self._server_mode,
         )
+
+    def set_user_timezone(self, timezone_name: str | None) -> None:
+        """Store client IANA zone and rebuild the system prompt when it changes."""
+        tz = (timezone_name or "").strip() or None
+        if tz == self._user_timezone:
+            return
+        self._user_timezone = tz
+        try:
+            self._rebuild_graph(focus_path=self._focus_path)
+        except Exception:
+            # Keep the new zone even if rebuild fails; next rebuild picks it up.
+            pass
 
     def enqueue_steer(
         self,

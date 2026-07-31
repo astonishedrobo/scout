@@ -44,12 +44,16 @@ TOOL_DESCRIPTIONS = {
     "skill_list": "**`skill_list`** — List available skills.",
     "skill_read": "**`skill_read`** — Load a relevant skill's instructions.",
     "request_permissions": "**`request_permissions`** — Request permission for a blocked operation when it is necessary to complete the task.",
-    "spawn_subagent": "**`spawn_subagent`** — Launch a Scout crew member for a concrete, independent subtask. Prefer `run_in_background=true`. Types: `snoop` (read-only search/rummage), `cartographer` (read-only plan), `trailhand` (multi-step work, edits, timer demos).",
+    "spawn_subagent": "**`spawn_subagent`** — Launch a Scout crew member for a concrete, independent subtask running now. Prefer `run_in_background=true`. Types: `snoop` (read-only search/rummage), `cartographer` (read-only plan), `trailhand` (multi-step work/edits). Not for delayed reminders — use `create_scheduled_task`.",
     "list_subagents": "**`list_subagents`** — List sub-agents spawned in this session and their status.",
     "get_subagent_result": "**`get_subagent_result`** — Fetch a finished sub-agent's full result. Prefer automatic completion notifications over polling.",
     "get_subagent_transcript": "**`get_subagent_transcript`** — Fetch a retained worker activity transcript (messages, tool activity, and available partial/final output) only when the user asks for details or debugging requires it. It is not private model reasoning.",
     "stop_subagent": "**`stop_subagent`** — Stop a running sub-agent when its direction is wrong or the work is no longer needed.",
     "send_subagent_message": "**`send_subagent_message`** — Send a follow-up to an existing sub-agent (same thread). Prefer this over spawning a new agent when context should continue.",
+    "create_scheduled_task": "**`create_scheduled_task`** — Save a reminder, recurring job, or monitor that runs later without the user present. Requires a clear instruction and schedule, plus the user's IANA timezone. Links the task to this conversation.",
+    "list_scheduled_tasks": "**`list_scheduled_tasks`** — List the user's scheduled tasks and their next run times.",
+    "update_scheduled_task": "**`update_scheduled_task`** — Pause, resume, rename, or rewrite a scheduled task.",
+    "delete_scheduled_task": "**`delete_scheduled_task`** — Delete a scheduled task definition (keeps the chat).",
 }
 
 DEFAULT_TOOLS = frozenset(TOOL_DESCRIPTIONS)
@@ -77,6 +81,18 @@ def _build_tool_tips(enabled_tools: frozenset[str]) -> str:
         tips.append("- **Interleave, then close short.** Mid-task: brief prose + `think` title for the next tool card + tools. End only with a retrospective takeaway — the user already saw the cards. Never end with future-tense plans, Phase lists, or Thought/Action recaps.")
     if "ask_user_choice" in enabled_tools:
         tips.append("- **Use structured questions for MCQs.** When the user asks to quiz them, ask multiple-choice questions through `ask_user_choice` instead of printing A/B/C options in a normal message. Option labels are the answer text itself (e.g. \"Paris\") — never letters — and the user's reply quotes the chosen label verbatim. After the user answers, grade it, explain briefly, and ask the next question with the same tool if the quiz should continue.")
+    if "create_scheduled_task" in enabled_tools:
+        tips.append(
+            "- **Scheduling (critical).** Delayed or recurring user-visible work "
+            "(\"in 1 minute\", \"remind me\", \"every hour\", \"say hi later\") MUST use "
+            "`create_scheduled_task`. Never `spawn_subagent` or shell `sleep` for that. "
+            "One-shot may use any future `run_at` (including +1 minute). Recurring intervals "
+            "need ≥60 minutes. Pass timezone and optional `max_runs`. "
+            "Each task owns a chat thread: the first active task on this chat reuses/renames "
+            "this thread; extra concurrent tasks open new chats. Use `update_scheduled_task` "
+            "to rename, pause, or change a task (also renames its thread). When due, the "
+            "server runs a full agent turn in that task's thread."
+        )
     if "exec_command" in enabled_tools:
         tips.append("- **Prefer bare Python for data work.** Write a script under `/workspace` when needed, then run `python script.py` (cwd is already `/workspace`). Use preinstalled packages offline; do not reinstall them.")
         tips.append("- **Use the real sandbox paths.** Personal files are under `/workspace` and shared files are under `/shared`. Prefer relative names such as `script.py` or `plot.png`; never use `/app/workspace/...`, `/srv/scout-source/...`, `users/<id>/...`, or duplicated `workspace/workspace/...` paths.")
@@ -656,6 +672,7 @@ def build_system_prompt(
     memories_text: str = "",
     memory_instructions: str = "",
     allowed_tools: frozenset[str] | None = None,
+    user_timezone: str | None = None,
 ) -> str:
     """Return the system prompt with a pre-built data manifest injected."""
     manifest = build_manifest(data_dir, config=config, focus_path=focus_path)
@@ -670,6 +687,14 @@ def build_system_prompt(
         skills_section += f"\n{memory_instructions}\n"
     elif memories_text.strip():
         skills_section += f"\n## User Memories\n\n{memories_text}\n"
+    tz = (user_timezone or "").strip()
+    if tz:
+        skills_section += (
+            "\n## User timezone\n\n"
+            f"The user's IANA timezone is **{tz}**. Use it for wall-clock times, "
+            "scheduling (`create_scheduled_task`), and relative phrases like "
+            "\"tomorrow\" or \"9am\". Do not restate this block unless useful.\n"
+        )
 
     read_only = disable_write_tools or bool(
         config and getattr(config.agent, "disable_write_tools", False)
