@@ -435,8 +435,17 @@ export function useChat({
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
-          message: text, session_id: requestSessionId, attachments,
+          message: text,
+          session_id: requestSessionId,
+          attachments,
           chat_image_ids: chatImages.map((image) => image.id),
+          timezone: (() => {
+            try {
+              return Intl.DateTimeFormat().resolvedOptions().timeZone;
+            } catch {
+              return undefined;
+            }
+          })(),
         }),
         signal: controller.signal,
       });
@@ -683,6 +692,13 @@ export function useChat({
           client_id: clientId,
           attachments,
           chat_image_ids: chatImages.map((image) => image.id),
+          timezone: (() => {
+            try {
+              return Intl.DateTimeFormat().resolvedOptions().timeZone;
+            } catch {
+              return undefined;
+            }
+          })(),
         }),
       });
       if (!response.ok) {
@@ -754,12 +770,20 @@ export function useChat({
     return true;
   }, [baseUrl, sessionId, token, update]);
 
+  const clearStreamingFields = (state: ChatState): ChatState => ({
+    ...state,
+    streamingSteps: [],
+    streamingText: "",
+    currentTool: undefined,
+    statusMessage: undefined,
+  });
+
   const beginExternalTurn = useCallback((turnId: string, targetSessionId = sessionId) => {
     update(targetSessionId, (state) => ({
-      ...state,
+      ...clearStreamingFields(state),
       isLoading: true,
       activeTurnId: turnId || state.activeTurnId,
-      activityStartedAt: state.activityStartedAt ?? Date.now(),
+      activityStartedAt: Date.now(),
     }));
   }, [sessionId, update]);
 
@@ -793,12 +817,10 @@ export function useChat({
           statusMessage: undefined,
         };
       }
+      // Final `response` is committed via parent_auto_reply. Parking it in
+      // streamingText left a ghost bubble after the turn when isLoading lagged.
       if (event.type === "response") {
-        return {
-          ...state,
-          streamingText: event.content ?? state.streamingText,
-          statusMessage: undefined,
-        };
+        return state;
       }
       if (
         event.type === "tool_call"
@@ -826,29 +848,44 @@ export function useChat({
     targetSessionId = sessionId,
   ) => {
     update(targetSessionId, (state) => {
-      const finalContent = content || state.streamingText;
-      if (!finalContent.trim() && state.streamingSteps.length === 0) return state;
+      const finalContent = (content || state.streamingText).trim();
+      const steps = [...state.streamingSteps];
+      // Always clear stream fields — even when there is nothing to commit —
+      // so a cancelled or empty auto-turn cannot leave sticky text.
+      const cleared = {
+        ...clearStreamingFields(state),
+        isLoading: false,
+        activeTurnId: null,
+        activityStartedAt: null,
+      };
+      if (!finalContent && steps.length === 0) return cleared;
+      // Avoid duplicating the same assistant text if reply is delivered twice.
+      const last = state.messages[state.messages.length - 1];
+      if (
+        last?.role === "assistant"
+        && last.content === finalContent
+        && (last.steps?.length ?? 0) === 0
+        && steps.length === 0
+      ) {
+        return cleared;
+      }
       return {
-        ...state,
+        ...cleared,
         messages: [
           ...state.messages,
           {
-            role: "assistant",
+            role: "assistant" as const,
             content: finalContent,
-            steps: [...state.streamingSteps],
+            steps,
           },
         ],
-        streamingSteps: [],
-        streamingText: "",
-        currentTool: undefined,
-        statusMessage: undefined,
       };
     });
   }, [sessionId, update]);
 
   const finishExternalTurn = useCallback((targetSessionId = sessionId) => {
     update(targetSessionId, (state) => ({
-      ...state,
+      ...clearStreamingFields(state),
       isLoading: false,
       activeTurnId: null,
       activityStartedAt: null,

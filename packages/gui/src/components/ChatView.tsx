@@ -64,7 +64,7 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
     : task.status === "cancelled"
       ? "cancelled"
       : task.status;
-  const Icon = task.task_type === "terminal" ? Terminal : Bot;
+  const Icon = task.task_type === "terminal" ? Terminal : task.task_type === "scheduled" ? Clock3 : Bot;
   const statusColor = task.status === "failed"
     ? "bg-scout-error"
     : task.status === "completed"
@@ -72,7 +72,28 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
       : task.status === "cancelled" || task.status === "interrupted"
         ? "bg-scout-muted"
         : "bg-scout-accent-cta";
-  const body = task.error || task.summary || task.result_preview;
+  const sched = task.scheduled;
+  const stateLabel =
+    task.task_type === "scheduled"
+      ? (sched?.status === "active"
+          ? (sched.next_run_at
+              ? new Date(sched.next_run_at).toLocaleString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                  timeZone: sched.timezone || undefined,
+                  timeZoneName: "short",
+                })
+              : "Scheduled")
+          : sched?.status === "completed"
+            ? "Completed"
+            : sched?.status || state)
+      : state;
+  const body =
+    task.task_type === "scheduled"
+      ? (task.error || sched?.schedule_label || task.summary || task.result_preview)
+      : (task.error || task.summary || task.result_preview);
   const content = (
     <div className="flex min-w-0 items-start gap-2.5 rounded-btn border border-scout-hairline-faint bg-scout-panel/55 px-3 py-2 text-left transition-colors hover:bg-scout-lift/60">
       <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${statusColor} ${active ? "animate-pulse" : ""}`} />
@@ -80,11 +101,16 @@ function TaskEventRow({ task, onOpen }: { task: TaskEvent; onOpen?: () => void }
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5 text-label text-scout-text">
           <span className="truncate font-medium">{task.title}</span>
-          <span className="shrink-0 text-scout-muted">{state}</span>
+          <span className="shrink-0 text-scout-muted">{stateLabel}</span>
         </span>
         {body && <span className="mt-0.5 block truncate text-caption text-scout-muted">{body}</span>}
       </span>
-      {elapsed && <span className="flex shrink-0 items-center gap-1 pt-0.5 text-micro tabular-nums text-scout-muted"><Clock3 size={12} />{elapsed}</span>}
+      {task.task_type !== "scheduled" && elapsed && (
+        <span className="flex shrink-0 items-center gap-1 pt-0.5 text-micro tabular-nums text-scout-muted">
+          <Clock3 size={12} />
+          {elapsed}
+        </span>
+      )}
     </div>
   );
   return onOpen ? <button type="button" onClick={onOpen} className="block w-full text-left">{content}</button> : content;
@@ -426,9 +452,13 @@ export function ChatView({
                 onRemoveAnnotation={onRemoveAnnotation}
               />
             )}
-            {streamingText ? (
-              // No prose wrapper here: MessageBubble applies `prose-scout
-              // text-prose` itself, and nesting the scope duplicated it.
+            {/* Hide stream bubble if the same text is already the last committed
+                message — prevents a sticky duplicate under the composer. */}
+            {streamingText
+              && !(
+                messages[messages.length - 1]?.role === "assistant"
+                && messages[messages.length - 1]?.content === streamingText
+              ) ? (
               <div>
                 <MessageBubble
                   message={{ role: "assistant", content: streamingText }}

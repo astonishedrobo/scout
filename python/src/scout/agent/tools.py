@@ -8,6 +8,7 @@ time via :func:`make_tools`.
 from __future__ import annotations
 
 import csv
+import json
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +39,7 @@ def make_tools(
     personal_dir: str | Path | None = None,
     server_mode: bool = False,
     user_id: str = "default",
+    session_id: str | None = None,
     use_memories: bool = True,
     allow_request_permissions: bool = True,
     request_permissions_fn=None,
@@ -510,6 +512,217 @@ def make_tools(
             agent_id, message, source="parent",
         )
 
+    @tool
+    def create_scheduled_task(
+        instruction: str,
+        timezone: str = "",
+        title: str = "",
+        schedule_kind: str = "once",
+        run_at: str = "",
+        interval_minutes: int = 0,
+        time: str = "",
+        weekdays: str = "",
+        max_runs: int = 0,
+    ) -> str:
+        """Schedule work for later. Results run as a full Scout turn in the task's
+        own chat thread (same tools as a normal chat).
+
+        Thread ownership:
+        - If this chat has no active scheduled task, this chat becomes the task
+          thread (title is set to the task title). Follow-ups can rename/modify it.
+        - If this chat already has an active task, a new chat is created for the
+          additional task so two actives never share one thread.
+
+        MUST use for reminders / "in N minutes" / recurring / monitors.
+        Do NOT use spawn_subagent or shell sleep for delayed user-visible replies.
+
+        schedule_kind:
+          - once: run_at ISO-8601 (any future time, including +1 minute)
+          - interval: interval_minutes (minimum 60 for recurring)
+          - daily: time HH:MM in the given timezone
+          - weekly: time HH:MM + weekdays "0,1,2" (Mon=0)
+
+        max_runs: optional stop after N fires (e.g. 2). 0 = unlimited.
+        timezone: IANA name; omit to use the timezone from the system prompt.
+        """
+        from ..scheduled_tasks import (
+            MAX_ACTIVE_TASKS,
+            ScheduleError,
+            ScheduleSpec,
+            default_title,
+            get_global_store,
+            resolve_task_session_id,
+        )
+
+        store = get_global_store()
+        if store is None:
+            return "[UNAVAILABLE] Scheduled tasks are not available in this deployment."
+        uid = str(user_id)
+        if store.count_active(uid) >= MAX_ACTIVE_TASKS:
+            return (
+                f"[ERROR] Active task limit reached ({MAX_ACTIVE_TASKS}). "
+                "Pause or delete a task first."
+            )
+        if not session_id:
+            return "[ERROR] No conversation bound; open a chat and try again."
+        # Prefer explicit arg; else agent timezone from system prompt context is
+        # expected in the schedule — fall back only if the model still omits it.
+        tz = (timezone or "").strip()
+        if not tz:
+            return (
+                "[ERROR] timezone is required (IANA name). "
+                "Use the user timezone from the system prompt."
+            )
+        schedule_raw: dict = {"kind": schedule_kind.strip().lower(), "timezone": tz}
+        if run_at.strip():
+            schedule_raw["run_at"] = run_at.strip()
+        if interval_minutes:
+            schedule_raw["interval_minutes"] = int(interval_minutes)
+        if time.strip():
+            schedule_raw["time"] = time.strip()
+        if weekdays.strip():
+            schedule_raw["weekdays"] = [
+                int(part.strip()) for part in weekdays.split(",") if part.strip() != ""
+            ]
+        task_title = (title or default_title(instruction)).strip()[:120]
+        cwd = personal_dir or data_dir
+        try:
+            schedule = ScheduleSpec.from_dict(schedule_raw)
+            task_session_id, is_new_thread = resolve_task_session_id(
+                store,
+                user_id=uid,
+                current_session_id=session_id,
+                title=task_title,
+                cwd=cwd,
+            )
+            task = store.create(
+                user_id=uid,
+                title=task_title,
+                instruction=instruction.strip(),
+                schedule=schedule,
+                session_id=task_session_id,
+                status="active",
+                max_runs=int(max_runs) if max_runs and int(max_runs) > 0 else None,
+            )
+        except ScheduleError as exc:
+            return f"[ERROR] {exc}"
+        except Exception as exc:
+            return f"[ERROR] Could not create scheduled task: {exc}"
+        thread_note = (
+            "Opened a new chat thread for this task."
+            if is_new_thread
+            else "This chat is now the task thread (title updated)."
+        )
+        return (
+            f"Created scheduled task `{task['title']}` (id={task['task_id']}).\n"
+            f"{thread_note}\n"
+            f"Status: {task['status']}\n"
+            f"Schedule: {task['schedule_label']}\n"
+            f"Next run: {task.get('next_run_at') or 'none'}\n"
+            f"Timezone: {task['timezone']}\n"
+            f"Max runs: {task.get('max_runs') or 'unlimited'}\n"
+            f"Session: {task.get('session_id')}\n"
+            f"SCHEDULED_TASK_JSON:{json.dumps(task, default=str)}"
+        )
+
+    @tool
+    def list_scheduled_tasks() -> str:
+        """List this user's scheduled tasks (active, paused, completed, failed)."""
+        from ..scheduled_tasks import get_global_store
+
+        store = get_global_store()
+        if store is None:
+            return "[UNAVAILABLE] Scheduled tasks are not available in this deployment."
+        tasks = store.list_for_user(str(user_id))
+        if not tasks:
+            return "No scheduled tasks."
+        lines = []
+        for task in tasks:
+            lines.append(
+                f"- [{task['status']}] {task['title']} (id={task['task_id']})\n"
+                f"  schedule: {task['schedule_label']}\n"
+                f"  next: {task.get('next_run_at') or '—'}\n"
+                f"  instruction: {task['instruction'][:200]}"
+            )
+        return "\n".join(lines)
+
+    @tool
+    def update_scheduled_task(
+        task_id: str,
+        status: str = "",
+        title: str = "",
+        instruction: str = "",
+    ) -> str:
+        """Update a scheduled task (title, instruction, pause/resume).
+
+        status may be active, paused, or empty. Renaming also renames the
+        task's chat thread title. Pass only fields you want to change.
+        """
+        from ..scheduled_tasks import ScheduleError, get_global_store, rename_task_session
+
+        store = get_global_store()
+        if store is None:
+            return "[UNAVAILABLE] Scheduled tasks are not available in this deployment."
+        try:
+            task = store.update(
+                task_id.strip(),
+                str(user_id),
+                title=title.strip() or None,
+                instruction=instruction.strip() or None,
+                status=status.strip() or None,
+                clear_error=status.strip() == "active",
+            )
+        except ScheduleError as exc:
+            return f"[ERROR] {exc}"
+        if not task:
+            return f"[ERROR] Task not found: {task_id}"
+        if title.strip() and task.get("session_id"):
+            try:
+                rename_task_session(
+                    user_id=str(user_id),
+                    session_id=str(task["session_id"]),
+                    title=task["title"],
+                    cwd=personal_dir or data_dir,
+                )
+            except Exception:
+                pass
+        return (
+            f"Updated `{task['title']}` (id={task['task_id']}).\n"
+            f"Status: {task['status']}\n"
+            f"Schedule: {task['schedule_label']}\n"
+            f"Next run: {task.get('next_run_at') or 'none'}"
+        )
+
+    @tool
+    def delete_scheduled_task(task_id: str) -> str:
+        """Delete a scheduled task. Empty task chats (no conversation) are removed;
+        chats with real messages are kept.
+        """
+        from ..scheduled_tasks import delete_task_session_if_empty, get_global_store
+
+        store = get_global_store()
+        if store is None:
+            return "[UNAVAILABLE] Scheduled tasks are not available in this deployment."
+        removed = store.delete(task_id.strip(), str(user_id))
+        if not removed:
+            return f"[ERROR] Task not found: {task_id}"
+        note = ""
+        sid = removed.get("session_id")
+        if sid:
+            try:
+                gone = delete_task_session_if_empty(
+                    user_id=str(user_id),
+                    session_id=str(sid),
+                    cwd=personal_dir or data_dir,
+                )
+                if gone:
+                    note = " Empty task chat removed."
+                else:
+                    note = " Chat kept (it has conversation history)."
+            except Exception:
+                note = ""
+        return f"Deleted scheduled task {task_id}.{note}"
+
     unified = (
         execution_service is not None
         and execution_service._exec_cfg.unified_shell
@@ -525,9 +738,17 @@ def make_tools(
             get_subagent_transcript,
             stop_subagent, send_subagent_message,
         ]
+    schedule_tools = []
+    if not is_subagent:
+        schedule_tools = [
+            create_scheduled_task,
+            list_scheduled_tasks,
+            update_scheduled_task,
+            delete_scheduled_task,
+        ]
     tools = [
         *shell_tools, run_node,
-        *memory_tools, *skill_tools, *perm_tools, *multi_agent_tools,
+        *memory_tools, *skill_tools, *perm_tools, *multi_agent_tools, *schedule_tools,
         read_file, list_files, search_workspace, filter_table, think, ask_user_choice,
         present_files,
     ]

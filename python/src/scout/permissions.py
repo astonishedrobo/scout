@@ -40,6 +40,7 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "spawn_subagent", "list_subagents", "get_subagent_result",
             "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
+            "list_scheduled_tasks",
         }),
     ),
     "contributor": ProfileConfig(
@@ -60,6 +61,8 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "spawn_subagent", "list_subagents", "get_subagent_result",
             "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
+            "create_scheduled_task", "list_scheduled_tasks",
+            "update_scheduled_task", "delete_scheduled_task",
         }),
     ),
     "admin": ProfileConfig(
@@ -80,6 +83,8 @@ _PROFILES: dict[PermissionProfileName, ProfileConfig] = {
             "spawn_subagent", "list_subagents", "get_subagent_result",
             "get_subagent_transcript",
             "stop_subagent", "send_subagent_message",
+            "create_scheduled_task", "list_scheduled_tasks",
+            "update_scheduled_task", "delete_scheduled_task",
         }),
     ),
 }

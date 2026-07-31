@@ -45,7 +45,7 @@ export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancel
 /** Durable lifecycle record rendered inline in the conversation. */
 export interface TaskEvent {
   task_id: string;
-  task_type: "agent" | "terminal";
+  task_type: "agent" | "terminal" | "scheduled";
   title: string;
   status: TaskStatus;
   created_at?: number;
@@ -54,6 +54,15 @@ export interface TaskEvent {
   summary?: string;
   result_preview?: string;
   error?: string;
+  scheduled?: {
+    next_run_at?: string | null;
+    timezone?: string;
+    schedule_label?: string;
+    session_id?: string | null;
+    status?: string;
+    max_runs?: number | null;
+    run_count?: number;
+  };
 }
 
 /** Compact chronological completion signal, separate from a task's live card. */

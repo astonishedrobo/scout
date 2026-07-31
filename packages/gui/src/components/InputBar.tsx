@@ -77,6 +77,8 @@ interface InputBarProps {
   embedded?: boolean;
   requiresVision?: boolean;
   ensureSession: () => Promise<string>;
+  /** Overrides the default textarea placeholder when set. */
+  placeholder?: string;
   annotations?: ResponseAnnotation[];
   onUpdateAnnotation?: (id: string, changes: Pick<ResponseAnnotation, "comment">) => void;
   onRemoveAnnotation?: (id: string) => void;
@@ -107,6 +109,7 @@ export function InputBar({
   embedded = false,
   requiresVision = false,
   ensureSession,
+  placeholder: placeholderOverride,
   annotations = [],
   onUpdateAnnotation,
   onRemoveAnnotation,
@@ -686,13 +689,15 @@ export function InputBar({
           onPaste={handlePaste}
           disabled={disabled}
           placeholder={
-            disabled
-              ? "Waiting for response..."
-              : welcomeMode
-                ? "Describe what you want to explore…"
-                : annotations.length > 0
-                  ? "Ask for follow-up changes"
-                  : "How can I help you?"
+            placeholderOverride
+              ? placeholderOverride
+              : disabled
+                ? "Waiting for response..."
+                : welcomeMode
+                  ? "Describe what you want to explore…"
+                  : annotations.length > 0
+                    ? "Ask for follow-up changes"
+                    : "How can I help you?"
           }
           rows={1}
           className={`block w-full shrink-0 resize-none bg-transparent px-5 leading-relaxed text-scout-text outline-none placeholder:text-scout-muted/80 ${

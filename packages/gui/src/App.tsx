@@ -39,6 +39,9 @@ import {
 } from "./components/AgentsPanel";
 import { useApprovalMode } from "./hooks/useApprovalMode";
 import { useResponseAnnotations } from "./hooks/useResponseAnnotations";
+import { useScheduledTasks } from "./hooks/useScheduledTasks";
+import { ScheduledPage } from "./components/ScheduledPage";
+import type { ScheduledTask } from "./hooks/useScheduledTasks";
 
 /** Sections whose canonical URL is `/admin` rather than `/settings`. */
 const ADMIN_SECTIONS = new Set<SettingsSectionId>([
@@ -233,7 +236,16 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("general");
   const [initOpen, setInitOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [scheduledOpen, setScheduledOpen] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
+
+  const scheduled = useScheduledTasks(
+    baseUrl,
+    isReady,
+    token,
+    isMultiUser,
+    isReady && (!isMultiUser || !!token),
+  );
   const panel = useRightPanelTabs();
   // Visibility is deliberately independent from tab lifecycle. Hiding the
   // panel must not destroy the file tree, selected preview, tab set, or scroll
@@ -335,7 +347,10 @@ export function App() {
     // Background completions are queued by the server and integrated by one
     // normal supervisor turn; stream that durable reply into the transcript.
     onParentAutoReply: (content) => {
+      // Commit final text into the transcript and drop any streaming copy so
+      // it cannot stick under the composer after the turn ends.
       commitExternalTurn(content, currentSessionId || "default");
+      finishExternalTurn(currentSessionId || "default");
       setIsAutoContinuing(false);
       setAutoStreamingText("");
       setAutoContinueStartedAt(null);
@@ -343,9 +358,16 @@ export function App() {
     onParentAutoEvent: (event) => {
       receiveExternalTurnEvent(event, currentSessionId || "default");
     },
-    onParentAutoResponseStart: () => setAutoStreamingText(""),
+    onParentAutoResponseStart: () => {
+      setAutoStreamingText("");
+      receiveExternalTurnEvent({ type: "response_start" }, currentSessionId || "default");
+    },
     onParentAutoResponseDelta: (content) => {
       setAutoStreamingText((current) => current + content);
+      receiveExternalTurnEvent(
+        { type: "response_delta", content },
+        currentSessionId || "default",
+      );
     },
     onParentAutoTurnStarted: (event) => {
       beginExternalTurn(String(event.turn_id || ""), currentSessionId || "default");
@@ -370,6 +392,11 @@ export function App() {
         next[index] = row;
         return next;
       });
+      // Task create/rename may spawn or retitle chats in the sidebar.
+      if (task.task_type === "scheduled") {
+        void refreshSessions();
+        void scheduled.refresh();
+      }
     },
   });
   const chatBusy = isLoading || isAutoContinuing;
@@ -533,6 +560,7 @@ export function App() {
   const handleNewChat = useCallback(async () => {
     sessionRef.current = null;
     setCurrentSessionId(null);
+    setScheduledOpen(false);
     resetApprovalMode();
     panel.closeKinds(["artifact", "review"]);
     // "Default side panel" (General). Files and Agents are workspace-scoped, so
@@ -544,10 +572,68 @@ export function App() {
     }
   }, [setCurrentSessionId, resetApprovalMode, panel, defaultPanel, openFilesExplorer, openAgentsPanel]);
 
+  const openScheduledRoute = useCallback(() => {
+    setSettingsOpen(false);
+    setScheduledOpen(true);
+    sessionRef.current = null;
+    setCurrentSessionId(null);
+    if (window.location.hash !== "#/scheduled") {
+      window.location.hash = "/scheduled";
+    }
+  }, [setCurrentSessionId]);
+
+  /** Always starts a real chat thread; the agent creates the scheduled task there. */
+  const handleScheduledSubmit = useCallback(
+    async (
+      text: string,
+      attachments: string[] = [],
+      chatImages: ChatImage[] = [],
+      onAccepted?: () => void,
+      submittedAnnotations: ResponseAnnotation[] = [],
+    ) => {
+      if (!isReady || !text.trim()) return false;
+      setScheduledOpen(false);
+      sessionRef.current = null;
+      setCurrentSessionId(null);
+      clearSession("default");
+      const id = await createSession(undefined, approvalMode);
+      sessionRef.current = id;
+      setCurrentSessionId(id);
+      setMessagesForSession(id, []);
+      window.location.hash = `/c/${id}`;
+      // Timezone is injected into the system prompt server-side — not the user text.
+      return sendMessage(
+        text.trim(),
+        attachments,
+        chatImages,
+        () => {
+          if (submittedAnnotations.length) clearAnnotations();
+          onAccepted?.();
+          void scheduled.refresh();
+          void refreshSessions();
+        },
+        submittedAnnotations,
+      );
+    },
+    [
+      isReady,
+      createSession,
+      approvalMode,
+      clearSession,
+      setCurrentSessionId,
+      setMessagesForSession,
+      sendMessage,
+      clearAnnotations,
+      scheduled,
+      refreshSessions,
+    ],
+  );
+
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
-      if (sessionId === sessionRef.current) return;
+      if (sessionId === sessionRef.current && !scheduledOpen) return;
 
+      setScheduledOpen(false);
       panel.closeKinds(["artifact", "review"]);
       const oldSid = sessionRef.current;
       sessionRef.current = sessionId;
@@ -587,7 +673,7 @@ export function App() {
         }
       }
     },
-    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat, panel],
+    [baseUrl, isSessionLoading, loadSession, setMessagesForSession, token, handleNewChat, panel, scheduledOpen],
   );
 
   useEffect(() => {
@@ -601,6 +687,7 @@ export function App() {
       const params = new URLSearchParams(query);
       if (route === "/admin" || route === "/settings") {
         setSettingsOpen(true);
+        setScheduledOpen(false);
         const requested = params.get("tab") ?? "";
         // `integrations` was the old id for the per-user connections tab; keep
         // existing links working.
@@ -609,6 +696,13 @@ export function App() {
         return;
       }
       setSettingsOpen(false);
+      if (route === "/scheduled" || hash === "#/scheduled") {
+        setScheduledOpen(true);
+        sessionRef.current = null;
+        setCurrentSessionId(null);
+        return;
+      }
+      setScheduledOpen(false);
       const match = hash.match(/^#\/c\/(.+)$/);
       if (match) {
         const sid = match[1];
@@ -740,8 +834,9 @@ export function App() {
   const loadingCurrentSession = !!currentSessionId && isSessionLoading(currentSessionId);
   const isWelcome = isReady && messages.length === 0 && !chatBusy && !loadingCurrentSession;
   const rawTitle = sessions.find((s) => s.sessionId === currentSessionId)?.title;
-  const sessionTitle =
-    rawTitle && !["New chat", "New session"].includes(rawTitle)
+  const sessionTitle = scheduledOpen
+    ? "Scheduled"
+    : rawTitle && !["New chat", "New session"].includes(rawTitle)
       ? rawTitle
       : "New chat";
 
@@ -799,12 +894,14 @@ export function App() {
             onOpenSettings={() => openSettingsRoute("general")}
             onOpenInit={() => setInitOpen(true)}
             onOpenHelp={() => setHelpOpen(true)}
+            onOpenScheduled={openScheduledRoute}
+            scheduledActive={scheduledOpen}
             isConnected={isReady}
             theme={theme}
             onToggleTheme={toggleTheme}
             sessions={sessions}
             sessionsLoading={sessionsLoading}
-            currentSessionId={currentSessionId}
+            currentSessionId={scheduledOpen ? null : currentSessionId}
             onResumeSession={handleResumeSession}
             onRenameSession={renameSession}
             onDeleteSession={handleDeleteSession}
@@ -910,7 +1007,68 @@ export function App() {
         }
       >
         <div className="flex flex-col flex-1 min-h-0">
-          {isWelcome && (
+          {scheduledOpen ? (
+            <ScheduledPage
+              tasks={scheduled.tasks}
+              activeCount={scheduled.activeCount}
+              maxActive={scheduled.maxActive}
+              loading={scheduled.loading}
+              error={scheduled.error}
+              localTimezone={scheduled.localTimezone}
+              localTimezoneLabel={scheduled.localTimezoneLabel}
+              composer={
+                // Same structure as a normal chat footer: pet on the h-0 ledge,
+                // then InputBar with its own max-w / px-4 / py-3 (not embedded).
+                <>
+                  <div className="relative z-10 mx-auto h-0 w-full max-w-[46rem] px-4">
+                    <PixelPet working={false} />
+                  </div>
+                  <InputBar
+                    baseUrl={baseUrl}
+                    onSubmit={handleScheduledSubmit}
+                    onSlashCommand={handleSlashCommand}
+                    disabled={!isReady}
+                    isLoading={false}
+                    models={models}
+                    capabilities={capabilities}
+                    requiresVision={false}
+                    ensureSession={async () => {
+                      const id = await createSession(undefined, approvalMode);
+                      sessionRef.current = id;
+                      setCurrentSessionId(id);
+                      return id;
+                    }}
+                    currentModel={currentModel}
+                    onSelectModel={(model) => setModel(model, sessionRef.current)}
+                    approvalMode={approvalMode}
+                    onSelectApprovalMode={setApprovalMode}
+                    approvalModeChanging={approvalModeChanging}
+                    token={token}
+                    uploadingCount={activeCount}
+                    onUpload={isMultiUser ? uploadFiles : undefined}
+                    placeholder="Schedule a task…"
+                  />
+                </>
+              }
+              onOpenTask={(task: ScheduledTask) => {
+                if (task.session_id) void handleResumeSession(task.session_id);
+                else setOperationError("This task has no conversation yet.");
+              }}
+              onPause={async (taskId) => {
+                await scheduled.pauseTask(taskId);
+              }}
+              onResume={async (taskId) => {
+                await scheduled.resumeTask(taskId);
+              }}
+              onDelete={async (taskId) => {
+                await scheduled.deleteTask(taskId);
+                void refreshSessions();
+              }}
+              onRunNow={async (taskId) => {
+                await scheduled.runTaskNow(taskId);
+              }}
+            />
+          ) : isWelcome ? (
             <div className="relative flex-1 flex flex-col items-center min-h-0 overflow-y-auto">
               <WelcomeScene />
               {/* welcome-block carries the density preference and the top anchor;
@@ -956,15 +1114,19 @@ export function App() {
                 )}
               </div>
             </div>
-          )}
-
+          ) : (
+            <>
           {isReady && (messages.length > 0 || chatBusy) && (
             <div className="flex min-h-0 flex-1 flex-col">
               <ChatView
                 sessionId={currentSessionId}
                 messages={messages}
                 streamingSteps={streamingSteps}
-                streamingText={streamingText}
+                streamingText={
+                  isAutoContinuing && autoStreamingText
+                    ? autoStreamingText
+                    : streamingText
+                }
                 currentTool={currentTool}
                 statusMessage={statusMessage}
                 activityStartedAt={activityStartedAt}
@@ -1060,6 +1222,8 @@ export function App() {
                 />
               )}
             </div>
+          )}
+            </>
           )}
         </div>
       </WorkspaceShell>

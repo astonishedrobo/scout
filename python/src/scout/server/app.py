@@ -33,7 +33,7 @@ import time
 import traceback
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -47,6 +47,15 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from ..execution.grants import CapabilityGrantStore
 from ..task_store import TaskStore
+from ..scheduled_tasks import (
+    MAX_ACTIVE_TASKS,
+    ScheduleError,
+    ScheduleSpec,
+    ScheduledTaskStore,
+    default_title,
+    parse_natural_schedule,
+    set_global_store,
+)
 from ..execution.models import CapabilityRequest
 from ..artifacts import MAX_ARTIFACT_SIZE, RENDERERS
 from ..config import (
@@ -130,6 +139,7 @@ class ChatRequest(BaseModel):
     session_id: str
     attachments: list[str] = []  # list of absolute file paths
     chat_image_ids: list[str] = []
+    timezone: str | None = None  # client IANA zone for system prompt
 
 
 class SteerRequest(BaseModel):
@@ -138,6 +148,7 @@ class SteerRequest(BaseModel):
     client_id: str
     attachments: list[str] = []
     chat_image_ids: list[str] = []
+    timezone: str | None = None
 
 
 class ConfigSetRequest(BaseModel):
@@ -165,6 +176,28 @@ DEFAULT_APPROVAL_MODE = "ask_always"
 
 class SessionApprovalModeRequest(BaseModel):
     mode: str
+
+
+class ScheduledTaskCreateRequest(BaseModel):
+    """Create a scheduled task from structured fields or natural-language text.
+
+    ``timezone`` must be the client's IANA zone. Wall-clock phrases like "9am"
+    are interpreted in that zone.
+    """
+
+    instruction: str | None = None
+    title: str | None = None
+    schedule: dict[str, Any] | None = None
+    text: str | None = None
+    timezone: str | None = None
+    status: str = "active"
+
+
+class ScheduledTaskUpdateRequest(BaseModel):
+    instruction: str | None = None
+    title: str | None = None
+    schedule: dict[str, Any] | None = None
+    status: str | None = None  # active | paused
 
 
 def approval_required(mode: str, kind: str) -> bool:
@@ -674,7 +707,12 @@ def create_app(
         "retriever_lock": threading.RLock(),
         "mcp_store": McpStore(),
         "mcp_manager": McpManager(),
+        "scheduled_task_store": ScheduledTaskStore(
+            Path.home() / ".config" / "scout" / "scheduled_tasks.sqlite"
+        ),
+        "scheduled_running": set(),
     }
+    set_global_store(_state["scheduled_task_store"])
 
     def _load_base_config() -> AppConfig:
         if _state["multi_user"] and _state["config_path"]:
@@ -1001,14 +1039,31 @@ def create_app(
                 # otherwise invisible parent turn.
                 async def _collect_reply() -> str:
                     final = ""
+                    current.broadcast_event({
+                        "type": "parent_auto_response_start",
+                        "session_id": session_id,
+                        "source": "subagent_auto_continue",
+                    })
                     async for event in current.agent.stream(""):
-                        current.broadcast_event({
-                            "type": "parent_auto_event",
-                            "session_id": session_id,
-                            "event": event,
-                        })
-                        if event.get("type") == "response" and event.get("content"):
+                        event_type = event.get("type")
+                        # Stream tokens for live UI; final text only via parent_auto_reply
+                        # so the client never parks a completed answer in streamingText.
+                        if event_type == "response_delta" and event.get("content"):
+                            current.broadcast_event({
+                                "type": "parent_auto_response_delta",
+                                "session_id": session_id,
+                                "content": event["content"],
+                                "source": "subagent_auto_continue",
+                            })
+                        elif event_type == "response" and event.get("content"):
                             final = str(event["content"])
+                        else:
+                            current.broadcast_event({
+                                "type": "parent_auto_event",
+                                "session_id": session_id,
+                                "event": event,
+                                "source": "subagent_auto_continue",
+                            })
                     return final
 
                 reply_task = asyncio.create_task(_collect_reply())
@@ -1143,6 +1198,11 @@ def create_app(
                     })
 
                 final = ""
+                current.broadcast_event({
+                    "type": "parent_auto_response_start",
+                    "session_id": session_id,
+                    "source": "steer_followup",
+                })
                 async for event in current.agent.stream(
                     first["content"], first.get("attachments") or None,
                 ):
@@ -1152,14 +1212,22 @@ def create_app(
                             **event,
                             "session_id": session_id,
                         })
+                    elif event_type == "response_delta" and event.get("content"):
+                        current.broadcast_event({
+                            "type": "parent_auto_response_delta",
+                            "session_id": session_id,
+                            "content": event["content"],
+                            "source": "steer_followup",
+                        })
+                    elif event_type == "response" and event.get("content"):
+                        final = str(event["content"])
                     else:
                         current.broadcast_event({
                             "type": "parent_auto_event",
                             "session_id": session_id,
                             "event": event,
+                            "source": "steer_followup",
                         })
-                    if event_type == "response" and event.get("content"):
-                        final = str(event["content"])
 
                 if final:
                     if session_path.exists():
@@ -2233,6 +2301,310 @@ def create_app(
         except asyncio.CancelledError:
             return
 
+    def _scheduled_task_chip(task: dict[str, Any]) -> dict[str, Any]:
+        """Inline transcript card for a scheduled task lifecycle."""
+        status = task.get("status") or "active"
+        # Map store statuses onto TaskEvent statuses used by the GUI.
+        if status == "paused":
+            ui_status = "cancelled"
+        elif status == "failed":
+            ui_status = "failed"
+        elif status == "completed":
+            ui_status = "completed"
+        else:
+            ui_status = "queued" if task.get("next_run_at") else "running"
+        summary = task.get("schedule_label") or ""
+        if task.get("next_run_at") and status == "active":
+            summary = f"Next: {task['next_run_at']}"
+        elif status == "completed":
+            summary = "Completed"
+        return {
+            "task_id": task["task_id"],
+            "task_type": "scheduled",
+            "title": task.get("title") or "Scheduled task",
+            "status": ui_status,
+            "summary": summary,
+            "result_preview": (task.get("instruction") or "")[:200],
+            "error": task.get("last_error"),
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
+            "scheduled": {
+                "next_run_at": task.get("next_run_at"),
+                "timezone": task.get("timezone"),
+                "schedule_label": task.get("schedule_label"),
+                "session_id": task.get("session_id"),
+                "status": status,
+                "max_runs": task.get("max_runs"),
+                "run_count": task.get("run_count"),
+            },
+        }
+
+    async def _run_scheduled_task(task: dict[str, Any]) -> None:
+        """Execute one due scheduled task as a full agent turn in its chat."""
+        task_id = task["task_id"]
+        user_id = task["user_id"]
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        if task_id in _state["scheduled_running"]:
+            return
+        claimed = await asyncio.to_thread(store.mark_run_started, task_id)
+        if not claimed:
+            return
+        _state["scheduled_running"].add(task_id)
+        try:
+
+            session_id = task.get("session_id")
+            cwd = _session_cwd(user_id)
+            # Create a dedicated conversation when the task has none yet.
+            if not session_id or not _session_file(cwd, session_id, user_id).exists():
+                session_id = str(uuid.uuid4())
+                sdir = _session_dir(cwd, user_id)
+                sdir.mkdir(parents=True, exist_ok=True)
+                header = {
+                    "type": "header",
+                    "sessionId": session_id,
+                    "projectDir": str(Path(cwd).resolve()),
+                    "createdAt": _now_iso(),
+                    "title": task.get("title") or "Scheduled task",
+                    "model": None,
+                    "scheduledTaskId": task_id,
+                }
+                path = _session_file(cwd, session_id, user_id)
+                path.write_text(json.dumps(header) + "\n", encoding="utf-8")
+                # Background runs must not hang on interactive approvals.
+                save_session_snapshot(
+                    sdir,
+                    session_id,
+                    approval_mode="full_access",
+                )
+                await asyncio.to_thread(store.set_session_id, task_id, session_id)
+            else:
+                path = _session_file(cwd, session_id, user_id)
+
+            # Minimal User stand-in so multi-user session init has an id.
+            class _TaskUser:
+                def __init__(self, uid: str) -> None:
+                    self.id = int(uid) if str(uid).isdigit() else uid
+                    self.username = f"user-{uid}"
+
+            user_obj = None
+            if _state["multi_user"] and str(user_id) != "default":
+                user_obj = _TaskUser(str(user_id))
+
+            s = await _get_session_state(session_id, user_id, user_obj)
+            # Ensure full_access for unattended execution.
+            s.approval_mode = "full_access"
+
+            turn_key = (str(user_id), session_id)
+            with _state["session_registry_lock"]:
+                if turn_key in _state["pending_turns"] or s.abort_event is not None:
+                    # Session busy — retry in a minute without failing the task.
+                    await asyncio.to_thread(
+                        store.reschedule_at, task_id, time.time() + 60,
+                    )
+                    return
+                _state["pending_turns"].add(turn_key)
+                s.abort_event = asyncio.Event()
+                s.active_turn_id = str(uuid.uuid4())
+
+            turn_lease = None
+            instruction = task["instruction"]
+            try:
+                turn_lease = await _state["turn_scheduler"].acquire(
+                    str(user_id), _admission_policy(user_id),
+                )
+                # Same event shapes as steer/auto-continue so an open client
+                # streams this fire into the live transcript.
+                s.broadcast_event({
+                    "type": "parent_auto_turn_started",
+                    "session_id": session_id,
+                    "reason": "scheduled_task",
+                    "task_id": task_id,
+                    "turn_id": s.active_turn_id,
+                })
+                s.broadcast_event({
+                    "type": "scheduled_task_started",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "turn_id": s.active_turn_id,
+                    "task": task,
+                })
+
+                # Do not append the stored instruction as a user bubble — that re-prompt
+                # is internal. Only the assistant result is shown in the thread.
+                # Frame clearly so prior "how do I schedule this?" chat history
+                # does not make the model discuss the scheduler instead of
+                # performing the stored instruction (e.g. say "Good morning!").
+                run_message = (
+                    "A scheduled task is firing now. Carry out ONLY the following "
+                    "request for the user. Do not mention task IDs, next-run times, "
+                    "or that you are a scheduled job unless the user asked.\n\n"
+                    f"{instruction.strip()}"
+                )
+                final = ""
+                logger.info(
+                    "Scheduled task firing task_id=%s session=%s title=%r next was due",
+                    task_id, session_id, task.get("title"),
+                )
+                s.broadcast_event({
+                    "type": "parent_auto_response_start",
+                    "session_id": session_id,
+                    "source": "scheduled_task",
+                    "task_id": task_id,
+                })
+                # Full agent turn: same tools/workspace as interactive chat.
+                async for event in s.agent.stream(run_message):
+                    event_type = event.get("type")
+                    if event_type == "response_delta" and event.get("content"):
+                        s.broadcast_event({
+                            "type": "parent_auto_response_delta",
+                            "session_id": session_id,
+                            "content": event["content"],
+                            "source": "scheduled_task",
+                            "task_id": task_id,
+                        })
+                    elif event_type == "response" and event.get("content"):
+                        final = str(event["content"])
+                    else:
+                        s.broadcast_event({
+                            "type": "parent_auto_event",
+                            "session_id": session_id,
+                            "event": event,
+                            "source": "scheduled_task",
+                            "task_id": task_id,
+                        })
+
+                if final:
+                    if path.exists():
+                        await asyncio.to_thread(_append_session_entry, path, {
+                            "type": "assistant",
+                            "content": final,
+                            "timestamp": _now_iso(),
+                            "source": "scheduled_task",
+                            "scheduled_task_id": task_id,
+                        })
+                    s.broadcast_event({
+                        "type": "parent_auto_reply",
+                        "session_id": session_id,
+                        "content": final,
+                        "source": "scheduled_task",
+                        "task_id": task_id,
+                    })
+                    try:
+                        header = await asyncio.to_thread(_read_session_header, path)
+                        if header.get("title") in LEGACY_DEFAULT_TITLES | {"Scheduled task"}:
+                            personal = (
+                                user_workspace(_state["workspace_root"], user_id)
+                                if _state["multi_user"]
+                                else Path(_state["cwd"])
+                            )
+                            cfg = _effective_config(personal, user_id)
+                            _schedule_title_job(
+                                path,
+                                model=header.get("model") or cfg.agent.model,
+                                config=cfg,
+                                assistant_response=final,
+                            )
+                    except Exception:
+                        logger.debug("Scheduled task title job skipped", exc_info=True)
+
+                finished = await asyncio.to_thread(
+                    store.mark_run_finished,
+                    task_id,
+                    ok=True,
+                    schedule=ScheduleSpec.from_dict(task["schedule"]),
+                )
+                if finished:
+                    chip = _scheduled_task_chip(finished)
+                    if path.exists():
+                        await asyncio.to_thread(_append_session_entry, path, {
+                            "type": "task",
+                            "timestamp": _now_iso(),
+                            "task": chip,
+                        })
+                    s.broadcast_event({
+                        "type": "task_event",
+                        "session_id": session_id,
+                        "task": chip,
+                    })
+                logger.info("Scheduled task %s completed (session %s)", task_id, session_id)
+            except Exception as exc:
+                logger.exception("Scheduled task %s failed", task_id)
+                await asyncio.to_thread(
+                    store.mark_run_finished,
+                    task_id,
+                    ok=False,
+                    error=str(exc)[:2000],
+                    schedule=ScheduleSpec.from_dict(task["schedule"]),
+                )
+                if path.exists():
+                    await asyncio.to_thread(_append_session_entry, path, {
+                        "type": "assistant",
+                        "content": f"Scheduled task failed: {exc}",
+                        "timestamp": _now_iso(),
+                        "source": "scheduled_task_error",
+                        "scheduled_task_id": task_id,
+                    })
+            finally:
+                if turn_lease is not None:
+                    await turn_lease.release()
+                with _state["session_registry_lock"]:
+                    _state["pending_turns"].discard(turn_key)
+                s.abort_event = None
+                s.active_turn_id = None
+                s.touch()
+                s.broadcast_event({
+                    "type": "parent_auto_turn_finished",
+                    "session_id": session_id,
+                    "reason": "scheduled_task",
+                    "task_id": task_id,
+                })
+                s.broadcast_event({
+                    "type": "scheduled_task_finished",
+                    "session_id": session_id,
+                    "task_id": task_id,
+                })
+        finally:
+            _state["scheduled_running"].discard(task_id)
+
+    async def _scheduled_task_poller() -> None:
+        """Wake due scheduled tasks. Poll every 15s; next_run_at is always UTC.
+
+        Missed slots (past grace) are advanced/failed without catch-up runs.
+        """
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        try:
+            while True:
+                try:
+                    missed = await asyncio.to_thread(store.skip_missed, limit=50)
+                    if missed:
+                        logger.info(
+                            "Scheduled poller: skipped %d missed slot(s) (no catch-up)",
+                            missed,
+                        )
+                    due = await asyncio.to_thread(store.list_due, limit=10)
+                    if due:
+                        logger.info(
+                            "Scheduled poller: %d due task(s): %s",
+                            len(due),
+                            ", ".join(
+                                f"{t.get('title')!r}@{t.get('next_run_at')}"
+                                for t in due
+                            ),
+                        )
+                    for task in due:
+                        if task["task_id"] in _state["scheduled_running"]:
+                            continue
+                        asyncio.create_task(
+                            _run_scheduled_task(task),
+                            name=f"scout-scheduled-{task['task_id'][:8]}",
+                        )
+                except Exception:
+                    logger.exception("Scheduled task poller iteration failed")
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            return
+
     @app.on_event("startup")
     async def _startup() -> None:
         if _state["multi_user"]:
@@ -2240,6 +2612,20 @@ def create_app(
             _state["maintenance_tasks"].append(
                 asyncio.create_task(_resource_maintenance())
             )
+        # Reload durable schedules, release any in-flight claims from a prior
+        # process, then start the poller. Due within grace fire; older slots skip.
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        recovered = await asyncio.to_thread(store.recover_after_restart)
+        active_n = await asyncio.to_thread(store.count_all_active)
+        logger.info(
+            "Scheduled tasks store=%s active=%d recovered_claims=%d",
+            store.path,
+            active_n,
+            recovered,
+        )
+        _state["maintenance_tasks"].append(
+            asyncio.create_task(_scheduled_task_poller())
+        )
         logger.info(
             "Scout server started in %s mode (cwd=%s)",
             "multi-user" if multi_user else "local",
@@ -2317,6 +2703,11 @@ def create_app(
         uid = user.id if user else "default"
         s = await _get_session_state(req.session_id, uid, user)
         agent = s.agent
+        if req.timezone:
+            try:
+                agent.set_user_timezone(req.timezone)
+            except Exception:
+                logger.debug("Could not set user timezone", exc_info=True)
         if s.abort_event is not None:
             raise HTTPException(
                 status_code=409,
@@ -2571,6 +2962,39 @@ def create_app(
                                     )
                                 if payload.get("type") == "tool_call" and payload.get("name") == "exec_command":
                                     terminal_calls[str(payload.get("tool_call_id") or "")] = payload.get("args") or {}
+                                if payload.get("type") == "tool_result" and payload.get("name") == "create_scheduled_task":
+                                    raw_out = str(payload.get("output") or "")
+                                    marker = "SCHEDULED_TASK_JSON:"
+                                    if marker in raw_out and not raw_out.startswith("[ERROR]"):
+                                        try:
+                                            blob = raw_out.split(marker, 1)[1].strip()
+                                            created = json.loads(blob)
+                                            chip = _scheduled_task_chip(created)
+                                            chip["status"] = "queued"
+                                            if session_path.exists():
+                                                await asyncio.to_thread(_append_session_entry, session_path, {
+                                                    "type": "task",
+                                                    "timestamp": _now_iso(),
+                                                    "task": chip,
+                                                })
+                                            s.broadcast_event({
+                                                "type": "task_event",
+                                                "session_id": req.session_id,
+                                                "task": chip,
+                                            })
+                                            # Prefer a readable task title on the chat.
+                                            try:
+                                                header = await asyncio.to_thread(_read_session_header, session_path)
+                                                if header.get("title") in LEGACY_DEFAULT_TITLES:
+                                                    await asyncio.to_thread(
+                                                        _set_session_title,
+                                                        session_path,
+                                                        str(created.get("title") or "Scheduled task")[:80],
+                                                    )
+                                            except Exception:
+                                                pass
+                                        except Exception:
+                                            logger.debug("Could not publish scheduled task chip", exc_info=True)
                                 if payload.get("type") == "tool_result" and payload.get("name") == "exec_command":
                                     match = re.search(r"Process running with session ID\\s+(\\d+)", str(payload.get("output") or ""))
                                     if match:
@@ -2732,6 +3156,11 @@ def create_app(
         message = req.message.strip()
         if not message and not req.attachments and not req.chat_image_ids:
             raise HTTPException(status_code=400, detail="Steer input must not be empty")
+        if req.timezone:
+            try:
+                state.agent.set_user_timezone(req.timezone)
+            except Exception:
+                logger.debug("Could not set user timezone on steer", exc_info=True)
 
         existing_id = state.accepted_steer_clients.get(req.client_id)
         if existing_id:
@@ -4023,7 +4452,263 @@ def create_app(
             proxy = _state["retrievers"].get(str(uid))
             if proxy:
                 proxy.evict()
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        await asyncio.to_thread(store.pause_by_session, str(uid), session_id)
         return {"status": "ok"}
+
+    # ── Scheduled tasks ──────────────────────────────────────────────
+
+    def _resolve_create_payload(req: ScheduledTaskCreateRequest) -> tuple[str, str, ScheduleSpec]:
+        # Prefer the client's IANA zone (browser/OS). Never invent a zone for
+        # wall-clock schedules — "9am" means 9am where the user is.
+        tz = (req.timezone or "").strip()
+        if schedule_raw_tz := (
+            str((req.schedule or {}).get("timezone") or "").strip() if req.schedule else ""
+        ):
+            tz = tz or schedule_raw_tz
+        if not tz:
+            raise HTTPException(
+                status_code=400,
+                detail="timezone is required (IANA name from the client, e.g. Asia/Kolkata)",
+            )
+        instruction = (req.instruction or "").strip()
+        schedule_raw = dict(req.schedule) if req.schedule else None
+        text = (req.text or "").strip()
+
+        if text and (not instruction or schedule_raw is None):
+            parsed = parse_natural_schedule(text, timezone_name=tz)
+            if parsed is not None:
+                parsed_instruction, parsed_schedule = parsed
+                if not instruction:
+                    instruction = parsed_instruction or text
+                if schedule_raw is None:
+                    schedule_raw = parsed_schedule.to_dict()
+            elif schedule_raw is None:
+                # Free-form text with no schedule fragment — default once in 1h.
+                instruction = instruction or text
+                schedule_raw = {
+                    "kind": "once",
+                    "timezone": tz,
+                    "run_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+                }
+
+        if not instruction:
+            raise HTTPException(status_code=400, detail="instruction or text is required")
+        if schedule_raw is None:
+            raise HTTPException(status_code=400, detail="schedule is required")
+        # Client zone wins when the schedule body omitted timezone.
+        schedule_raw.setdefault("timezone", tz)
+        if not str(schedule_raw.get("timezone") or "").strip():
+            schedule_raw["timezone"] = tz
+        try:
+            schedule = ScheduleSpec.from_dict(schedule_raw)
+        except ScheduleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        title = (req.title or default_title(instruction)).strip()[:120]
+        return instruction, title, schedule
+
+    @app.get("/scheduled-tasks")
+    async def list_scheduled_tasks(user: User | None = Depends(get_user_context)) -> dict:
+        """List scheduled tasks for the current user."""
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        tasks = await asyncio.to_thread(store.list_for_user, uid)
+        active = sum(1 for t in tasks if t["status"] == "active")
+        return {
+            "tasks": tasks,
+            "active_count": active,
+            "max_active": MAX_ACTIVE_TASKS,
+        }
+
+    @app.post("/scheduled-tasks")
+    async def create_scheduled_task(
+        req: ScheduledTaskCreateRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Create a scheduled task and a dedicated conversation for its results."""
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        if req.status not in {"active", "paused"}:
+            raise HTTPException(status_code=400, detail="status must be active or paused")
+        if req.status == "active":
+            active = await asyncio.to_thread(store.count_active, uid)
+            if active >= MAX_ACTIVE_TASKS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Active task limit reached ({MAX_ACTIVE_TASKS}). Pause or delete one first.",
+                )
+        try:
+            instruction, title, schedule = _resolve_create_payload(req)
+        except HTTPException:
+            raise
+        except ScheduleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Dedicated conversation — results accumulate here across runs.
+        cwd = _session_cwd(uid)
+        session_id = str(uuid.uuid4())
+        sdir = _session_dir(cwd, uid)
+        sdir.mkdir(parents=True, exist_ok=True)
+        header = {
+            "type": "header",
+            "sessionId": session_id,
+            "projectDir": str(Path(cwd).resolve()),
+            "createdAt": _now_iso(),
+            "title": title,
+            "model": None,
+        }
+        path = _session_file(cwd, session_id, uid)
+        path.write_text(json.dumps(header) + "\n", encoding="utf-8")
+        save_session_snapshot(sdir, session_id, approval_mode="full_access")
+
+        try:
+            task = await asyncio.to_thread(
+                store.create,
+                user_id=uid,
+                title=title,
+                instruction=instruction,
+                schedule=schedule,
+                session_id=session_id,
+                status=req.status,
+            )
+        except ScheduleError as exc:
+            path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Stamp the session header with the task id for reverse lookup.
+        try:
+            await asyncio.to_thread(
+                _update_session_header, path, scheduledTaskId=task["task_id"],
+            )
+        except Exception:
+            logger.debug("Could not stamp session with scheduledTaskId", exc_info=True)
+
+        return {"task": task}
+
+    @app.get("/scheduled-tasks/{task_id}")
+    async def get_scheduled_task(
+        task_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        task = await asyncio.to_thread(store.get, task_id, uid)
+        if not task:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+        return {"task": task}
+
+    @app.patch("/scheduled-tasks/{task_id}")
+    async def update_scheduled_task(
+        task_id: str,
+        req: ScheduledTaskUpdateRequest,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        existing = await asyncio.to_thread(store.get, task_id, uid)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+
+        schedule = None
+        if req.schedule is not None:
+            try:
+                schedule = ScheduleSpec.from_dict(req.schedule)
+            except ScheduleError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if req.status == "active" and existing["status"] != "active":
+            active = await asyncio.to_thread(store.count_active, uid)
+            if active >= MAX_ACTIVE_TASKS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Active task limit reached ({MAX_ACTIVE_TASKS}).",
+                )
+
+        try:
+            task = await asyncio.to_thread(
+                store.update,
+                task_id,
+                uid,
+                title=req.title,
+                instruction=req.instruction,
+                schedule=schedule,
+                status=req.status,
+                clear_error=req.status == "active",
+            )
+        except ScheduleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not task:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+
+        # Keep the linked conversation title in sync when the task is renamed.
+        if req.title and task.get("session_id"):
+            path = _session_file(_session_cwd(uid), task["session_id"], uid)
+            if path.exists():
+                try:
+                    await asyncio.to_thread(_set_session_title, path, req.title.strip()[:120])
+                except Exception:
+                    logger.debug("Could not rename scheduled task session", exc_info=True)
+        return {"task": task}
+
+    @app.delete("/scheduled-tasks/{task_id}")
+    async def delete_scheduled_task(
+        task_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Delete the task. Empty linked chats (no real messages) are removed too."""
+        from ..scheduled_tasks import delete_task_session_if_empty
+
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        removed = await asyncio.to_thread(store.delete, task_id, uid)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+        session_removed = False
+        sid = removed.get("session_id")
+        if sid:
+            cwd = _session_cwd(uid)
+            session_removed = await asyncio.to_thread(
+                delete_task_session_if_empty,
+                user_id=uid,
+                session_id=str(sid),
+                cwd=cwd,
+            )
+            if session_removed:
+                key = (str(uid), str(sid))
+                with _state["session_registry_lock"]:
+                    s = _state["sessions"].pop(key, None)
+                if s:
+                    try:
+                        await s.agent.close()
+                    except Exception:
+                        pass
+        return {
+            "status": "ok",
+            "session_id": sid,
+            "session_removed": session_removed,
+        }
+
+    @app.post("/scheduled-tasks/{task_id}/run")
+    async def run_scheduled_task_now(
+        task_id: str,
+        user: User | None = Depends(get_user_context),
+    ) -> dict:
+        """Force a run as soon as the poller/admission allows (testing + manual trigger)."""
+        uid = str(user.id if user else "default")
+        store: ScheduledTaskStore = _state["scheduled_task_store"]
+        task = await asyncio.to_thread(store.get, task_id, uid)
+        if not task:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+        if task["status"] not in {"active", "paused"}:
+            raise HTTPException(status_code=400, detail="Task is not runnable")
+        refreshed = await asyncio.to_thread(store.mark_due_now, task_id, uid)
+        if not refreshed:
+            raise HTTPException(status_code=404, detail="Scheduled task not found")
+        asyncio.create_task(
+            _run_scheduled_task(refreshed),
+            name=f"scout-scheduled-manual-{task_id[:8]}",
+        )
+        return {"task": refreshed, "status": "started"}
 
     # ── File listing endpoint (for @ autocomplete) ───────────────────
 
