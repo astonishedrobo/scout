@@ -46,6 +46,11 @@ describes the equivalent manual workflow.
 
 Most deployments only need to edit `.env` and `config/scout.yaml`.
 
+The deployment wizard supports multiple models per provider, external provider
+endpoints, managed or external vLLM, model vision capability overrides, bind
+address, agent/server/execution limits, and multi-agent limits. Detailed Docker
+topology and custom image changes remain manual configuration.
+
 ## 1. Configure private values
 
 Create the deployment environment file:

@@ -105,7 +105,7 @@ services:
       egress-proxy:
         condition: service_started
     ports:
-      - "${SCOUT_PORT:-4200}:4200"
+      - "${SCOUT_BIND_ADDRESS:-0.0.0.0}:${SCOUT_PORT:-4200}:4200"
     volumes:
       - ${SCOUT_DATA_DIR:-scout-data}:/home/scout/.config/scout
       - ${SCOUT_WORKSPACE_ROOT:-./workspace}:/app/workspace
@@ -142,6 +142,9 @@ services:
       - GROQ_MODELS=${GROQ_MODELS:-}
       - OPENAI_MODELS=${OPENAI_MODELS:-}
       - ANTHROPIC_MODELS=${ANTHROPIC_MODELS:-}
+      - GROQ_API_BASE=${GROQ_API_BASE:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - ANTHROPIC_API_BASE=${ANTHROPIC_API_BASE:-}
       - SCOUT_DEFAULT_MODEL=${SCOUT_DEFAULT_MODEL:-}
       - GROQ_API_KEY_FILE=${GROQ_API_KEY_FILE:-/run/secrets/groq_api_key}
       - OPENAI_API_KEY_FILE=${OPENAI_API_KEY_FILE:-/run/secrets/openai_api_key}

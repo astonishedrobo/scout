@@ -42,14 +42,14 @@ The header's right corner tells you where the starting values came from:
 Every provider this deployment should offer, as a row of chips:
 
 - `←`/`→` moves, `space` enables/disables a provider, `↵` opens it.
-- Inside a provider: `Model` and `API key` chips (✓ when set, gray when
+- Inside a provider: `Models`, `API key`, and `Endpoint` chips (✓ when set, gray when
   not), with the highlighted chip's current value shown underneath.
   The title says `— Configured` or `— Incomplete` so you always know
   what's missing.
 - Model IDs don't need the litellm prefix — type `gpt-5-mini` and the
-  wizard stores `openai/gpt-5-mini`. For local vLLM, type the Hugging Face
-  repo ID (`Qwen/Qwen3-1.7B`); the `hosted_vllm/` prefix is applied
-  automatically in the generated config.
+  wizard stores `openai/gpt-5-mini`. Enter multiple model IDs separated by
+  commas. For local vLLM, type Hugging Face repo IDs; the `hosted_vllm/`
+  prefix is applied automatically in the generated config.
 - In any model list, `d` marks that model as the deployment **default**
   (the model new sessions start on — `agent.model` in `config/scout.yaml`).
   The current default carries a `✓ default` badge. With a single provider
@@ -60,15 +60,23 @@ Every provider this deployment should offer, as a row of chips:
 
 ### 2 · Settings
 
-- **Admin usernames** — comma-separated; blank makes the first registered
-  user the admin.
-- **Public Scout port** — default 4200.
-- **Workspace location** — host directory holding `users/` and `shared/`
-  (the files people see in Scout). Default `./workspace` in the repo;
-  set an absolute path to keep it elsewhere.
-- **Server data** — database and sessions. Blank keeps the default
-  Docker-managed `scout-data` volume; a path bind-mounts it to a
-  browsable host folder instead.
+Settings are grouped so the full form remains usable on a normal terminal:
+
+- **Basic deployment** — admin usernames, public port, workspace/data paths,
+  and bind address (`127.0.0.1` for local-only access or `0.0.0.0` for network access).
+- **Model capabilities** — exact model IDs known to support or not support vision.
+- **Agent behavior** — temperature, iteration limit, provider retries, and code timeout.
+- **Server capacity** — live sessions, per-user sessions, request concurrency,
+  queue limits, and queue timeout.
+- **Code execution** — enabled state, default network policy, timeout, memory,
+  and process limits.
+- **Multi-agent** — enablement, concurrency, iteration limit, background defaults,
+  and automatic continuation.
+- **vLLM runtime** — image tag, GPU memory utilization, max model length,
+  tensor parallelism, quantization, GPU selection, and parser settings.
+
+Blank vLLM endpoint means the wizard creates one managed vLLM service per model.
+Entering an endpoint uses an external/shared vLLM service instead.
 
 ### 3 · Review
 
