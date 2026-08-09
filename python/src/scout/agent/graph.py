@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import base64
+import json
 import re
 import uuid
 from pathlib import Path
@@ -53,6 +54,7 @@ _PARALLEL_READ_TOOLS = frozenset({
     "skill_list", "skill_read",
 })
 _MAX_CHANGE_BYTES = 2_000_000
+_MAX_TOOL_RESULT_CHARS = 3_000
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,50 @@ def bounded_text(text: object, max_chars: int, *, marker: str = "characters omit
         omitted = len(value) - head_chars - tail_chars
         separator = f"\n\n… [{omitted:,} {marker}] …\n\n"
     return value[:head_chars] + separator + value[-tail_chars:]
+
+
+def _tool_result_content(tool: object, content: str) -> str:
+    """Keep provider-bounded MCP results intact; bound ordinary tool output."""
+    if getattr(tool, "mcp_server_id", None):
+        return content
+    return bounded_text(content, _MAX_TOOL_RESULT_CHARS)
+
+
+def _completed_duplicate_mcp_call(
+    messages: list,
+    tool: object,
+    tool_name: str,
+    tool_args: dict,
+) -> bool:
+    """Return whether this exact MCP call already succeeded in this user turn."""
+    if not getattr(tool, "mcp_server_id", None):
+        return False
+    turn_start = max(
+        (index for index, message in enumerate(messages[:-1]) if isinstance(message, HumanMessage)),
+        default=-1,
+    )
+    signature = json.dumps(tool_args, sort_keys=True, default=str)
+    matching_ids: set[str] = set()
+    for message in messages[turn_start + 1 : -1]:
+        if not isinstance(message, AIMessage):
+            continue
+        for call in message.tool_calls:
+            if call.get("name") != tool_name:
+                continue
+            prior_args = json.dumps(call.get("args") or {}, sort_keys=True, default=str)
+            if prior_args == signature and call.get("id"):
+                matching_ids.add(str(call["id"]))
+    if not matching_ids:
+        return False
+    for message in messages[turn_start + 1 : -1]:
+        if not isinstance(message, ToolMessage):
+            continue
+        if str(message.tool_call_id) not in matching_ids:
+            continue
+        prior = str(message.content or "").lstrip()
+        if not prior.startswith(("[MCP tool error]", "[Tool error:", "[MCP TOOL DENIED]")):
+            return True
+    return False
 
 
 # Models sometimes prefix options with MCQ letters ("A: Paris", "Option B) Lyon",
@@ -493,8 +539,6 @@ def build_graph(
 
     _tools_by_name = {t.name: t for t in tools}
 
-    _MAX_TOOL_RESULT_CHARS = 3_000
-
     # ── Nodes ────────────────────────────────────────────────────────
 
     async def tool_node(state: AgentState) -> dict:
@@ -536,7 +580,7 @@ def build_graph(
                     shared_dir,
                 )
                 return ToolMessage(
-                    content=bounded_text(content, _MAX_TOOL_RESULT_CHARS),
+                    content=_tool_result_content(tool_fn, content),
                     name=tool_name,
                     tool_call_id=tool_id,
                 )
@@ -576,6 +620,17 @@ def build_graph(
             if tool_fn is None:
                 results.append(ToolMessage(
                     content=f"[Unknown tool: {tool_name}]",
+                    name=tool_name,
+                    tool_call_id=tool_id,
+                ))
+                continue
+            if _completed_duplicate_mcp_call(messages, tool_fn, tool_name, tool_args):
+                results.append(ToolMessage(
+                    content=(
+                        "[Duplicate MCP call skipped: this tool and the same arguments "
+                        "already completed successfully in the current user turn. "
+                        "Reuse the previous result.]"
+                    ),
                     name=tool_name,
                     tool_call_id=tool_id,
                 ))
@@ -762,8 +817,7 @@ def build_graph(
             artifacts = sanitize_artifacts(artifacts, data_dir or cwd or ".", shared_dir)
             for change_set in file_changes:
                 change_set["created_at"] = ""
-            if len(content) > _MAX_TOOL_RESULT_CHARS:
-                content = bounded_text(content, _MAX_TOOL_RESULT_CHARS)
+            content = _tool_result_content(tool_fn, content)
 
             if hooks_enabled:
                 await asyncio.to_thread(

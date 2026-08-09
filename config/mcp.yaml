@@ -1,1 +1,14 @@
-{"servers": []}
+{
+  "servers": [
+    {
+      "id": "exa",
+      "name": "Exa Search",
+      "transport": "streamable_http",
+      "url": "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa",
+      "availability": "everyone",
+      "enabled": true,
+      "auth_mode": "bearer",
+      "credential_env": "EXA_API_KEY"
+    }
+  ]
+}

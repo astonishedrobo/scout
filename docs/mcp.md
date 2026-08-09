@@ -39,6 +39,38 @@ server. The wizard saves the configuration in its resumable deployment draft
 and applies it to `config/mcp.yaml` when **Apply & launch** is selected.
 Re-running the deployment wizard loads the existing MCP configuration.
 
+Remote integrations can use a deployment-managed Bearer credential. The
+server definition stores only the environment variable name in
+`credential_env`; the CLI writes the credential itself to `.env`. Exa Search
+is available as a prefilled option in this step.
+
+## Configure an integration manually
+
+Keep connection metadata in `config/mcp.yaml` and secrets in the repository's
+existing `.env` file:
+
+```yaml
+servers:
+  - id: exa
+    name: Exa Search
+    transport: streamable_http
+    url: https://mcp.exa.ai/mcp?tools=web_search_exa
+    availability: everyone
+    enabled: true
+    auth_mode: bearer
+    credential_env: EXA_API_KEY
+```
+
+```dotenv
+EXA_API_KEY=your-key
+```
+
+Docker Compose makes `.env` available to Scout. The same pattern works for any
+remote MCP server that accepts Bearer authentication: choose another
+`credential_env` name and add its value to `.env`. No application code change
+is needed. An enabled entry whose referenced variable is empty is skipped with
+a warning; it does not prevent Scout from starting.
+
 See [Deploy CLI](deploy-cli.md) for the complete deployment workflow.
 
 ## Enable an integration for a user

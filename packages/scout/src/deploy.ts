@@ -79,6 +79,8 @@ export interface McpBootstrapServer {
   availability: "everyone" | "selected";
   enabled: boolean;
   auth_mode: "none" | "bearer";
+  /** Deployment-only reference to a secret supplied through .env/Compose. */
+  credential_env?: string;
 }
 
 export interface DeploymentDraft {
@@ -106,6 +108,8 @@ export interface DeploymentDraft {
   workerSecret: string;
   /** Admin-installed MCP integrations applied by the deploy wizard. */
   mcpServers: McpBootstrapServer[];
+  /** Secret values keyed by MCP id; emitted to .env, never to mcp.yaml. */
+  mcpCredentials: Record<string, string>;
   updatedAt: string;
 }
 
@@ -178,6 +182,7 @@ export function newDeploymentDraft(): DeploymentDraft {
     scoutSecret: randomBytes(32).toString("hex"),
     workerSecret: randomBytes(32).toString("hex"),
     mcpServers: [],
+    mcpCredentials: {},
     updatedAt: new Date().toISOString(),
   };
 }
@@ -251,7 +256,7 @@ function loadMcpBootstrap(root: string): McpBootstrapServer[] {
   const path = join(root, "config", "mcp.yaml");
   if (!existsSync(path)) return [];
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as { servers?: McpBootstrapServer[] };
+    const parsed = yaml.load(readFileSync(path, "utf8")) as { servers?: McpBootstrapServer[] };
     return Array.isArray(parsed.servers) ? parsed.servers : [];
   } catch {
     return [];
@@ -333,6 +338,11 @@ export function draftFromEnvironment(root: string, env?: Map<string, string>): D
     env = parseEnv(readFileSync(envPath, "utf8"));
   }
   const get = (key: string) => env!.get(key) ?? "";
+  for (const server of draft.mcpServers) {
+    if (server.credential_env && get(server.credential_env)) {
+      draft.mcpCredentials[server.id] = get(server.credential_env);
+    }
+  }
   if (/^\d+$/.test(get("SCOUT_PORT"))) draft.port = Number(get("SCOUT_PORT"));
   if (get("SCOUT_ADMIN_USERS")) draft.adminUsers = get("SCOUT_ADMIN_USERS");
   if (get("SCOUT_WORKSPACE_ROOT")) draft.workspaceRoot = get("SCOUT_WORKSPACE_ROOT");
@@ -412,6 +422,10 @@ export function managedEnvironment(draft: DeploymentDraft): Record<string, strin
     SCOUT_BIND_ADDRESS: draft.bindAddress,
   };
   if (draft.dataDir) out.SCOUT_DATA_DIR = draft.dataDir;
+  for (const server of draft.mcpServers) {
+    const credential = server.credential_env && draft.mcpCredentials[server.id];
+    if (server.credential_env && credential) out[server.credential_env] = credential;
+  }
   for (const id of draft.enabled) {
     const config = draft.providers[id];
     if (id === "vllm") {

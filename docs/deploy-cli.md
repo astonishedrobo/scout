@@ -139,6 +139,12 @@ are saved in the resumable deployment draft and applied to `config/mcp.yaml`
 with the rest of the deployment. Re-running the wizard loads the current MCP
 configuration, so integrations are not lost or re-entered.
 
+The step includes a prefilled Exa Search integration. Remote integrations may
+also reference a Bearer credential by environment-variable name. The CLI keeps
+that reference in `config/mcp.yaml` and writes the credential value to the same
+`.env` file used for model-provider keys. Manual Docker deployments use the
+same two-file convention.
+
 After launch, the admin **Tools** panel can manage live integrations. Users opt
 in from **Settings → Integrations**; credentials are stored per user and
 encrypted with `SCOUT_SECRET_KEY`. A failed MCP connection is a warning and

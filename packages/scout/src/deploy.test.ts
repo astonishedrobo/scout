@@ -128,6 +128,55 @@ test("deployment draft loads the existing MCP bootstrap", () => {
   assert.equal(draft.mcpServers[0]?.id, "linear");
 });
 
+test("deployment draft accepts manually-authored YAML MCP configuration", () => {
+  const root = mkdtempSync(join(tmpdir(), "scout-deploy-mcp-yaml-"));
+  mkdirSync(join(root, "config"));
+  writeFileSync(join(root, "config", "mcp.yaml"), [
+    "servers:",
+    "  - id: brave",
+    "    name: Brave Search",
+    "    transport: streamable_http",
+    "    url: https://example.test/mcp",
+    "    availability: everyone",
+    "    enabled: true",
+    "    auth_mode: bearer",
+    "    credential_env: BRAVE_API_KEY",
+    "",
+  ].join("\n"));
+
+  const draft = draftFromEnvironment(root, new Map([["BRAVE_API_KEY", "brave-secret"]]));
+  assert.equal(draft.mcpServers[0]?.id, "brave");
+  assert.equal(draft.mcpCredentials.brave, "brave-secret");
+});
+
+test("deployment MCP credentials round-trip through .env without entering mcp.yaml", () => {
+  const root = mkdtempSync(join(tmpdir(), "scout-deploy-mcp-credential-"));
+  mkdirSync(join(root, "config"));
+  writeFileSync(join(root, "config", "scout.yaml"), "llm:\n  providers: {}\n");
+  writeFileSync(join(root, "docker-compose.yml"), "services:\n  scout-server:\nvolumes:\n  scout-data:\n");
+  writeFileSync(join(root, "config", "mcp.yaml"), "{\"servers\":[]}");
+
+  const draft = newDeploymentDraft();
+  draft.mcpServers = [{
+    id: "exa", name: "Exa Search", transport: "streamable_http",
+    url: "https://mcp.exa.ai/mcp?tools=web_search_exa",
+    availability: "everyone", enabled: true, auth_mode: "bearer",
+    credential_env: "EXA_API_KEY",
+  }];
+  draft.mcpCredentials.exa = "exa-test-secret";
+
+  assert.equal(managedEnvironment(draft).EXA_API_KEY, "exa-test-secret");
+  writeSelectedConfiguration(root, draft);
+
+  const mcpText = readFileSync(join(root, "config", "mcp.yaml"), "utf8");
+  assert.match(mcpText, /"credential_env": "EXA_API_KEY"/);
+  assert.doesNotMatch(mcpText, /exa-test-secret/);
+
+  const seeded = draftFromEnvironment(root, new Map([["EXA_API_KEY", "rotated-secret"]]));
+  assert.equal(seeded.mcpCredentials.exa, "rotated-secret");
+  assert.equal(seeded.mcpServers[0]?.credential_env, "EXA_API_KEY");
+});
+
 test("configuration output preserves custom settings and creates one managed vLLM service per model", () => {
   const root = mkdtempSync(join(tmpdir(), "scout-deploy-config-"));
   mkdirSync(join(root, "config"));

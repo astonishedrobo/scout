@@ -190,8 +190,8 @@ export function ServersTab({
                       </div>
                       <p className="mt-1.5 text-micro text-scout-muted">
                         {server.has_shared_credential
-                          ? "A shared token is stored. Users who save their own override it."
-                          : "Optional. Used for every user unless they save their own."}
+                          ? "A shared token is stored and used for every allowed user."
+                          : "Optional. When set, it is used for every allowed user."}
                       </p>
                     </div>
                   )}

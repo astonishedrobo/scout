@@ -131,6 +131,38 @@ from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_mcp_bootstrap_credentials(
+    items: Any,
+    validate_definition: Any,
+    environ: Any = None,
+) -> tuple[list[dict[str, Any]], dict[str, str | None]]:
+    """Resolve deployment secret references without persisting them as config."""
+    environment = _os.environ if environ is None else environ
+    definitions: list[dict[str, Any]] = []
+    credentials: dict[str, str | None] = {}
+    for item in items if isinstance(items, list) else []:
+        try:
+            credential_env = str(item.get("credential_env") or "").strip() if isinstance(item, dict) else ""
+            if credential_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", credential_env):
+                raise HTTPException(status_code=400, detail="MCP credential_env must be an environment variable name")
+            definition = validate_definition(item)
+            if credential_env and definition.get("auth_mode") != "bearer":
+                raise HTTPException(status_code=400, detail="MCP credential_env requires bearer authentication")
+            credential = environment.get(credential_env) if credential_env else None
+            if credential_env and definition["enabled"] and not credential:
+                logger.warning(
+                    "Skipping MCP bootstrap entry %s: credential environment variable %s is not set",
+                    definition["id"], credential_env,
+                )
+                continue
+            definitions.append(definition)
+            if credential_env:
+                credentials[definition["id"]] = credential or None
+        except HTTPException as exc:
+            logger.warning("Skipping invalid MCP bootstrap entry: %s", exc.detail)
+    return definitions, credentials
+
 # ── Request / response models ────────────────────────────────────────────
 
 
@@ -1845,11 +1877,14 @@ def create_app(
         availability = str(body.get("availability") or "everyone")
         if availability not in {"everyone", "selected"}:
             raise HTTPException(status_code=400, detail="Invalid MCP availability")
+        auth_mode = str(body.get("auth_mode") or "none")
+        if auth_mode not in {"none", "bearer"}:
+            raise HTTPException(status_code=400, detail="Unsupported MCP authentication mode")
         return {
             "id": server_id, "name": name, "transport": transport, "url": url, "image": image,
             "command": body.get("command") or [], "args": body.get("args") or [],
             "availability": availability, "enabled": bool(body.get("enabled", True)),
-            "auth_mode": str(body.get("auth_mode") or "none"),
+            "auth_mode": auth_mode,
         }
 
     # Deployment bootstrap uses exactly the same validation path as the admin
@@ -1861,13 +1896,12 @@ def create_app(
             try:
                 raw = yaml.safe_load(bootstrap.read_text(encoding="utf-8")) or {}
                 items = raw.get("servers", raw) if isinstance(raw, dict) else raw
-                definitions = []
-                for item in items if isinstance(items, list) else []:
-                    try:
-                        definitions.append(_validate_mcp_definition(item))
-                    except HTTPException as exc:
-                        logger.warning("Skipping invalid MCP bootstrap entry: %s", exc.detail)
+                definitions, deployment_credentials = _resolve_mcp_bootstrap_credentials(
+                    items, _validate_mcp_definition
+                )
                 _state["mcp_store"].import_bootstrap(definitions)
+                for server_id, credential in deployment_credentials.items():
+                    _state["mcp_store"].set_shared_credential(server_id, credential)
             except Exception:
                 logger.warning("Could not import MCP bootstrap file %s", bootstrap, exc_info=True)
 
@@ -1982,6 +2016,8 @@ def create_app(
         uid = user.id if user else "default"
         if not _state["mcp_store"].allowed_for_user(server_id, uid):
             raise HTTPException(status_code=404, detail="MCP integration not available")
+        if _state["mcp_store"].has_shared_credential(server_id):
+            raise HTTPException(status_code=409, detail="MCP credentials are managed by the administrator")
         credential = str(body.get("credential") or "").strip()
         if not credential:
             raise HTTPException(status_code=400, detail="credential is required")
@@ -1994,6 +2030,8 @@ def create_app(
         uid = user.id if user else "default"
         if not _state["mcp_store"].allowed_for_user(server_id, uid):
             raise HTTPException(status_code=404, detail="MCP integration not available")
+        if _state["mcp_store"].has_shared_credential(server_id):
+            raise HTTPException(status_code=409, detail="MCP credentials are managed by the administrator")
         await _state["mcp_manager"].disconnect(server_id, user_id=str(uid))
         _state["mcp_store"].set_user(server_id, uid, credential="", enabled=False)
         return {"status": "ok"}

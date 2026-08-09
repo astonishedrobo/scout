@@ -247,8 +247,15 @@ class McpStore:
         for server in self.list_servers():
             if server["availability"] == "everyone" or self.allowed_for_user(server["id"], user_id):
                 cfg = self.user_config(server["id"], user_id)
+                has_shared_credential = self.has_shared_credential(server["id"])
+                has_user_credential = bool(cfg["credential"])
                 server["user_enabled"] = cfg["enabled"]
-                server["has_credential"] = bool(cfg["credential"])
+                server["has_credential"] = has_shared_credential or has_user_credential
+                server["credential_source"] = (
+                    "shared" if has_shared_credential
+                    else "user" if has_user_credential
+                    else "none"
+                )
                 result.append(server)
         return result
 

@@ -20,6 +20,39 @@ def test_mcp_registry_is_persistent_and_user_scoped(tmp_path, monkeypatch):
     assert reopened.user_config("asana", 7)["enabled"] is True
 
 
+def test_shared_credential_satisfies_user_setup_and_takes_precedence(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCOUT_SECRET_KEY", "test-secret")
+    store = McpStore(tmp_path / "mcp.sqlite")
+    store.upsert_server({
+        "id": "exa", "name": "Exa Search", "transport": "streamable_http",
+        "url": "https://mcp.exa.ai/mcp", "availability": "everyone",
+        "auth_mode": "bearer",
+    })
+    store.set_user("exa", 7, enabled=True, credential="old-user-token")
+    store.set_shared_credential("exa", "deployment-token")
+
+    integration = store.list_for_user(7)[0]
+    assert integration["has_credential"] is True
+    assert integration["credential_source"] == "shared"
+    assert "deployment-token" not in str(integration)
+    assert "old-user-token" not in str(integration)
+
+
+def test_personal_credential_remains_supported_without_shared_credential(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCOUT_SECRET_KEY", "test-secret")
+    store = McpStore(tmp_path / "mcp.sqlite")
+    store.upsert_server({
+        "id": "personal", "name": "Personal MCP", "transport": "streamable_http",
+        "url": "https://mcp.example.test/mcp", "availability": "everyone",
+        "auth_mode": "bearer",
+    })
+    store.set_user("personal", 7, enabled=True, credential="user-token")
+
+    integration = store.list_for_user(7)[0]
+    assert integration["has_credential"] is True
+    assert integration["credential_source"] == "user"
+
+
 def test_mcp_tool_policy_and_delete_tombstone(tmp_path):
     store = McpStore(tmp_path / "mcp.sqlite")
     store.upsert_server({"id": "demo", "name": "Demo", "transport": "streamable_http", "url": "https://example.test/mcp"})

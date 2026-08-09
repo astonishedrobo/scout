@@ -155,6 +155,8 @@ export const DeployApp: React.FC<DeployAppProps> = ({
   const [mcpUrl, setMcpUrl] = useState("");
   const [mcpImage, setMcpImage] = useState("");
   const [mcpCommand, setMcpCommand] = useState("");
+  const [mcpCredentialEnv, setMcpCredentialEnv] = useState("");
+  const [mcpCredential, setMcpCredential] = useState("");
   const [mcpFocus, setMcpFocus] = useState(0);
   const [warning, setWarning] = useState("");
   const [fieldError, setFieldError] = useState("");
@@ -226,10 +228,13 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       setVllmRuntimeText(`${from.vllmRuntime.image},${from.vllmRuntime.gpuMemoryUtilization},${from.vllmRuntime.maxModelLen},${from.vllmRuntime.tensorParallelSize},${from.vllmRuntime.quantization},${from.vllmRuntime.gpuDevices},${from.vllmRuntime.toolCallParser},${from.vllmRuntime.reasoningParser}`);
     }
     if (target.startsWith("mcp-add")) {
-      setMcpName("");
-      setMcpUrl("");
+      const exa = target === "mcp-add-exa";
+      setMcpName(exa ? "Exa Search" : "");
+      setMcpUrl(exa ? "https://mcp.exa.ai/mcp?tools=web_search_exa" : "");
       setMcpImage("");
       setMcpCommand("");
+      setMcpCredentialEnv(exa ? "EXA_API_KEY" : "");
+      setMcpCredential(exa ? from.mcpCredentials.exa ?? "" : "");
       setMcpFocus(0);
     }
     setScreen(target);
@@ -352,7 +357,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       }
     }
     if (screen.startsWith("mcp-add")) {
-      const fields = screen === "mcp-add-container" ? 3 : 2;
+      const fields = screen === "mcp-add-container" ? 3 : 4;
       if (key.upArrow) {
         setFieldError("");
         return mcpFocus === 0 ? focusBar() : setMcpFocus(mcpFocus - 1);
@@ -716,7 +721,8 @@ export const DeployApp: React.FC<DeployAppProps> = ({
 
   const addMcp = () => {
     const isContainer = screen === "mcp-add-container";
-    const lastField = isContainer ? 2 : 1;
+    const isExa = screen === "mcp-add-exa";
+    const lastField = isContainer ? 2 : 3;
     if (mcpFocus < lastField) return setMcpFocus(mcpFocus + 1);
     const name = mcpName.trim();
     if (!name) {
@@ -738,27 +744,68 @@ export const DeployApp: React.FC<DeployAppProps> = ({
       };
     } else {
       const url = mcpUrl.trim();
+      const credentialEnv = mcpCredentialEnv.trim();
+      const credential = mcpCredential.trim();
       let parsed: URL;
       try {
         parsed = new URL(url);
       } catch {
+        setMcpFocus(1);
         return setFieldError("Enter a valid http(s) MCP URL.");
       }
-      if (!["http:", "https:"].includes(parsed.protocol)) return setFieldError("MCP URL must use http or https.");
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        setMcpFocus(1);
+        return setFieldError("MCP URL must use http or https.");
+      }
+      if (credentialEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(credentialEnv)) {
+        setMcpFocus(2);
+        return setFieldError("Use an environment variable name such as EXA_API_KEY.");
+      }
+      if (credentialEnv && !credential) {
+        setMcpFocus(3);
+        return setFieldError(`Enter the value for ${credentialEnv}.`);
+      }
+      if (!credentialEnv && credential) {
+        setMcpFocus(2);
+        return setFieldError("Name the environment variable that will hold this credential.");
+      }
       server = {
-        id: mcpId(name), name, transport: "streamable_http", url,
-        availability: "everyone", enabled: true, auth_mode: "none",
+        id: isExa ? "exa" : mcpId(name), name, transport: "streamable_http", url,
+        availability: "everyone", enabled: true, auth_mode: credentialEnv ? "bearer" : "none",
+        ...(credentialEnv ? { credential_env: credentialEnv } : {}),
       };
     }
-    const next = { ...draft, mcpServers: [...draft.mcpServers, server] };
+    const servers = isExa
+      ? draft.mcpServers.some((item) => item.id === "exa")
+        ? draft.mcpServers.map((item) => item.id === "exa" ? server : item)
+        : [...draft.mcpServers, server]
+      : [...draft.mcpServers, server];
+    const next = {
+      ...draft,
+      mcpServers: servers,
+      mcpCredentials: mcpCredential.trim()
+        ? { ...draft.mcpCredentials, [server.id]: mcpCredential.trim() }
+        : draft.mcpCredentials,
+    };
     persist(next);
     enterScreen("mcp", next);
   };
 
   const submitMcp = (index: number) => {
-    if (index === draft.mcpServers.length) return enterScreen("mcp-add-remote");
-    if (index === draft.mcpServers.length + 1) return enterScreen("mcp-add-container");
-    if (index === draft.mcpServers.length + 2) return jumpTo(3);
+    const hasExa = draft.mcpServers.some((server) => server.id === "exa");
+    let option = draft.mcpServers.length;
+    if (!hasExa && index === option++) return enterScreen("mcp-add-exa");
+    if (index === option++) return enterScreen("mcp-add-remote");
+    if (index === option++) return enterScreen("mcp-add-container");
+    if (index === option) return jumpTo(3);
+    const server = draft.mcpServers[index];
+    if (server?.id === "exa" && !draft.mcpCredentials.exa) {
+      return enterScreen("mcp-add-exa");
+    }
+    if (server && !server.enabled && server.credential_env && !draft.mcpCredentials[server.id]) {
+      setWarning(`Set ${server.credential_env} in .env before enabling ${server.name}.`);
+      return;
+    }
     const next = {
       ...draft,
       mcpServers: draft.mcpServers.map((server, i) => i === index ? { ...server, enabled: !server.enabled } : server),
@@ -768,7 +815,10 @@ export const DeployApp: React.FC<DeployAppProps> = ({
 
   const removeMcp = (index: number) => {
     if (index >= draft.mcpServers.length) return;
-    persist({ ...draft, mcpServers: draft.mcpServers.filter((_, i) => i !== index) });
+    const server = draft.mcpServers[index]!;
+    const credentials = { ...draft.mcpCredentials };
+    delete credentials[server.id];
+    persist({ ...draft, mcpServers: draft.mcpServers.filter((_, i) => i !== index), mcpCredentials: credentials });
   };
 
   /* ── Screens ─────────────────────────────────────────── */
@@ -1114,6 +1164,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
     }
 
     if (screen === "mcp") {
+      const hasExa = draft.mcpServers.some((server) => server.id === "exa");
       return (
         <Box flexDirection="column" gap={1}>
           <Text color={theme.text.primary} bold>
@@ -1130,6 +1181,7 @@ export const DeployApp: React.FC<DeployAppProps> = ({
                 detail: server.url ?? server.image,
                 badge: server.enabled ? "enabled" : "disabled",
               })),
+              ...(!hasExa ? [{ label: "Add Exa Search…", detail: "Web search · Streamable HTTP" }] : []),
               { label: "Add remote MCP server…", detail: "Streamable HTTP" },
               { label: "Add container MCP server…", detail: "isolated stdio · advanced" },
               { label: "Continue to review", detail: `${draft.mcpServers.filter((server) => server.enabled).length} enabled` },
@@ -1146,9 +1198,10 @@ export const DeployApp: React.FC<DeployAppProps> = ({
 
     if (screen.startsWith("mcp-add")) {
       const isContainer = screen === "mcp-add-container";
+      const isExa = screen === "mcp-add-exa";
       return (
         <Box flexDirection="column" gap={1}>
-          <Text color={theme.text.primary} bold>Add {isContainer ? "container" : "remote"} MCP server</Text>
+          <Text color={theme.text.primary} bold>Add {isExa ? "Exa Search" : isContainer ? "container" : "remote"} MCP server</Text>
           <Field
             label="Integration name"
             value={mcpName}
@@ -1180,20 +1233,41 @@ export const DeployApp: React.FC<DeployAppProps> = ({
               />
             </>
           ) : (
-            <Field
-              label="Streamable HTTP URL"
-              value={mcpUrl}
-              placeholder="https://example.com/mcp"
-              focused={widgetsActive && mcpFocus === 1}
-              error={mcpFocus === 1 ? fieldError : undefined}
-              onChange={(value) => { setMcpUrl(value); setFieldError(""); }}
-              onSubmit={addMcp}
-            />
+            <>
+              <Field
+                label="Streamable HTTP URL"
+                value={mcpUrl}
+                placeholder="https://example.com/mcp"
+                focused={widgetsActive && mcpFocus === 1}
+                error={mcpFocus === 1 ? fieldError : undefined}
+                onChange={(value) => { setMcpUrl(value); setFieldError(""); }}
+                onSubmit={addMcp}
+              />
+              <Field
+                label="Bearer credential environment variable — optional"
+                value={mcpCredentialEnv}
+                placeholder="e.g. EXA_API_KEY"
+                focused={widgetsActive && mcpFocus === 2}
+                error={mcpFocus === 2 ? fieldError : undefined}
+                onChange={(value) => { setMcpCredentialEnv(value); setFieldError(""); }}
+                onSubmit={addMcp}
+              />
+              <Field
+                label="Credential value — saved to .env only"
+                value={mcpCredential}
+                placeholder={mcpCredentialEnv || "optional"}
+                mask
+                focused={widgetsActive && mcpFocus === 3}
+                error={mcpFocus === 3 ? fieldError : undefined}
+                onChange={(value) => { setMcpCredential(value); setFieldError(""); }}
+                onSubmit={addMcp}
+              />
+            </>
           )}
           <Text color={theme.text.secondary}>
             {isContainer
               ? "Runs without network, caps, or root; mounts that user's workspace only."
-              : "Authentication is configured after launch in Admin → Tools or by each user in Settings → Integrations."}
+              : "Shared Bearer credentials are written to .env; per-user credentials can still be configured after launch."}
           </Text>
         </Box>
       );

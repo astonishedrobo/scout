@@ -1,0 +1,25 @@
+# Keep the build context limited to inputs referenced by Dockerfile. Runtime
+# configuration, credentials, workspaces, documentation, and repository
+# metadata are mounted or used outside the image and must not be uploaded.
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!packages/
+!packages/**
+!python/
+!python/**
+
+# Dependencies and build products are recreated in the image.
+**/node_modules/
+**/dist/
+packages/core/python/
+**/*.tsbuildinfo
+
+# Python caches and local packaging/test artifacts are not build inputs.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/

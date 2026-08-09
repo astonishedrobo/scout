@@ -18,7 +18,7 @@ from .execution.models import CapabilityRequest
 
 logger = logging.getLogger(__name__)
 MAX_MCP_DESCRIPTION = 2048
-MAX_MCP_RESULT = 20_000
+MAX_MCP_RESULT = 100_000
 
 
 def _args_model(server_id: str, tool: dict[str, Any]):
@@ -33,20 +33,33 @@ def _args_model(server_id: str, tool: dict[str, Any]):
 
 
 def _result_text(result: Any) -> str:
-    parts: list[str] = []
-    for item in getattr(result, "content", []) or []:
-        text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
-        if text:
-            parts.append(str(text))
-        uri = item.get("uri") if isinstance(item, dict) else getattr(item, "uri", None)
-        if uri:
-            parts.append(f"[resource: {uri}]")
     structured = getattr(result, "structuredContent", None)
     if structured is not None:
-        parts.append(str(structured))
-    value = "\n".join(parts) or str(result)
+        # MCP servers commonly provide the same result twice: structuredContent
+        # for capable clients and a text fallback for older ones. Prefer the
+        # structured form so field boundaries survive without duplication.
+        value = json.dumps(structured, ensure_ascii=False, indent=2, default=str)
+    else:
+        parts: list[str] = []
+        for item in getattr(result, "content", []) or []:
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+            if text:
+                parts.append(str(text))
+            uri = item.get("uri") if isinstance(item, dict) else getattr(item, "uri", None)
+            if uri:
+                parts.append(f"[resource: {uri}]")
+        value = "\n".join(parts) or str(result)
     if len(value) > MAX_MCP_RESULT:
-        value = value[:MAX_MCP_RESULT] + "\n… [MCP output truncated]"
+        original_chars = len(value)
+        marker = (
+            "\n\n… [MCP output exceeded the emergency context bound: "
+            f"{original_chars:,} original characters; "
+            f"{MAX_MCP_RESULT:,} retained across the beginning and end] …\n\n"
+        )
+        available = max(2, MAX_MCP_RESULT - len(marker))
+        head_chars = (available * 2) // 3
+        tail_chars = available - head_chars
+        value = value[:head_chars] + marker + value[-tail_chars:]
     if getattr(result, "isError", False):
         return "[MCP tool error] " + value
     return value
@@ -180,7 +193,10 @@ class McpManager:
             # credentials remove the connect requirement but not the enable.
             if not cfg["enabled"]:
                 continue
-            credential = cfg.get("credential")
+            # A deployment/admin credential owns authentication for the whole
+            # integration. Personal credentials remain available only for MCPs
+            # that do not have a shared credential configured.
+            credential = None if self.store.has_shared_credential(server["id"]) else cfg.get("credential")
             try:
                 await self.connect(server["id"], credential=credential, user_id=str(user_id))
             except Exception:

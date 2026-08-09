@@ -128,6 +128,10 @@ services:
       - /app/gui-dist/web
       - --mcp-bootstrap
       - /etc/scout/mcp.yaml
+    # Compose uses .env for interpolation by default; env_file also makes
+    # arbitrary deployment-managed MCP credentials available to Scout.
+    env_file:
+      - .env
     environment:
       - SCOUT_SERVER_DEPLOYMENT=docker
       # ── LLM providers ────────────────────────────────────────────────────────

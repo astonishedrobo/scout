@@ -153,7 +153,7 @@ export function AddServerForm({
             </Field>
             <Field
               label="Shared token"
-              hint="Optional. Used for every user unless they save their own."
+              hint="Optional. When set, it is used for every allowed user."
             >
               {({ id: fieldId }) => (
                 <PasswordInput

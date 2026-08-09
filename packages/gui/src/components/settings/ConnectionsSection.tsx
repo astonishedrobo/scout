@@ -16,9 +16,11 @@ interface Integration {
   id: string;
   name: string;
   transport?: string;
+  auth_mode?: "none" | "bearer";
   tools?: unknown[];
   health?: { status?: string };
   has_credential?: boolean;
+  credential_source?: "shared" | "user" | "none";
   user_enabled?: boolean;
 }
 
@@ -58,10 +60,13 @@ export function ConnectionsSection({ baseUrl, token, setStatus }: SectionProps) 
     };
   }, [baseUrl, authHeaders, setStatus]);
 
-  // A remote server with no credential saved cannot connect, so "needs setup" is
-  // the actionable bucket.
+  // Only bearer-authenticated servers without either a shared or personal
+  // credential need user setup. Public remote MCPs require no token at all.
   const needsSetup = (i: Integration) =>
-    i.transport !== "container_stdio" && !i.has_credential;
+    i.transport !== "container_stdio" &&
+    i.auth_mode === "bearer" &&
+    i.credential_source !== "shared" &&
+    !i.has_credential;
 
   const counts = useMemo(
     () => ({
@@ -152,6 +157,10 @@ export function ConnectionsSection({ baseUrl, token, setStatus }: SectionProps) 
         ) : (
           visible.map((integration) => {
             const remote = integration.transport !== "container_stdio";
+            const acceptsUserCredential =
+              remote &&
+              integration.auth_mode === "bearer" &&
+              integration.credential_source !== "shared";
             return (
               <SettingsRow
                 key={integration.id}
@@ -174,7 +183,7 @@ export function ConnectionsSection({ baseUrl, token, setStatus }: SectionProps) 
                   />
                 }
               >
-                {remote && (
+                {acceptsUserCredential && (
                   <div className="mt-3 flex items-end gap-2">
                     <PasswordInput
                       size="sm"
